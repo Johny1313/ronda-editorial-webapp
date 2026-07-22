@@ -43,6 +43,7 @@ O wrangler.jsonc já define:
 
 - Worker: ronda-editorial-webapp
 - Banco D1 com binding DB e provisionamento automático
+- Workers AI com binding AI para traduzir as fontes Mundo para português
 - Ronda automática a cada cinco minutos
 - Observabilidade ativada
 
@@ -68,7 +69,7 @@ https://SEU-WORKER.workers.dev/api/health
 Resultados esperados:
 
 - self-test: "ok":true e "readWriteDelete":true
-- health: "ready":true e "database":"connected"
+- health: "ready":true, "database":"connected" e "translation":{"ready":true}
 
 Depois abra a página principal e clique em Executar ronda.
 

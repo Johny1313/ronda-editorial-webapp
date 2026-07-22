@@ -89,7 +89,7 @@ function sourceMarkup(item, primary = false) {
   const platform = item.platform || (item.kind === "portal" ? "Portal" : "Rede");
   const metrics = [`<span>Views: <strong>${metricValue(item.views)}</strong></span>`];
   if (item.kind === "social") metrics.push(`<span>Comentários: <strong>${metricValue(item.comments)}</strong></span>`);
-  return `<div class="${primary ? "primary" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><div class="source-metrics">${metrics.join("")}</div><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">${item.kind === "portal" ? "Abrir para apuração" : "Ver post"} ↗</a></div></div></div>`;
+  return `<div class="${primary ? "primary" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><div class="source-metrics">${metrics.join("")}</div><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
 }
 
 function sourceInitials(name) {
@@ -224,7 +224,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="metrics"><div class="metric"><span>Visualizações observadas</span><strong>${metricValue(views)}</strong></div><div class="metric"><span>Comentários</span><strong>${metricValue(comments)}</strong></div><div class="metric"><span>Fontes diferentes</span><strong>${sources.length}</strong></div><div class="metric"><span>Conteúdos</span><strong>${items.length}</strong></div></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Tom de voz</span><strong>${escapeHtml(carousel.voiceTone || "Informativo e objetivo")}</strong></div><div><span>Modelo de post</span><strong>${escapeHtml(carousel.postModel || "Resumo factual em 5 cards")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ver roteiro do carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outras fontes" : `Ver mais ${additional.length} ${additional.length === 1 ? "fonte" : "fontes"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="metrics"><div class="metric"><span>Visualizações observadas</span><strong>${metricValue(views)}</strong></div><div class="metric"><span>Comentários</span><strong>${metricValue(comments)}</strong></div><div class="metric"><span>Fontes diferentes</span><strong>${sources.length}</strong></div><div class="metric"><span>Conteúdos</span><strong>${items.length}</strong></div></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Tom de voz</span><strong>${escapeHtml(carousel.voiceTone || "Informativo e objetivo")}</strong></div><div><span>Modelo de post</span><strong>${escapeHtml(carousel.postModel || "Resumo factual em 5 cards")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ver roteiro do carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -347,12 +347,15 @@ async function checkHealth() {
     const health = await api(`/api/health?t=${Date.now()}`);
     if (!health || typeof health !== "object" || !health.version) throw new Error("A versão publicada do Worker não é compatível com este painel.");
     state.health = health;
-    document.getElementById("automationText").textContent = health.schedulerHealthy
+    const translationReady = health.translation?.ready !== false;
+    document.getElementById("automationText").textContent = !translationReady
+      ? "Automação ativa; tradução internacional indisponível no Cloudflare."
+      : health.schedulerHealthy
       ? "Automação online ativa e atualizada."
       : health.lastSuccessAt
         ? "Automação online configurada; a última ronda está atrasada."
         : "Serviço online pronto; aguardando a primeira ronda.";
-    setStatus(health.schedulerHealthy ? "ok" : "warn", health.schedulerHealthy ? "Serviço online" : "Aguardando automação", health.lastSuccessAt ? `Última ronda ${relativeTime(health.lastSuccessAt)}` : "Execute a primeira ronda");
+    setStatus(health.schedulerHealthy && translationReady ? "ok" : "warn", !translationReady ? "Tradução não configurada" : health.schedulerHealthy ? "Serviço online" : "Aguardando automação", !translationReady ? "O conteúdo internacional será ocultado" : health.lastSuccessAt ? `Última ronda ${relativeTime(health.lastSuccessAt)}` : "Execute a primeira ronda");
     return true;
   } catch (error) {
     state.health = null;
@@ -400,16 +403,36 @@ async function showHistoryDetail(runId) {
       sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
     }
     const sourceChips = [...sourceCounts.entries()].sort((left, right) => right[1] - left[1]).map(([name, count]) => `<span>${escapeHtml(name)} · ${count}</span>`).join("");
-    const news = items.length ? items.map((item) => `<article class="history-news"><div class="history-news-meta"><span class="kind ${escapeHtml((item.platform || item.kind || "fonte").toLowerCase())}">${escapeHtml(item.platform || (item.kind === "social" ? "Rede" : "Portal"))}</span><strong>${escapeHtml(item.sourceName || item.collectorName || "Fonte não informada")}</strong><time>${escapeHtml(formatDate(item.publishedAt))}</time></div><h3>${escapeHtml(item.title)}</h3>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}<a href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir notícia original ↗</a></article>`).join("") : '<div class="empty history-empty"><strong>Nenhuma notícia armazenada nesta ronda</strong><span>Consulte o estado das fontes ou selecione outra ronda.</span></div>';
+    const news = items.length ? items.map((item) => `<article class="history-news"><div class="history-news-meta"><span class="kind ${escapeHtml((item.platform || item.kind || "fonte").toLowerCase())}">${escapeHtml(item.platform || (item.kind === "social" ? "Rede" : "Portal"))}</span><strong>${escapeHtml(item.sourceName || item.collectorName || "Fonte não informada")}</strong><time>${escapeHtml(formatDate(item.publishedAt))}</time></div><h3>${escapeHtml(item.title)}</h3>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}<a href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></article>`).join("") : '<div class="empty history-empty"><strong>Nenhuma notícia armazenada nesta ronda</strong><span>Consulte o estado das fontes ou selecione outra ronda.</span></div>';
     detail.innerHTML = `<section class="history-detail-head"><p class="eyebrow">Notícias apuradas neste período</p><h3>${escapeHtml(formatDate(run.completedAt || data.collectedAt))}</h3><p>${run.triggerType === "scheduled" ? "Ronda automática" : "Ronda manual"} · ${items.length} conteúdos · ${Number(data.totals?.topics) || 0} assuntos</p></section>${sourceChips ? `<div class="history-source-chips">${sourceChips}</div>` : ""}<div class="history-news-list">${news}</div>`;
   } catch (error) {
     detail.innerHTML = `<div class="loading-row">${escapeHtml(error.message)}</div>`;
   }
 }
 
+function topicVerificationLinks(topic) {
+  const storedLinks = Array.isArray(topic?.carousel?.verificationLinks) ? topic.carousel.verificationLinks : [];
+  const candidates = storedLinks.length ? storedLinks : (topic?.items || []);
+  const links = [];
+  const seen = new Set();
+  for (const item of candidates) {
+    const url = safeUrl(item?.url);
+    if (url === "#" || seen.has(url)) continue;
+    seen.add(url);
+    links.push({
+      title: item?.title || "Notícia sem título",
+      sourceName: item?.sourceName || item?.collectorName || "Fonte não informada",
+      publishedAt: item?.publishedAt || null,
+      url,
+    });
+  }
+  return links;
+}
+
 function carouselAsText(topic) {
   const carousel = topic.carousel || {};
   const slides = Array.isArray(carousel.slides) ? carousel.slides : [];
+  const verificationLinks = topicVerificationLinks(topic);
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
     `Tom de voz: ${carousel.voiceTone || "Informativo e objetivo"}`,
@@ -419,6 +442,13 @@ function carouselAsText(topic) {
       `CARD ${slide.number} — ${String(slide.role || "").toUpperCase()}`,
       slide.title || "",
       slide.body || "",
+      "",
+    ]),
+    "LINKS PARA APURAÇÃO",
+    ...verificationLinks.flatMap((link, index) => [
+      `${index + 1}. ${link.title}`,
+      `Portal: ${link.sourceName}`,
+      `URL: ${link.url}`,
       "",
     ]),
     carousel.disclaimer || "Revise e confirme as informações antes de publicar.",
@@ -433,8 +463,10 @@ function showCarousel(topicId) {
   }
   const carousel = topic.carousel;
   document.getElementById("carouselTitle").textContent = topic.title;
-  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone)}</strong></span><span><small>Modelo de post</small><strong>${escapeHtml(carousel.postModel)}</strong></span>`;
+  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone)}</strong></span><span><small>Modelo de post</small><strong>${escapeHtml(carousel.postModel)}</strong></span>`;
   document.getElementById("carouselSlides").innerHTML = carousel.slides.map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
+  const verificationLinks = topicVerificationLinks(topic);
+  document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Links das notícias usadas</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
   document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
   document.getElementById("copyCarouselMessage").textContent = "";
   state.carouselText = carouselAsText(topic);

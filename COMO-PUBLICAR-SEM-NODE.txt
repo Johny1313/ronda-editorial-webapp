@@ -13,19 +13,22 @@ Você não precisa instalar Node.js nem manter o computador ligado.
 6. Volte ao Worker, abra Settings > Bindings e adicione um D1 binding:
       Variable name: DB
       D1 database: ronda-editorial-db
-7. Em Settings > Triggers > Cron Triggers, adicione:
+7. Ainda em Settings > Bindings, adicione um Workers AI binding:
+      Variable name: AI
+8. Em Settings > Triggers > Cron Triggers, adicione:
       */5 * * * *
-8. Recomendado: em Settings > Variables and Secrets, crie um Secret:
+9. Recomendado: em Settings > Variables and Secrets, crie um Secret:
       Nome: MANUAL_ROUND_TOKEN
       Valor: escolha uma chave longa e privada
-9. Abra o endereço público do Worker. Se criou a chave, entre em Ajustes no
+10. Abra o endereço público do Worker. Se criou a chave, entre em Ajustes no
    painel e informe a mesma chave.
-10. Confira os diagnósticos:
+11. Confira os diagnósticos:
       https://SEU-WORKER.workers.dev/api/self-test
       https://SEU-WORKER.workers.dev/api/health
 
 O primeiro endereço deve mostrar "ok":true e "readWriteDelete":true.
-O segundo deve mostrar "ready":true e "database":"connected".
+O segundo deve mostrar "ready":true, "database":"connected" e
+"translation":{"ready":true}.
 
 Depois clique em Executar ronda. A execução também ocorrerá automaticamente
 a cada cinco minutos, inclusive com o navegador e o computador desligados.
@@ -34,6 +37,8 @@ IMPORTANTE
 ----------
 
 - Os portais são a base da ronda. O Bluesky é apenas um complemento social.
+- Notícias das fontes Mundo são traduzidas para português pelo Workers AI.
+  Se uma tradução falhar, a notícia é omitida em vez de aparecer em outro idioma.
 - Uma fonte isolada pode falhar sem derrubar a ronda; o painel mostra o estado
   de cada uma e o Worker usa rotas alternativas.
 - Fontes externas podem mudar ou bloquear seus feeds no futuro. O autoteste

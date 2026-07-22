@@ -15,7 +15,7 @@ function feed(id, name, region, primaryUrl, googleSource = name) {
     name,
     region,
     canonicalSource: true,
-    limit: 15,
+    limit: region === "Mundo" ? 8 : 15,
     urls: Object.freeze([primaryUrl, googleNewsSource(googleSource, region)].filter(Boolean)),
   });
 }

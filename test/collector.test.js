@@ -42,6 +42,8 @@ test("usa fallback do portal e complementa com Bluesky", async () => {
   assert.equal(result.sources.at(-1).name, "Bluesky");
   assert.ok(result.totals.socialItems >= 1);
   assert.ok(result.topics.length >= 1);
+  assert.ok(result.items.every((item) => /^https?:\/\//i.test(item.url)));
+  assert.ok(result.topics.every((topic) => topic.carousel.verificationLinks.length === new Set(topic.items.map((item) => item.url)).size));
 });
 
 test("falha de todas as fontes retorna diagnóstico estruturado", async () => {

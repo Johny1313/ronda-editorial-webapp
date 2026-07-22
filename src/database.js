@@ -26,6 +26,14 @@ const SCHEMA_STATEMENTS = [
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS translation_cache (
+    cache_key TEXT PRIMARY KEY,
+    source_lang TEXT NOT NULL,
+    target_lang TEXT NOT NULL,
+    translated_text TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_translation_cache_updated ON translation_cache(updated_at DESC)",
 ];
 
 export async function ensureSchema(db) {
@@ -90,6 +98,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   const status = safePayload.ok ? "success" : "failed";
   const payloadJson = JSON.stringify(safePayload);
   const retentionCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const translationCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const latestSummary = JSON.stringify({
     id,
     triggerType,
@@ -141,8 +150,45 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
       .bind(latestSummary, completedAt),
     db.prepare("DELETE FROM runs WHERE completed_at < ?").bind(retentionCutoff),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(Date.now() - 5 * 60 * 1000),
+    db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
   ]);
   return { id, status, completedAt };
+}
+
+export async function getCachedTranslations(db, keys = []) {
+  await ensureSchema(db);
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  const output = new Map();
+  for (let offset = 0; offset < uniqueKeys.length; offset += 80) {
+    const chunk = uniqueKeys.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db
+      .prepare(`SELECT cache_key, translated_text FROM translation_cache WHERE cache_key IN (${placeholders})`)
+      .bind(...chunk)
+      .all();
+    for (const row of result?.results || []) {
+      if (row?.cache_key && row?.translated_text) output.set(row.cache_key, row.translated_text);
+    }
+  }
+  return output;
+}
+
+export async function saveCachedTranslations(db, entries = []) {
+  await ensureSchema(db);
+  const validEntries = entries.filter((entry) => entry?.key && entry?.translatedText);
+  const updatedAt = new Date().toISOString();
+  for (let offset = 0; offset < validEntries.length; offset += 80) {
+    const chunk = validEntries.slice(offset, offset + 80);
+    await db.batch(chunk.map((entry) => db
+      .prepare(`
+        INSERT INTO translation_cache (cache_key, source_lang, target_lang, translated_text, updated_at)
+        VALUES (?, ?, 'pt', ?, ?)
+        ON CONFLICT(cache_key) DO UPDATE SET
+          translated_text = excluded.translated_text,
+          updated_at = excluded.updated_at
+      `)
+      .bind(entry.key, entry.sourceLanguage, entry.translatedText, updatedAt)));
+  }
 }
 
 export async function getLatestRound(db) {

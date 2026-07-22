@@ -31,6 +31,13 @@ test("gera cards editoriais ordenados", () => {
   assert.ok(topics.every((topic) => topic.editoria));
   assert.ok(topics.every((topic) => topic.carousel?.slides?.length === 5));
   assert.ok(topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel));
+  assert.ok(topics.every((topic) => topic.carousel?.language === "pt-BR"));
+  assert.ok(topics.every((topic) => topic.carousel?.verificationLinks?.length >= 1));
+  assert.ok(topics.every((topic) => topic.carousel.verificationLinks.every((link) => /^https?:\/\//i.test(link.url))));
+  assert.deepEqual(
+    new Set(topics[0].carousel.verificationLinks.map((link) => link.url)),
+    new Set(topics[0].items.map((item) => item.url)),
+  );
 });
 
 test("classifica assuntos nas editorias principais", () => {

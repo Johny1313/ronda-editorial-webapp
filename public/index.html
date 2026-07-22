@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=1.6.0">
+  <link rel="stylesheet" href="/styles.css?v=1.8.0">
 </head>
 <body>
   <main class="app">
@@ -30,12 +30,12 @@
         </div>
       </header>
 
-      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> O painel pode ser fechado; as rondas ficam armazenadas por 48 horas.</div>
+      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> Fontes internacionais e carrosséis são exibidos sempre em português; as rondas ficam armazenadas por 48 horas.</div>
       <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
         <div class="sources-heading">
-          <div><p class="eyebrow">Portais monitorados</p><h2 id="sourcesTitle">Fontes da ronda</h2><p>Clique em um portal para ver somente as notícias recolhidas dele.</p></div>
+          <div><p class="eyebrow">Portais monitorados</p><h2 id="sourcesTitle">Fontes da ronda</h2><p>Clique em um portal para ver somente as notícias recolhidas dele. Conteúdos do Mundo são traduzidos automaticamente para português.</p></div>
           <button class="secondary" id="showAllSources" type="button">Ver todas as notícias</button>
         </div>
         <div class="source-portal-grid" id="sourcePortalGrid"></div>
@@ -109,12 +109,13 @@
       <div class="modal-head"><div><p class="eyebrow">Apoio editorial</p><h2 id="carouselTitle">Roteiro para carrossel</h2></div><button class="close-modal" data-close="carouselModal" type="button" aria-label="Fechar">×</button></div>
       <div class="carousel-meta" id="carouselMeta"></div>
       <div class="carousel-slides" id="carouselSlides"></div>
+      <section class="carousel-sources" id="carouselSources" aria-label="Links para apuração"></section>
       <p class="carousel-disclaimer" id="carouselDisclaimer"></p>
       <div class="modal-actions"><button class="secondary" data-close="carouselModal" type="button">Fechar</button><button class="primary" id="copyCarousel" type="button">Copiar roteiro</button></div>
       <p class="copy-message" id="copyCarouselMessage"></p>
     </section>
   </div>
 
-  <script src="/app.js?v=1.6.0" defer></script>
+  <script src="/app.js?v=1.8.0" defer></script>
 </body>
 </html>

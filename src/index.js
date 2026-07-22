@@ -14,9 +14,10 @@ import {
   startRun,
 } from "./database.js";
 import { parseFeed } from "./parser.js";
+import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "1.6.0";
+const VERSION = "1.8.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -65,17 +66,35 @@ function requireDatabase(env) {
 
 function withEditorias(payload) {
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.topics)) return payload;
+  const safePayload = payload.translation?.targetLanguage === "pt-BR" && payload.translation?.portugueseOnly
+    ? payload
+    : portugueseOnlyFallback(payload);
   return {
-    ...payload,
-    topics: payload.topics.map((topic) => {
+    ...safePayload,
+    topics: safePayload.topics.map((topic) => {
       const enriched = topic?.editoria
         ? topic
         : { ...topic, editoria: classifyEditoria(topic?.items || []) };
-      return enriched?.carousel?.slides?.length
+      const expectedUrls = new Set((enriched?.items || [])
+        .map((item) => String(item?.url || "").trim())
+        .filter((url) => /^https?:\/\//i.test(url)));
+      const carouselUrls = new Set((enriched?.carousel?.verificationLinks || [])
+        .map((item) => String(item?.url || "").trim())
+        .filter((url) => /^https?:\/\//i.test(url)));
+      const carouselHasEveryLink = expectedUrls.size > 0 && [...expectedUrls].every((url) => carouselUrls.has(url));
+      return enriched?.carousel?.slides?.length && carouselHasEveryLink
         ? enriched
         : { ...enriched, carousel: buildCarouselBrief(enriched) };
     }),
   };
+}
+
+function translationAi(env) {
+  if (env.AI?.run) return env.AI;
+  if (env.ENVIRONMENT === "test" && env.TRANSLATION_TEST_MODE === "1") {
+    return { run: async (_model, input) => ({ translated_text: String(input?.text || "") }) };
+  }
+  return null;
 }
 
 async function performRound(env, triggerType, options = {}) {
@@ -93,6 +112,12 @@ async function performRound(env, triggerType, options = {}) {
       payload = await collectRound();
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("O coletor não retornou um resultado válido.");
+      }
+      try {
+        payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
+      } catch (error) {
+        console.error("Tradução da ronda falhou", error);
+        payload = portugueseOnlyFallback(payload);
       }
     } catch (error) {
       payload = {
@@ -164,6 +189,11 @@ async function handleApi(request, env, url, ctx) {
       lastSuccessAt,
       lastRunId: latest?.runId ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
+      translation: {
+        ready: Boolean(translationAi(env)?.run),
+        targetLanguage: "pt-BR",
+        model: TRANSLATION_MODEL,
+      },
     });
   }
 

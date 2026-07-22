@@ -96,6 +96,23 @@ function carouselModel(topic, normalizedText) {
   return "Resumo factual em 5 cards";
 }
 
+function buildVerificationLinks(items = []) {
+  const links = [];
+  const seen = new Set();
+  for (const item of items) {
+    const url = String(item?.url || "").trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    links.push({
+      title: shorten(item?.title || "Notícia sem título", 180),
+      sourceName: item?.sourceName || item?.collectorName || "Fonte não informada",
+      publishedAt: item?.publishedAt || null,
+      url,
+    });
+  }
+  return links;
+}
+
 export function buildCarouselBrief(topic = {}) {
   const items = Array.isArray(topic.items) ? topic.items : [];
   const editoria = topic.editoria || classifyEditoria(items);
@@ -115,20 +132,23 @@ export function buildCarouselBrief(topic = {}) {
     ? `O assunto apareceu em ${sourceCount} fontes e reúne ${itemCount} conteúdos nesta ronda. A recorrência indica que merece acompanhamento editorial.`
     : `O assunto foi localizado em ${itemCount || 1} conteúdo nesta ronda. Busque uma segunda fonte independente antes de ampliar a pauta.`;
   const sourceLine = sources.length ? `Fontes monitoradas: ${sources.slice(0, 6).join(", ")}.` : "Fonte não informada pelo feed.";
+  const verificationLinks = buildVerificationLinks(items);
   const callToAction = topic.priority === "Pautar agora"
     ? "Acompanhe as atualizações e confirme as informações nas fontes originais."
     : "Salve este carrossel e acompanhe os próximos desdobramentos.";
 
   return {
+    language: "pt-BR",
     voiceTone: carouselTone(editoria, topic.priority),
     postModel: carouselModel({ ...topic, editoria }, normalizedText),
-    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Revise e confirme antes de publicar.",
+    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Abra os links de apuração, revise e confirme antes de publicar.",
+    verificationLinks,
     slides: [
       { number: 1, role: "Capa", title, body: `${editoria} · ${displayedSourceCount} ${displayedSourceCount === 1 ? "fonte monitorada" : "fontes monitoradas"}` },
       { number: 2, role: "Contexto", title: "O que aconteceu", body: context },
       { number: 3, role: "Pontos principais", title: "O que já sabemos", body: knownFacts },
       { number: 4, role: "Relevância", title: "Por que acompanhar", body: significance },
-      { number: 5, role: "Fontes e CTA", title: "Continue acompanhando", body: `${sourceLine}\n${callToAction}` },
+      { number: 5, role: "Fontes e CTA", title: "Continue acompanhando", body: `${sourceLine}\n${verificationLinks.length} ${verificationLinks.length === 1 ? "link de apuração disponível" : "links de apuração disponíveis"}.\n${callToAction}` },
     ],
   };
 }

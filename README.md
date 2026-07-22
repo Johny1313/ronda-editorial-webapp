@@ -15,13 +15,20 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - 29 portais identificados individualmente, divididos em Brasil e Mundo.
 - Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, TecMundo, O Liberal, Metrópoles e Campo Grande News.
 - Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
+- Títulos e descrições das fontes do Mundo traduzidos para português pelo Workers AI antes do agrupamento e do armazenamento no histórico.
+- Cache de traduções no D1: conteúdos repetidos não consomem uma nova tradução a cada ronda.
+- Proteção de idioma: se uma tradução falhar, o conteúdo afetado é omitido em vez de aparecer em inglês ou espanhol.
 - Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker.
 - Bluesky como complemento social; uma falha do Bluesky não interrompe os portais.
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
 - Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post, fontes e botão para copiar.
+- Carrosséis gerados exclusivamente a partir do conteúdo em português e identificados como `pt-BR`.
 - O roteiro usa somente títulos, descrições e indicadores da ronda e exibe aviso obrigatório de revisão editorial.
+- Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
+- Cards, conteúdos relacionados e histórico exibem um botão individual **Abrir para apuração**.
+- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal e URL de cada apuração.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
 - Tela Fontes agrupada em Brasil, Mundo e complemento social, com o estado de cada portal e filtro clicável por veículo.
 - Chips superiores clicáveis: cada portal filtra imediatamente somente o conteúdo recolhido dele; fontes sem coleta ficam desativadas.
@@ -38,6 +45,8 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 O código e a infraestrutura são verificáveis, mas fontes externas podem mudar endereços ou bloquear consultas. Por isso a coleta aceita falhas parciais, registra a situação de cada fonte e utiliza fallbacks. Sem APIs oficiais ou comerciais, esta versão não monitora integralmente Instagram, TikTok ou X.
 
+A tradução internacional usa o binding `AI` definido no `wrangler.jsonc` e o modelo `@cf/meta/m2m100-1.2b`. O Cloudflare aplica a franquia e os limites da conta. Se o limite de tradução estiver indisponível, o portal continua registrado, mas notícias não traduzidas não são exibidas.
+
 ## Alternativa sem GitHub — editor do Worker
 
 Não use o Direct Upload do Pages. Como alternativa ao GitHub, crie primeiro um Worker Hello World, abra **Edit code** e substitua o código pelo conteúdo de `dist/cloudflare-worker-unico.js`.
@@ -52,17 +61,19 @@ Não use o Direct Upload do Pages. Como alternativa ao GitHub, crie primeiro um 
 8. Adicione um binding D1:
    - Nome da variável: `DB`
    - Banco: `ronda-editorial-db`
-9. Em **Settings → Triggers → Cron Triggers**, adicione:
+9. Ainda em **Settings → Bindings**, adicione um binding **Workers AI**:
+   - Nome da variável: `AI`
+10. Em **Settings → Triggers → Cron Triggers**, adicione:
 
    ```text
    */5 * * * *
    ```
 
-10. Recomendado: em **Settings → Variables and Secrets**, adicione um Secret:
+11. Recomendado: em **Settings → Variables and Secrets**, adicione um Secret:
     - Nome: `MANUAL_ROUND_TOKEN`
     - Valor: uma chave escolhida por você
-11. Abra novamente o endereço público do Worker.
-12. Se configurou uma chave, abra **Ajustes** no painel e informe a mesma chave.
+12. Abra novamente o endereço público do Worker.
+13. Se configurou uma chave, abra **Ajustes** no painel e informe a mesma chave.
 
 O Worker cria as tabelas automaticamente. Não é necessário executar `schema.sql` pelo painel.
 
@@ -78,7 +89,7 @@ https://SEU-WORKER.workers.dev/api/health
 Resultados esperados:
 
 - `/api/self-test`: `"ok": true`, dois itens, um assunto agrupado e `"readWriteDelete": true`. O teste também confirma escrita, leitura e exclusão no D1.
-- `/api/health`: `"ready": true` e `"database": "connected"`.
+- `/api/health`: `"ready": true`, `"database": "connected"` e `"translation":{"ready":true}`.
 
 Depois, clique em **Executar ronda**. Alguns feeds podem aparecer como `falhou`, mas a ronda será válida quando pelo menos um portal fornecer conteúdo recente. O indicador ficará verde após uma coleta concluída.
 

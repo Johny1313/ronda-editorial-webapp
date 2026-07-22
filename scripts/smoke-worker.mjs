@@ -36,7 +36,7 @@ const mf = new Miniflare({
   modules: true,
   scriptPath: new URL("../dist/cloudflare-worker-unico.js", import.meta.url).pathname,
   compatibilityDate: "2026-07-22",
-  bindings: { ENVIRONMENT: "test" },
+  bindings: { ENVIRONMENT: "test", TRANSLATION_TEST_MODE: "1" },
   d1Databases: { DB: `ronda-smoke-${crypto.randomUUID()}` },
   outboundService: mockExternalSource,
 });
@@ -56,9 +56,10 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=1.6.0") && html.includes("/styles.css?v=1.6.0"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=1.8.0") && html.includes("/styles.css?v=1.8.0"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
+  assert(html.includes('id="carouselSources"'), "Lista de links para apuração não foi incorporada ao carrossel.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
   assert(html.includes('id="regionFilter"'), "Filtro Brasil/Mundo não foi incorporado ao Worker.");
   assert(html.includes('id="historyDetail"') && html.includes('id="historyBack"'), "Detalhes clicáveis do histórico não foram incorporados ao Worker.");
@@ -89,9 +90,19 @@ try {
   assert(roundData.sources.length === 30, "O catálogo não contém os 29 portais e o complemento Bluesky.");
   assert(roundData.sources.filter((source) => source.region === "Brasil").length === 16, "Catálogo Brasil incompleto.");
   assert(roundData.sources.filter((source) => source.region === "Mundo").length === 13, "Catálogo Mundo incompleto.");
+  assert(roundData.translation?.targetLanguage === "pt-BR" && roundData.translation?.portugueseOnly, "A ronda não garantiu saída em português.");
+  assert(roundData.translation?.translatedWorldItems > 0 && roundData.translation?.generatedFields > 0, "A tradução internacional não foi executada.");
+  assert(roundData.items.filter((item) => item.region === "Mundo").every((item) => item.targetLanguage === "pt-BR"), "Há conteúdo internacional sem tradução.");
+  assert(roundData.items.every((item) => /^https?:\/\//i.test(item.url)), "Há notícia captada sem link válido para apuração.");
   assert(roundData.topics.every((topic) => topic.editoria), "Os assuntos não receberam editorias.");
   assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 5), "Os roteiros de carrossel não foram gerados.");
   assert(roundData.topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel), "Tom de voz ou modelo de post ausente.");
+  assert(roundData.topics.every((topic) => topic.carousel?.language === "pt-BR"), "Um carrossel não está marcado como português.");
+  assert(roundData.topics.every((topic) => {
+    const itemUrls = new Set((topic.items || []).map((item) => item.url).filter((url) => /^https?:\/\//i.test(url)));
+    const linkUrls = new Set((topic.carousel?.verificationLinks || []).map((item) => item.url));
+    return itemUrls.size > 0 && [...itemUrls].every((url) => linkUrls.has(url));
+  }), "Um carrossel não contém todos os links individuais para apuração.");
 
   const historicalData = await getJson(`/api/runs/${round.body.runId}/data`);
   assert(historicalData.body.data?.items?.length === roundData.items.length, "Notícias da ronda histórica não foram recuperadas.");
@@ -101,7 +112,8 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.6.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.8.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
 
   process.stdout.write(
     `Smoke test aprovado: dashboard, D1, editorias, carrosséis, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
