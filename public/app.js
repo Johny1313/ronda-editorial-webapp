@@ -5,6 +5,7 @@ const state = {
   query: "",
   period: 1440,
   source: "Todos",
+  editoria: "Todas",
   portal: null,
   view: "round",
   expanded: new Set(),
@@ -114,7 +115,7 @@ function renderSourceHealth(message = "", warning = false) {
     return;
   }
   const okCount = sources.filter((source) => source.ok).length;
-  holder.innerHTML = `<span class="health-label">Fontes ${okCount}/${sources.length}</span>${sources.map((source) => `<button class="health-chip ${source.ok ? "ok" : "error"}" data-portal="${escapeHtml(source.name)}" type="button" title="${escapeHtml(source.error || `${source.count} conteúdos${source.fallback ? " por rota alternativa" : ""}`)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${source.ok ? `${source.count}${source.fallback ? " alt." : ""}` : "falhou"}</button>`).join("")}`;
+  holder.innerHTML = `<span class="health-label">Fontes ${okCount}/${sources.length}</span>${sources.map((source) => `<button class="health-chip ${source.ok ? "ok" : "error"}${state.portal === source.name ? " selected" : ""}" data-portal="${escapeHtml(source.name)}" type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(source.error || `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${source.fallback ? " por rota alternativa" : ""}`)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${source.ok ? `${source.count}${source.fallback ? " alt." : ""}` : "falhou"}</button>`).join("")}`;
 }
 
 function setSourceSegment(value) {
@@ -144,6 +145,7 @@ function filterByPortal(name) {
   state.expanded.clear();
   showView("round");
   updatePortalFilter();
+  renderSourceHealth();
   renderPortalCards();
   render();
   document.querySelector(".controls").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -154,7 +156,7 @@ function render() {
   const query = state.query.trim().toLocaleLowerCase("pt-BR");
   const visible = topics
     .map((topic) => ({ ...topic, items: (topic.items || []).filter((item) => itemWithinPeriod(item) && itemMatchesSource(item)) }))
-    .filter((topic) => topic.items.length && (!query || `${topic.title} ${topic.items.map((item) => `${item.sourceName} ${item.title}`).join(" ")}`.toLocaleLowerCase("pt-BR").includes(query)));
+    .filter((topic) => topic.items.length && (state.editoria === "Todas" || (topic.editoria || "Notícias") === state.editoria) && (!query || `${topic.title} ${topic.items.map((item) => `${item.sourceName} ${item.title}`).join(" ")}`.toLocaleLowerCase("pt-BR").includes(query)));
 
   document.getElementById("summaryTopics").textContent = visible.length;
   document.getElementById("summaryContents").textContent = visible.reduce((sum, topic) => sum + topic.items.length, 0);
@@ -180,7 +182,8 @@ function render() {
     const comments = items.reduce((sum, item) => sum + (Number(item.comments) || 0), 0);
     const latest = items[0].publishedAt;
     const open = state.expanded.has(topic.id);
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="metrics"><div class="metric"><span>Visualizações observadas</span><strong>${metricValue(views)}</strong></div><div class="metric"><span>Comentários</span><strong>${metricValue(comments)}</strong></div><div class="metric"><span>Fontes diferentes</span><strong>${sources.length}</strong></div><div class="metric"><span>Conteúdos</span><strong>${items.length}</strong></div></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outras fontes" : `Ver mais ${additional.length} ${additional.length === 1 ? "fonte" : "fontes"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    const editoria = topic.editoria || "Notícias";
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="metrics"><div class="metric"><span>Visualizações observadas</span><strong>${metricValue(views)}</strong></div><div class="metric"><span>Comentários</span><strong>${metricValue(comments)}</strong></div><div class="metric"><span>Fontes diferentes</span><strong>${sources.length}</strong></div><div class="metric"><span>Conteúdos</span><strong>${items.length}</strong></div></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outras fontes" : `Ver mais ${additional.length} ${additional.length === 1 ? "fonte" : "fontes"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -268,11 +271,19 @@ async function executeRound(automatic = false) {
       headers: { "Content-Type": "application/json", ...(token ? { "X-Round-Token": token } : {}) },
       body: JSON.stringify({ source: automatic ? "initial" : "button" }),
     });
+    if (!payload?.runId && payload?.data?.ok) {
+      applyRound(payload.data);
+      const legacyTime = payload.data.collectedAt || payload.data.storedAt || new Date().toISOString();
+      setStatus("ok", "Ronda concluída", `Coleta finalizada às ${new Date(legacyTime).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`);
+      return;
+    }
+    if (!payload?.runId) throw new Error("O servidor retornou uma resposta de ronda incompatível. Publique todos os arquivos da mesma versão.");
     setStatus("", "Ronda iniciada", "O servidor está consultando os portais");
     await waitForRun(payload.runId);
     const completed = await loadLatest();
     if (!completed?.ok) throw new Error("A ronda terminou, mas o resultado ainda não foi carregado.");
-    setStatus("ok", "Ronda concluída", `Coleta finalizada às ${new Date(completed.collectedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`);
+    const completedAt = completed.collectedAt || completed.storedAt || new Date().toISOString();
+    setStatus("ok", "Ronda concluída", `Coleta finalizada às ${new Date(completedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`);
   } catch (error) {
     if (error.status === 401) {
       document.getElementById("tokenMessage").textContent = "Chave incorreta. Confira a variável MANUAL_ROUND_TOKEN.";
@@ -293,6 +304,7 @@ async function executeRound(automatic = false) {
 async function checkHealth() {
   try {
     const health = await api(`/api/health?t=${Date.now()}`);
+    if (!health || typeof health !== "object" || !health.version) throw new Error("A versão publicada do Worker não é compatível com este painel.");
     state.health = health;
     document.getElementById("automationText").textContent = health.schedulerHealthy
       ? "Automação online ativa e atualizada."
@@ -313,13 +325,44 @@ async function checkHealth() {
 async function showHistory() {
   openModal("historyModal");
   const holder = document.getElementById("historyList");
+  const detail = document.getElementById("historyDetail");
+  const back = document.getElementById("historyBack");
+  holder.hidden = false;
+  detail.hidden = true;
+  back.hidden = true;
   holder.innerHTML = '<div class="loading-row">Carregando histórico…</div>';
   try {
     const payload = await api("/api/history?limit=50");
     const runs = payload?.runs || [];
-    holder.innerHTML = runs.length ? runs.map((run) => `<div class="history-row"><div><strong>${escapeHtml(formatDate(run.completed_at))}</strong><br><span>${run.trigger_type === "scheduled" ? "Automática" : "Manual"}</span></div><span class="history-status ${run.status}">${run.status === "success" ? "Concluída" : run.status === "running" ? "Em andamento" : "Falhou"}</span><span>${Number(run.items_count) || 0} conteúdos</span><span>${Number(run.topics_count) || 0} assuntos</span><span>${Number(run.sources_count) || 0} fontes</span></div>`).join("") : '<div class="loading-row">Nenhuma ronda armazenada.</div>';
+    holder.innerHTML = runs.length ? runs.map((run) => `<button class="history-row" data-history-run="${escapeHtml(run.id)}" type="button" ${run.status === "running" ? "disabled" : ""}><span class="history-date"><strong>${escapeHtml(formatDate(run.completed_at))}</strong><small>${run.trigger_type === "scheduled" ? "Automática" : "Manual"}</small></span><span class="history-status ${run.status}">${run.status === "success" ? "Concluída" : run.status === "running" ? "Em andamento" : "Falhou"}</span><span>${Number(run.items_count) || 0} conteúdos</span><span>${Number(run.topics_count) || 0} assuntos</span><span class="history-open"><strong>${Number(run.sources_count) || 0} fontes</strong><small>${run.status === "running" ? "Aguarde" : "Ver notícias →"}</small></span></button>`).join("") : '<div class="loading-row">Nenhuma ronda armazenada.</div>';
   } catch (error) {
     holder.innerHTML = `<div class="loading-row">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function showHistoryDetail(runId) {
+  const holder = document.getElementById("historyList");
+  const detail = document.getElementById("historyDetail");
+  const back = document.getElementById("historyBack");
+  holder.hidden = true;
+  detail.hidden = false;
+  back.hidden = false;
+  detail.innerHTML = '<div class="loading-row">Carregando as notícias desta ronda…</div>';
+  try {
+    const response = await api(`/api/runs/${encodeURIComponent(runId)}/data?t=${Date.now()}`);
+    const data = response?.data || {};
+    const run = response?.run || {};
+    const items = [...(data.items || [])].sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
+    const sourceCounts = new Map();
+    for (const item of items) {
+      const source = item.collectorName || item.sourceName || "Fonte não informada";
+      sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+    }
+    const sourceChips = [...sourceCounts.entries()].sort((left, right) => right[1] - left[1]).map(([name, count]) => `<span>${escapeHtml(name)} · ${count}</span>`).join("");
+    const news = items.length ? items.map((item) => `<article class="history-news"><div class="history-news-meta"><span class="kind ${escapeHtml((item.platform || item.kind || "fonte").toLowerCase())}">${escapeHtml(item.platform || (item.kind === "social" ? "Rede" : "Portal"))}</span><strong>${escapeHtml(item.sourceName || item.collectorName || "Fonte não informada")}</strong><time>${escapeHtml(formatDate(item.publishedAt))}</time></div><h3>${escapeHtml(item.title)}</h3>${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}<a href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir notícia original ↗</a></article>`).join("") : '<div class="empty history-empty"><strong>Nenhuma notícia armazenada nesta ronda</strong><span>Consulte o estado das fontes ou selecione outra ronda.</span></div>';
+    detail.innerHTML = `<section class="history-detail-head"><p class="eyebrow">Notícias apuradas neste período</p><h3>${escapeHtml(formatDate(run.completedAt || data.collectedAt))}</h3><p>${run.triggerType === "scheduled" ? "Ronda automática" : "Ronda manual"} · ${items.length} conteúdos · ${Number(data.totals?.topics) || 0} assuntos</p></section>${sourceChips ? `<div class="history-source-chips">${sourceChips}</div>` : ""}<div class="history-news-list">${news}</div>`;
+  } catch (error) {
+    detail.innerHTML = `<div class="loading-row">${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -345,11 +388,29 @@ document.getElementById("sourceFilter").addEventListener("click", (event) => {
   state.portal = null;
   setSourceSegment(event.target.dataset.value);
   state.expanded.clear();
+  renderSourceHealth();
+  render();
+});
+document.getElementById("editoriaFilter").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-editoria]");
+  if (!button) return;
+  state.editoria = button.dataset.editoria;
+  event.currentTarget.querySelectorAll("[data-editoria]").forEach((item) => item.classList.toggle("active", item === button));
+  state.expanded.clear();
   render();
 });
 document.getElementById("settingsButton").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("openSettings").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("navHistory").addEventListener("click", showHistory);
+document.getElementById("historyList").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-history-run]");
+  if (row && !row.disabled) showHistoryDetail(row.dataset.historyRun);
+});
+document.getElementById("historyBack").addEventListener("click", () => {
+  document.getElementById("historyDetail").hidden = true;
+  document.getElementById("historyList").hidden = false;
+  document.getElementById("historyBack").hidden = true;
+});
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navRound").addEventListener("click", () => { showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));

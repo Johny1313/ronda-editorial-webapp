@@ -43,6 +43,35 @@ export function tokenSimilarity(left, right) {
   return Math.min(1, jaccard * 0.55 + containment * 0.45 + bonus);
 }
 
+const EDITORIA_RULES = Object.freeze([
+  ["Esportes", ["futebol", "jogo", "partida", "campeonato", "brasileirao", "copa", "clube", "time", "jogador", "jogadora", "gol", "tecnico", "selecao", "formula 1", "f1", "basquete", "volei", "tenis", "olimpiada", "esporte"]],
+  ["Política", ["presidente", "congresso", "senado", "camara", "deputado", "senador", "ministro", "governo", "eleicao", "eleitoral", "stf", "supremo", "partido", "prefeito", "governador", "planalto", "projeto de lei", "votacao", "politica"]],
+  ["Entretenimento", ["filme", "serie", "novela", "musica", "cantor", "cantora", "atriz", "ator", "show", "festival", "televisao", "cinema", "streaming", "celebridade", "bbb", "reality", "oscar", "entretenimento"]],
+  ["Economia", ["economia", "inflacao", "dolar", "bolsa", "juros", "banco", "mercado", "empresa", "emprego", "desemprego", "pib", "imposto", "investimento", "financeiro", "combustivel", "petroleo"]],
+  ["Mundo", ["estados unidos", "eua", "trump", "guerra", "ucrania", "russia", "israel", "gaza", "china", "europa", "onu", "internacional", "exterior"]],
+  ["Tecnologia", ["tecnologia", "inteligencia artificial", "ia", "internet", "aplicativo", "software", "celular", "smartphone", "google", "microsoft", "apple", "meta", "rede social", "digital"]],
+  ["Saúde", ["saude", "doenca", "vacina", "hospital", "medico", "medicina", "virus", "covid", "medicamento", "tratamento", "epidemia", "paciente"]],
+]);
+
+function keywordMatch(text, keyword) {
+  if (keyword.includes(" ")) return text.includes(keyword);
+  return new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text);
+}
+
+export function classifyEditoria(items = []) {
+  const text = normalizeText(items.map((item) => `${item?.title || ""} ${item?.description || ""}`).join(" "));
+  let selected = "Notícias";
+  let selectedScore = 0;
+  for (const [editoria, keywords] of EDITORIA_RULES) {
+    const score = keywords.reduce((total, keyword) => total + (keywordMatch(text, keyword) ? 1 : 0), 0);
+    if (score > selectedScore) {
+      selected = editoria;
+      selectedScore = score;
+    }
+  }
+  return selected;
+}
+
 export function clusterItems(items, threshold = 0.36) {
   const clusters = [];
   const ordered = [...items].sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
@@ -106,6 +135,7 @@ export function clusterToTopic(cluster, now = new Date()) {
   return {
     id: `topic-${stableHash(cluster.tokens.slice(0, 6).join("-"))}`,
     title: representative?.title ?? "Assunto sem título",
+    editoria: classifyEditoria(items),
     priority,
     tone,
     score,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTopics, clusterItems, titleTokens, tokenSimilarity } from "../src/clustering.js";
+import { buildTopics, classifyEditoria, clusterItems, titleTokens, tokenSimilarity } from "../src/clustering.js";
 
 const now = new Date("2026-07-22T12:00:00Z");
 const base = { description: "", collectorName: "Teste", platform: "Portal", kind: "portal", views: null, comments: null, likes: null, interactions: null };
@@ -28,4 +28,12 @@ test("gera cards editoriais ordenados", () => {
   assert.equal(topics[0].itemCount, 2);
   assert.equal(topics[0].sourceCount, 2);
   assert.ok(topics[0].recommendation.length > 20);
+  assert.ok(topics.every((topic) => topic.editoria));
+});
+
+test("classifica assuntos nas editorias principais", () => {
+  assert.equal(classifyEditoria([{ title: "Senado vota projeto do governo", description: "Congresso analisa proposta" }]), "Política");
+  assert.equal(classifyEditoria([{ title: "Seleção vence jogo da Copa", description: "Jogador marcou dois gols" }]), "Esportes");
+  assert.equal(classifyEditoria([{ title: "Atriz estreia nova série no streaming", description: "Produção chega ao cinema" }]), "Entretenimento");
+  assert.equal(classifyEditoria([{ title: "Chuva muda trânsito na capital", description: "Avenida foi interditada" }]), "Notícias");
 });

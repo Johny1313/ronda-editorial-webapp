@@ -56,14 +56,19 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
+  assert(html.includes("/app.js?v=1.4.0") && html.includes("/styles.css?v=1.4.0"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
+  assert(html.includes('id="historyDetail"') && html.includes('id="historyBack"'), "Detalhes clicáveis do histórico não foram incorporados ao Worker.");
   assert(home.headers.get("content-security-policy"), "CSP ausente no dashboard.");
+  assert(home.headers.get("cache-control")?.includes("no-store"), "Dashboard ainda permite cache incompatível entre versões.");
 
   const selfTest = await getJson("/api/self-test");
   assert(selfTest.body.ok && selfTest.body.database?.readWriteDelete, "Autoteste lógico/D1 falhou.");
 
   const round = await getJson("/api/round", { method: "POST" });
   assert(round.response.status === 202 && round.body.runId, "Ronda simulada não foi iniciada em segundo plano.");
+  assert(round.body.data?.collectedAt, "Resposta compatível para painéis antigos não foi incluída.");
   let runStatus;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const status = await getJson(`/api/runs/${round.body.runId}`);
@@ -79,15 +84,20 @@ try {
   assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
   assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
   assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
+  assert(roundData.topics.every((topic) => topic.editoria), "Os assuntos não receberam editorias.");
+
+  const historicalData = await getJson(`/api/runs/${round.body.runId}/data`);
+  assert(historicalData.body.data?.items?.length === roundData.items.length, "Notícias da ronda histórica não foram recuperadas.");
+  assert(historicalData.body.data.items[0]?.title, "Detalhe histórico não contém os títulos apurados.");
 
   const history = await getJson("/api/history?limit=10");
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy, "Saúde do serviço não reconheceu a ronda.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.4.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
 
   process.stdout.write(
-    `Smoke test aprovado: dashboard, D1, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
+    `Smoke test aprovado: dashboard, D1, editorias, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
   );
 } finally {
   await mf.dispose();

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=1.4.0">
 </head>
 <body>
   <main class="app">
@@ -59,6 +59,21 @@
         </div>
       </section>
 
+      <section class="editoria-controls" aria-label="Filtrar por editoria">
+        <span>Editorias</span>
+        <div class="editoria-filter" id="editoriaFilter">
+          <button class="active" data-editoria="Todas" type="button">Todas</button>
+          <button data-editoria="Notícias" type="button">Notícias</button>
+          <button data-editoria="Política" type="button">Política</button>
+          <button data-editoria="Esportes" type="button">Esportes</button>
+          <button data-editoria="Entretenimento" type="button">Entretenimento</button>
+          <button data-editoria="Economia" type="button">Economia</button>
+          <button data-editoria="Mundo" type="button">Mundo</button>
+          <button data-editoria="Tecnologia" type="button">Tecnologia</button>
+          <button data-editoria="Saúde" type="button">Saúde</button>
+        </div>
+      </section>
+
       <div class="portal-filter" id="portalFilter" hidden><span>Exibindo somente:</span><strong id="portalFilterName"></strong><button id="clearPortalFilter" type="button">Remover filtro ×</button></div>
 
       <div class="heading"><div><h2>Assuntos em destaque</h2><p>Ordenados por relevância editorial, recorrência e atualidade</p></div><span class="last-update" id="lastUpdate">Sem coleta</span></div>
@@ -80,10 +95,12 @@
   <div class="modal-backdrop" id="historyModal" hidden>
     <section class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
       <div class="modal-head"><div><p class="eyebrow">Últimas 48 horas</p><h2 id="historyTitle">Histórico de rondas</h2></div><button class="close-modal" data-close="historyModal" type="button" aria-label="Fechar">×</button></div>
+      <button class="history-back" id="historyBack" type="button" hidden>← Voltar para todas as rondas</button>
       <div class="history-list" id="historyList"><div class="loading-row">Carregando histórico…</div></div>
+      <div class="history-detail" id="historyDetail" hidden></div>
     </section>
   </div>
 
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=1.4.0" defer></script>
 </body>
 </html>

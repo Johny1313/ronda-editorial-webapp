@@ -1,4 +1,4 @@
-import { buildTopics } from "./clustering.js";
+import { buildTopics, classifyEditoria } from "./clustering.js";
 import { collectRound } from "./collector.js";
 import {
   acquireLock,
@@ -7,6 +7,7 @@ import {
   ensureSchema,
   getLatestRound,
   getRunHistory,
+  getRunPayload,
   getRunStatus,
   releaseLock,
   saveRun,
@@ -15,7 +16,7 @@ import {
 import { parseFeed } from "./parser.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.4.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -42,7 +43,8 @@ function assetResponse(asset) {
     headers: {
       ...SECURITY_HEADERS,
       "Content-Type": asset.contentType,
-      "Cache-Control": asset.contentType.startsWith("text/html") ? "no-cache" : "public, max-age=300, must-revalidate",
+      "Cache-Control": "no-store, max-age=0",
+      "X-Ronda-Version": VERSION,
     },
   });
 }
@@ -61,6 +63,16 @@ function requireDatabase(env) {
   return env.DB;
 }
 
+function withEditorias(payload) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.topics)) return payload;
+  return {
+    ...payload,
+    topics: payload.topics.map((topic) => topic?.editoria
+      ? topic
+      : { ...topic, editoria: classifyEditoria(topic?.items || []) }),
+  };
+}
+
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
@@ -74,6 +86,9 @@ async function performRound(env, triggerType, options = {}) {
     let payload;
     try {
       payload = await collectRound();
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("O coletor não retornou um resultado válido.");
+      }
     } catch (error) {
       payload = {
         ok: false,
@@ -149,7 +164,7 @@ async function handleApi(request, env, url, ctx) {
 
   if (url.pathname === "/api/latest" && request.method === "GET") {
     const latest = await getLatestRound(requireDatabase(env));
-    return json({ ok: true, data: latest });
+    return json({ ok: true, data: withEditorias(latest) });
   }
 
   if (url.pathname === "/api/history" && request.method === "GET") {
@@ -157,9 +172,26 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true, runs });
   }
 
-  if (url.pathname.startsWith("/api/runs/") && request.method === "GET") {
-    const runId = decodeURIComponent(url.pathname.slice("/api/runs/".length));
-    if (!/^[a-z0-9-]{8,80}$/i.test(runId)) throw new HttpError(400, "Identificador de ronda inválido.");
+  const runRoute = /^\/api\/runs\/([a-z0-9-]{8,80})(\/data)?$/i.exec(url.pathname);
+  if (runRoute && request.method === "GET") {
+    const runId = runRoute[1];
+    if (runRoute[2]) {
+      const stored = await getRunPayload(requireDatabase(env), runId);
+      if (!stored) throw new HttpError(404, "Ronda não encontrada.");
+      if (!stored.payload) throw new HttpError(409, "Esta ronda ainda não possui notícias disponíveis.");
+      return json({
+        ok: true,
+        run: {
+          id: stored.id,
+          triggerType: stored.triggerType,
+          status: stored.status,
+          startedAt: stored.startedAt,
+          completedAt: stored.completedAt,
+          error: stored.error,
+        },
+        data: withEditorias({ ...stored.payload, runId: stored.id, triggerType: stored.triggerType, storedAt: stored.completedAt }),
+      });
+    }
     const run = await getRunStatus(requireDatabase(env), runId);
     if (!run) throw new HttpError(404, "Ronda ainda não encontrada.");
     return json({ ok: true, run });
@@ -182,12 +214,24 @@ async function handleApi(request, env, url, ctx) {
       await releaseLock(db, lock);
       throw error;
     }
+    const latestForOlderPanels = withEditorias(await getLatestRound(db).catch(() => null));
+    const compatibilityData = latestForOlderPanels?.ok && Array.isArray(latestForOlderPanels.topics)
+      ? latestForOlderPanels
+      : {
+          ok: true,
+          collectedAt: startedAt,
+          windowHours: 24,
+          sources: [],
+          totals: { items: 0, topics: 0, sources: 0, socialItems: 0 },
+          items: [],
+          topics: [],
+        };
     const task = performRound(env, "manual", { lock, runId, startedAt, runStarted: true }).catch((error) => {
       console.error("Ronda manual falhou", error);
     });
     if (ctx?.waitUntil) ctx.waitUntil(task);
     else await task;
-    return json({ ok: true, queued: true, runId, status: "running" }, 202);
+    return json({ ok: true, queued: true, runId, status: "running", data: compatibilityData }, 202);
   }
 
   throw new HttpError(404, "Rota não encontrada.");

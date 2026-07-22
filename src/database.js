@@ -74,10 +74,21 @@ export async function startRun(db, { id, triggerType, startedAt }) {
 
 export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   await ensureSchema(db);
-  const completedAt = payload.collectedAt || new Date().toISOString();
-  const totals = payload.totals ?? {};
-  const status = payload.ok ? "success" : "failed";
-  const payloadJson = JSON.stringify(payload);
+  const safePayload = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload
+    : {
+        ok: false,
+        collectedAt: new Date().toISOString(),
+        error: "A coleta terminou sem retornar dados válidos.",
+        sources: [],
+        totals: { items: 0, topics: 0, sources: 0, socialItems: 0 },
+        items: [],
+        topics: [],
+      };
+  const completedAt = safePayload.collectedAt || new Date().toISOString();
+  const totals = safePayload.totals ?? {};
+  const status = safePayload.ok ? "success" : "failed";
+  const payloadJson = JSON.stringify(safePayload);
   const retentionCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const latestSummary = JSON.stringify({
     id,
@@ -119,7 +130,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
         Number(totals.topics) || 0,
         Number(totals.sources) || 0,
         Number(totals.socialItems) || 0,
-        payload.error || null,
+        safePayload.error || null,
         payloadJson,
       ),
     db
@@ -142,6 +153,7 @@ export async function getLatestRound(db) {
   if (!row?.payload_json) return null;
   try {
     const payload = JSON.parse(row.payload_json);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
     return { ...payload, runId: row.id, triggerType: row.trigger_type, storedAt: row.completed_at };
   } catch {
     throw new Error("A última ronda armazenada está corrompida.");
@@ -173,6 +185,35 @@ export async function getRunStatus(db, id) {
     .bind(id)
     .first();
   return row ?? null;
+}
+
+export async function getRunPayload(db, id) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(`
+      SELECT id, trigger_type, status, started_at, completed_at, error, payload_json
+      FROM runs WHERE id = ? LIMIT 1
+    `)
+    .bind(id)
+    .first();
+  if (!row) return null;
+  let payload = null;
+  if (row.payload_json) {
+    try {
+      payload = JSON.parse(row.payload_json);
+    } catch {
+      throw new Error("Os dados desta ronda estão corrompidos.");
+    }
+  }
+  return {
+    id: row.id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    error: row.error,
+    payload,
+  };
 }
 
 export async function databaseHealth(db) {
