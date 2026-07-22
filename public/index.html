@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f4">
+  <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
+  <title>Ronda Editorial 24h</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <button class="brand" id="goTop" type="button" aria-label="Voltar ao topo">RE</button>
+      <nav aria-label="Navegação principal">
+        <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
+        <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
+        <button class="nav" id="navHistory" type="button"><span class="nav-icon">H</span><span>Histórico</span></button>
+      </nav>
+      <button class="nav settings" id="openSettings" type="button"><span class="nav-icon">·</span><span>Ajustes</span></button>
+    </aside>
+
+    <section class="workspace" id="workspaceTop">
+      <header class="topbar">
+        <div><p class="eyebrow">Monitoramento editorial</p><h1>Ronda Editorial <span>24h</span></h1></div>
+        <div class="top-actions">
+          <button class="icon-button" id="settingsButton" type="button" aria-label="Abrir ajustes">⚙</button>
+          <button class="run-round" id="runRound" type="button"><span>↻</span>Executar ronda</button>
+          <div class="status"><span class="live" id="liveDot"></span><div><strong id="statusLabel">Conectando</strong><small id="statusSub">Verificando o serviço online</small></div></div>
+        </div>
+      </header>
+
+      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> O painel pode ser fechado; as rondas ficam armazenadas por 48 horas.</div>
+      <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
+
+      <section class="summary" aria-label="Resumo da ronda">
+        <div><strong id="summaryContents">0</strong><span>novos conteúdos</span><small>período selecionado</small></div>
+        <div><strong id="summaryTopics">0</strong><span>assuntos ativos</span><small>janela atual</small></div>
+        <div><strong id="summaryChannels">0</strong><span>fontes distintas</span><small>portais e redes</small></div>
+        <div class="attention"><strong id="summaryUrgent">0</strong><span>pautar agora</span><small>alta recorrência</small></div>
+      </section>
+
+      <section class="controls" aria-label="Filtros da ronda">
+        <label class="search"><span>⌕</span><input id="searchInput" placeholder="Buscar assunto, veículo ou canal" aria-label="Buscar assunto, veículo ou canal"></label>
+        <div class="segmented" id="periodFilter" aria-label="Período">
+          <button data-value="5" type="button">5 min</button><button data-value="60" type="button">1h</button><button data-value="360" type="button">6h</button><button class="active" data-value="1440" type="button">24h</button>
+        </div>
+        <div class="segmented" id="sourceFilter" aria-label="Tipo de fonte">
+          <button class="active" data-value="Todos" type="button">Todos</button><button data-value="Portal" type="button">Portais</button><button data-value="Rede" type="button">Redes</button>
+        </div>
+      </section>
+
+      <div class="heading"><div><h2>Assuntos em destaque</h2><p>Ordenados por relevância editorial, recorrência e atualidade</p></div><span class="last-update" id="lastUpdate">Sem coleta</span></div>
+      <section class="grid" id="topicsGrid" aria-live="polite"></section>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head"><div><p class="eyebrow">Segurança</p><h2 id="settingsTitle">Ajustes da operação</h2></div><button class="close-modal" data-close="settingsModal" type="button" aria-label="Fechar">×</button></div>
+      <p class="modal-copy">Se o Worker possuir a variável secreta <code>MANUAL_ROUND_TOKEN</code>, informe a mesma chave abaixo. Ela fica salva somente neste navegador.</p>
+      <label class="field"><span>Chave para executar ronda manual</span><input id="operationToken" type="password" autocomplete="off" placeholder="Opcional quando não há proteção"></label>
+      <p class="field-message" id="tokenMessage"></p>
+      <div class="modal-actions"><button class="secondary" data-close="settingsModal" type="button">Cancelar</button><button class="primary" id="saveSettings" type="button">Salvar chave</button></div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="historyModal" hidden>
+    <section class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+      <div class="modal-head"><div><p class="eyebrow">Últimas 48 horas</p><h2 id="historyTitle">Histórico de rondas</h2></div><button class="close-modal" data-close="historyModal" type="button" aria-label="Fechar">×</button></div>
+      <div class="history-list" id="historyList"><div class="loading-row">Carregando histórico…</div></div>
+    </section>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
