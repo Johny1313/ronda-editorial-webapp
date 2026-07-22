@@ -29,6 +29,8 @@ test("gera cards editoriais ordenados", () => {
   assert.equal(topics[0].sourceCount, 2);
   assert.ok(topics[0].recommendation.length > 20);
   assert.ok(topics.every((topic) => topic.editoria));
+  assert.ok(topics.every((topic) => topic.carousel?.slides?.length === 5));
+  assert.ok(topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel));
 });
 
 test("classifica assuntos nas editorias principais", () => {

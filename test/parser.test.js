@@ -28,6 +28,14 @@ test("lê Atom com link em atributo href", () => {
   assert.match(items[0].id, /^rss-atom-/);
 });
 
+test("mantém o nome canônico e a região do portal em feeds agregados", () => {
+  const xml = `<rss><channel><item><title>Notícia internacional</title><link>https://example.com/world</link><pubDate>Wed, 22 Jul 2026 11:30:00 GMT</pubDate><source>Nome variável do agregador</source></item></channel></rss>`;
+  const items = parseFeed(xml, { id: "bbc", name: "BBC News", region: "Mundo", canonicalSource: true }, new Date("2026-07-21T12:00:00Z"));
+  assert.equal(items[0].sourceName, "BBC News");
+  assert.equal(items[0].collectorName, "BBC News");
+  assert.equal(items[0].region, "Mundo");
+});
+
 test("hash é estável", () => {
   assert.equal(stableHash("https://example.com"), stableHash("https://example.com"));
   assert.notEqual(stableHash("a"), stableHash("b"));

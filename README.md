@@ -12,15 +12,20 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Ronda manual pelo painel.
 - Ronda manual iniciada em segundo plano, com acompanhamento de progresso no painel.
 - Interface e Worker usam a mesma versão sem cache antigo; respostas antigas e novas são tratadas sem quebrar o painel.
-- G1, Folha de S.Paulo, UOL, Estadão, Agência Brasil, BBC News Brasil e ronda geral.
-- Rota alternativa para cada portal quando o feed principal falha.
+- 29 portais identificados individualmente, divididos em Brasil e Mundo.
+- Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, TecMundo, O Liberal, Metrópoles e Campo Grande News.
+- Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
+- Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker.
 - Bluesky como complemento social; uma falha do Bluesky não interrompe os portais.
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
+- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post, fontes e botão para copiar.
+- O roteiro usa somente títulos, descrições e indicadores da ronda e exibe aviso obrigatório de revisão editorial.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
-- Tela Fontes com o estado de cada portal e filtro clicável por veículo.
-- Chips superiores clicáveis: G1, Folha, UOL e demais fontes filtram imediatamente o conteúdo e destacam o portal ativo.
+- Tela Fontes agrupada em Brasil, Mundo e complemento social, com o estado de cada portal e filtro clicável por veículo.
+- Chips superiores clicáveis: cada portal filtra imediatamente somente o conteúdo recolhido dele; fontes sem coleta ficam desativadas.
+- Filtro de região com as opções Todas regiões, Brasil e Mundo.
 - Leitura correta de RSS em UTF-8, ISO-8859-1 e Windows-1252.
 - Histórico de rondas automáticas e manuais.
 - Histórico clicável com todas as notícias, fontes, horários e links armazenados em cada ronda.

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=1.4.0">
+  <link rel="stylesheet" href="/styles.css?v=1.6.0">
 </head>
 <body>
   <main class="app">
@@ -57,6 +57,9 @@
         <div class="segmented" id="sourceFilter" aria-label="Tipo de fonte">
           <button class="active" data-value="Todos" type="button">Todos</button><button data-value="Portal" type="button">Portais</button><button data-value="Rede" type="button">Redes</button>
         </div>
+        <div class="segmented" id="regionFilter" aria-label="Região das fontes">
+          <button class="active" data-value="Todas" type="button">Todas regiões</button><button data-value="Brasil" type="button">Brasil</button><button data-value="Mundo" type="button">Mundo</button>
+        </div>
       </section>
 
       <section class="editoria-controls" aria-label="Filtrar por editoria">
@@ -101,6 +104,17 @@
     </section>
   </div>
 
-  <script src="/app.js?v=1.4.0" defer></script>
+  <div class="modal-backdrop" id="carouselModal" hidden>
+    <section class="modal modal-wide carousel-modal" role="dialog" aria-modal="true" aria-labelledby="carouselTitle">
+      <div class="modal-head"><div><p class="eyebrow">Apoio editorial</p><h2 id="carouselTitle">Roteiro para carrossel</h2></div><button class="close-modal" data-close="carouselModal" type="button" aria-label="Fechar">×</button></div>
+      <div class="carousel-meta" id="carouselMeta"></div>
+      <div class="carousel-slides" id="carouselSlides"></div>
+      <p class="carousel-disclaimer" id="carouselDisclaimer"></p>
+      <div class="modal-actions"><button class="secondary" data-close="carouselModal" type="button">Fechar</button><button class="primary" id="copyCarousel" type="button">Copiar roteiro</button></div>
+      <p class="copy-message" id="copyCarouselMessage"></p>
+    </section>
+  </div>
+
+  <script src="/app.js?v=1.6.0" defer></script>
 </body>
 </html>

@@ -1,61 +1,67 @@
 import { buildTopics, clusterItems, titleTokens } from "./clustering.js";
 import { parseFeed, plainText, stableHash } from "./parser.js";
 
+function googleNewsSource(source, region = "Brasil") {
+  const locale = region === "Brasil"
+    ? { hl: "pt-BR", gl: "BR", ceid: "BR:pt-419" }
+    : { hl: "en-US", gl: "US", ceid: "US:en" };
+  const query = encodeURIComponent(`when:1d source:${source.replace(/\s+/g, "_")}`);
+  return `https://news.google.com/rss/search?q=${query}&hl=${locale.hl}&gl=${locale.gl}&ceid=${encodeURIComponent(locale.ceid)}`;
+}
+
+function feed(id, name, region, primaryUrl, googleSource = name) {
+  return Object.freeze({
+    id,
+    name,
+    region,
+    canonicalSource: true,
+    limit: 15,
+    urls: Object.freeze([primaryUrl, googleNewsSource(googleSource, region)].filter(Boolean)),
+  });
+}
+
 export const FEEDS = Object.freeze([
-  {
-    id: "g1",
-    name: "G1",
-    urls: [
-      "https://g1.globo.com/rss/g1/",
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3AG1&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "folha",
-    name: "Folha de S.Paulo",
-    urls: [
-      "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml",
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3AFolha_de_S.Paulo&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "uol",
-    name: "UOL",
-    urls: [
-      "https://rss.uol.com.br/feed/noticias.xml",
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3AUOL&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "estadao",
-    name: "Estadão",
-    urls: [
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3AEstad%C3%A3o&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-      "https://news.google.com/rss/search?q=when%3A1d%20Estad%C3%A3o&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "agencia-brasil",
-    name: "Agência Brasil",
-    urls: [
-      "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml",
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3AAg%C3%AAncia_Brasil&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "bbc-brasil",
-    name: "BBC News Brasil",
-    urls: [
-      "https://feeds.bbci.co.uk/portuguese/rss.xml",
-      "https://news.google.com/rss/search?q=when%3A1d%20source%3ABBC_News_Brasil&hl=pt-BR&gl=BR&ceid=BR%3Apt-419",
-    ],
-  },
-  {
-    id: "outros-portais",
-    name: "Outros portais",
-    urls: ["https://news.google.com/rss/search?q=when%3A1d&hl=pt-BR&gl=BR&ceid=BR%3Apt-419"],
-  },
+  // Brasil — 16 portais
+  feed("g1", "G1", "Brasil", "https://g1.globo.com/rss/g1/"),
+  feed("cnn-brasil", "CNN Brasil", "Brasil", "https://www.cnnbrasil.com.br/feed/", "CNN Brasil"),
+  feed("folha", "Folha de S.Paulo", "Brasil", "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", "Folha de S.Paulo"),
+  feed("estadao", "Estadão", "Brasil", null, "Estadão"),
+  feed("o-globo", "O Globo", "Brasil", "https://oglobo.globo.com/rss.xml", "O Globo"),
+  feed("veja", "Veja", "Brasil", "https://veja.abril.com.br/feed/"),
+  feed("poder360", "Poder360", "Brasil", "https://www.poder360.com.br/feed/"),
+  feed("agencia-brasil", "Agência Brasil", "Brasil", "https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml", "Agência Brasil"),
+  feed("nexo", "Nexo Jornal", "Brasil", null, "Nexo Jornal"),
+  feed("infomoney", "InfoMoney", "Brasil", "https://www.infomoney.com.br/feed/"),
+  feed("money-times", "Money Times", "Brasil", "https://www.moneytimes.com.br/feed/", "Money Times"),
+  feed("ge", "ge", "Brasil", "https://ge.globo.com/rss/ge/", "ge"),
+  feed("tecmundo", "TecMundo", "Brasil", "https://www.tecmundo.com.br/rss", "TecMundo"),
+  feed("o-liberal", "O Liberal", "Brasil", "https://www.oliberal.com/rss", "O Liberal"),
+  feed("metropoles", "Metrópoles", "Brasil", "https://www.metropoles.com/feed", "Metrópoles"),
+  feed("campo-grande-news", "Campo Grande News", "Brasil", "https://www.campograndenews.com.br/rss", "Campo Grande News"),
+
+  // Mundo — 13 portais
+  feed("bbc", "BBC News", "Mundo", "https://feeds.bbci.co.uk/news/world/rss.xml", "BBC"),
+  feed("guardian", "The Guardian", "Mundo", "https://www.theguardian.com/world/rss", "The Guardian"),
+  feed("cnn", "CNN", "Mundo", "https://rss.cnn.com/rss/edition_world.rss", "CNN"),
+  feed("new-york-times", "The New York Times", "Mundo", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "The New York Times"),
+  feed("washington-post", "The Washington Post", "Mundo", "https://feeds.washingtonpost.com/rss/world", "The Washington Post"),
+  feed("al-jazeera", "Al Jazeera", "Mundo", "https://www.aljazeera.com/xml/rss/all.xml", "Al Jazeera"),
+  feed("france-24", "France 24", "Mundo", "https://www.france24.com/en/rss", "France 24"),
+  feed("deutsche-welle", "Deutsche Welle", "Mundo", "https://rss.dw.com/rdf/rss-en-world", "Deutsche Welle"),
+  feed("el-pais", "El País", "Mundo", "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada", "El País"),
+  feed("euronews", "Euronews", "Mundo", "https://www.euronews.com/rss?format=mrss&level=theme&name=news", "Euronews"),
+  feed("cbc", "CBC News", "Mundo", "https://www.cbc.ca/cmlink/rss-world", "CBC News"),
+  feed("abc-australia", "ABC News Australia", "Mundo", "https://www.abc.net.au/news/feed/51120/rss.xml", "ABC News"),
+  feed("infobae", "Infobae", "Mundo", "https://www.infobae.com/arc/outboundfeeds/rss/?outputType=xml", "Infobae"),
 ]);
+
+export const FEED_COUNTS = Object.freeze({
+  Brasil: FEEDS.filter((item) => item.region === "Brasil").length,
+  Mundo: FEEDS.filter((item) => item.region === "Mundo").length,
+  total: FEEDS.length,
+});
+
+const PORTAL_SUBREQUEST_LIMIT = 44;
 
 function compactError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "Erro desconhecido");
@@ -98,20 +104,25 @@ export async function decodeFeedResponse(response) {
   return new TextDecoder(normalizeCharset(headerCharset || declarationCharset)).decode(bytes);
 }
 
-export async function collectFeed(feed, cutoff, fetcher = fetch) {
+export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null) {
   const errors = [];
   for (let index = 0; index < feed.urls.length; index += 1) {
     const url = feed.urls[index];
     try {
+      if (requestBudget) {
+        if (requestBudget.remaining <= 0) throw new Error("Limite seguro de consultas externas atingido");
+        requestBudget.remaining -= 1;
+      }
       const response = await fetchWithTimeout(url, fetcher);
       const xml = await decodeFeedResponse(response);
-      const items = parseFeed(xml, feed, cutoff, 35);
+      const items = parseFeed(xml, feed, cutoff, Number(feed.limit) || 15);
       if (!items.length) throw new Error("Feed sem conteúdo válido nas últimas 24 horas");
       return {
         items,
         status: {
           id: feed.id,
           name: feed.name,
+          region: feed.region || "Brasil",
           ok: true,
           count: items.length,
           error: null,
@@ -127,6 +138,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch) {
     status: {
       id: feed.id,
       name: feed.name,
+      region: feed.region || "Brasil",
       ok: false,
       count: 0,
       error: [...new Set(errors)].slice(0, 2).join(" | ") || "Fonte indisponível",
@@ -170,6 +182,7 @@ function blueskyItem(post, cutoff) {
     description: "",
     sourceName: plainText(post?.author?.displayName) || `@${handle}`,
     collectorName: "Bluesky",
+    region: "Rede",
     platform: "Bluesky",
     kind: "social",
     publishedAt: new Date(timestamp).toISOString(),
@@ -189,7 +202,7 @@ export async function collectBluesky(initialClusters, cutoff, fetcher = fetch) {
     if (query && !queries.includes(query)) queries.push(query);
   }
   if (!queries.length) {
-    return { items: [], status: { id: "bluesky", name: "Bluesky", ok: true, count: 0, error: null, fallback: false } };
+    return { items: [], status: { id: "bluesky", name: "Bluesky", region: "Rede", ok: true, count: 0, error: null, fallback: false } };
   }
 
   const results = await Promise.allSettled(
@@ -220,6 +233,7 @@ export async function collectBluesky(initialClusters, cutoff, fetcher = fetch) {
     status: {
       id: "bluesky",
       name: "Bluesky",
+      region: "Rede",
       ok: !allFailed,
       count: unique.length,
       error: allFailed ? [...new Set(errors)].slice(0, 2).join(" | ") : null,
@@ -232,8 +246,9 @@ export async function collectRound({ fetcher = fetch, now = new Date(), feeds = 
   const startedAt = Date.now();
   const collectedAt = new Date(now);
   const cutoff = new Date(collectedAt.getTime() - 24 * 60 * 60 * 1000);
-  const portalResults = await Promise.all(feeds.map((feed) => collectFeed(feed, cutoff, fetcher)));
-  const portalItems = uniqueItems(portalResults.flatMap((result) => result.items), 180);
+  const requestBudget = { remaining: PORTAL_SUBREQUEST_LIMIT };
+  const portalResults = await Promise.all(feeds.map((feed) => collectFeed(feed, cutoff, fetcher, requestBudget)));
+  const portalItems = uniqueItems(portalResults.flatMap((result) => result.items), 435);
   const portalStatuses = portalResults.map((result) => result.status);
 
   if (!portalItems.length) {

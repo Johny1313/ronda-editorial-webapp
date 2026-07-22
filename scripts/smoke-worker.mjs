@@ -56,9 +56,11 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=1.4.0") && html.includes("/styles.css?v=1.4.0"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=1.6.0") && html.includes("/styles.css?v=1.6.0"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
+  assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
+  assert(html.includes('id="regionFilter"'), "Filtro Brasil/Mundo não foi incorporado ao Worker.");
   assert(html.includes('id="historyDetail"') && html.includes('id="historyBack"'), "Detalhes clicáveis do histórico não foram incorporados ao Worker.");
   assert(home.headers.get("content-security-policy"), "CSP ausente no dashboard.");
   assert(home.headers.get("cache-control")?.includes("no-store"), "Dashboard ainda permite cache incompatível entre versões.");
@@ -84,7 +86,12 @@ try {
   assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
   assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
   assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
+  assert(roundData.sources.length === 30, "O catálogo não contém os 29 portais e o complemento Bluesky.");
+  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 16, "Catálogo Brasil incompleto.");
+  assert(roundData.sources.filter((source) => source.region === "Mundo").length === 13, "Catálogo Mundo incompleto.");
   assert(roundData.topics.every((topic) => topic.editoria), "Os assuntos não receberam editorias.");
+  assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 5), "Os roteiros de carrossel não foram gerados.");
+  assert(roundData.topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel), "Tom de voz ou modelo de post ausente.");
 
   const historicalData = await getJson(`/api/runs/${round.body.runId}/data`);
   assert(historicalData.body.data?.items?.length === roundData.items.length, "Notícias da ronda histórica não foram recuperadas.");
@@ -94,10 +101,10 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.4.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.6.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
 
   process.stdout.write(
-    `Smoke test aprovado: dashboard, D1, editorias, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
+    `Smoke test aprovado: dashboard, D1, editorias, carrosséis, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
   );
 } finally {
   await mf.dispose();

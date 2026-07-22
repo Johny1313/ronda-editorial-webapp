@@ -1,4 +1,4 @@
-import { buildTopics, classifyEditoria } from "./clustering.js";
+import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { collectRound } from "./collector.js";
 import {
   acquireLock,
@@ -16,7 +16,7 @@ import {
 import { parseFeed } from "./parser.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "1.4.0";
+const VERSION = "1.6.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -67,9 +67,14 @@ function withEditorias(payload) {
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.topics)) return payload;
   return {
     ...payload,
-    topics: payload.topics.map((topic) => topic?.editoria
-      ? topic
-      : { ...topic, editoria: classifyEditoria(topic?.items || []) }),
+    topics: payload.topics.map((topic) => {
+      const enriched = topic?.editoria
+        ? topic
+        : { ...topic, editoria: classifyEditoria(topic?.items || []) };
+      return enriched?.carousel?.slides?.length
+        ? enriched
+        : { ...enriched, carousel: buildCarouselBrief(enriched) };
+    }),
   };
 }
 

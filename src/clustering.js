@@ -72,6 +72,67 @@ export function classifyEditoria(items = []) {
   return selected;
 }
 
+function shorten(value, limit = 260) {
+  const text = plainText(value);
+  if (text.length <= limit) return text;
+  const clipped = text.slice(0, limit + 1);
+  const boundary = clipped.lastIndexOf(" ");
+  return `${clipped.slice(0, boundary > limit * 0.65 ? boundary : limit).trim()}…`;
+}
+
+function carouselTone(editoria, priority) {
+  if (priority === "Pautar agora") return "Urgente, direto e factual";
+  if (["Política", "Economia", "Mundo"].includes(editoria)) return "Informativo e analítico";
+  if (["Saúde", "Tecnologia"].includes(editoria)) return "Explicativo e cauteloso";
+  if (["Esportes", "Entretenimento"].includes(editoria)) return "Dinâmico e acessível";
+  return "Informativo e objetivo";
+}
+
+function carouselModel(topic, normalizedText) {
+  if (topic.priority === "Pautar agora") return "Plantão em 5 cards";
+  if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Post de serviço";
+  if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Explicativo em 5 cards";
+  if (["Esportes", "Entretenimento"].includes(topic.editoria)) return "Destaques em 5 cards";
+  return "Resumo factual em 5 cards";
+}
+
+export function buildCarouselBrief(topic = {}) {
+  const items = Array.isArray(topic.items) ? topic.items : [];
+  const editoria = topic.editoria || classifyEditoria(items);
+  const title = shorten(topic.title || items[0]?.title || "Assunto em acompanhamento", 120);
+  const descriptions = [...new Set(items.map((item) => shorten(item?.description, 260)).filter((text) => text.length >= 25))];
+  const relatedTitles = [...new Set(items.map((item) => shorten(item?.title, 120)).filter(Boolean))].slice(0, 3);
+  const sources = [...new Set((topic.sourceNames || items.map((item) => item?.sourceName)).filter(Boolean))];
+  const normalizedText = normalizeText(`${title} ${descriptions.join(" ")}`);
+  const itemCount = Number(topic.itemCount) || items.length;
+  const sourceCount = Number(topic.sourceCount) || sources.length;
+  const displayedSourceCount = sourceCount || 1;
+  const context = descriptions[0] || "A fonte não forneceu uma descrição completa. Use o título como ponto de partida e confirme os detalhes no link original.";
+  const knownFacts = relatedTitles.length
+    ? relatedTitles.map((item) => `• ${item}`).join("\n")
+    : "• Consulte as fontes originais antes de fechar o texto.";
+  const significance = sourceCount > 1
+    ? `O assunto apareceu em ${sourceCount} fontes e reúne ${itemCount} conteúdos nesta ronda. A recorrência indica que merece acompanhamento editorial.`
+    : `O assunto foi localizado em ${itemCount || 1} conteúdo nesta ronda. Busque uma segunda fonte independente antes de ampliar a pauta.`;
+  const sourceLine = sources.length ? `Fontes monitoradas: ${sources.slice(0, 6).join(", ")}.` : "Fonte não informada pelo feed.";
+  const callToAction = topic.priority === "Pautar agora"
+    ? "Acompanhe as atualizações e confirme as informações nas fontes originais."
+    : "Salve este carrossel e acompanhe os próximos desdobramentos.";
+
+  return {
+    voiceTone: carouselTone(editoria, topic.priority),
+    postModel: carouselModel({ ...topic, editoria }, normalizedText),
+    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Revise e confirme antes de publicar.",
+    slides: [
+      { number: 1, role: "Capa", title, body: `${editoria} · ${displayedSourceCount} ${displayedSourceCount === 1 ? "fonte monitorada" : "fontes monitoradas"}` },
+      { number: 2, role: "Contexto", title: "O que aconteceu", body: context },
+      { number: 3, role: "Pontos principais", title: "O que já sabemos", body: knownFacts },
+      { number: 4, role: "Relevância", title: "Por que acompanhar", body: significance },
+      { number: 5, role: "Fontes e CTA", title: "Continue acompanhando", body: `${sourceLine}\n${callToAction}` },
+    ],
+  };
+}
+
 export function clusterItems(items, threshold = 0.36) {
   const clusters = [];
   const ordered = [...items].sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
@@ -132,7 +193,7 @@ export function clusterToTopic(cluster, now = new Date()) {
       ? "Checar se a repercussão social cresce antes de priorizar a pauta."
       : "Acompanhar novas publicações e buscar uma segunda fonte independente.";
 
-  return {
+  const topic = {
     id: `topic-${stableHash(cluster.tokens.slice(0, 6).join("-"))}`,
     title: representative?.title ?? "Assunto sem título",
     editoria: classifyEditoria(items),
@@ -152,6 +213,7 @@ export function clusterToTopic(cluster, now = new Date()) {
     recommendation,
     items,
   };
+  return { ...topic, carousel: buildCarouselBrief(topic) };
 }
 
 export function buildTopics(items, now = new Date(), limit = 40) {
