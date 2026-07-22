@@ -1,0 +1,43 @@
+RONDA EDITORIAL 24H — PUBLICAÇÃO NO CLOUDFLARE
+================================================
+
+Você não precisa instalar Node.js nem manter o computador ligado.
+
+1. Entre em https://dash.cloudflare.com/ e abra Workers & Pages.
+2. Crie um Worker com o nome ronda-editorial-webapp.
+3. No editor do Worker, apague o exemplo existente.
+4. Abra o arquivo dist/cloudflare-worker-unico.js deste pacote, copie todo o
+   conteúdo, cole no editor e publique.
+5. No Cloudflare, abra Storage & Databases > D1 SQL Database e crie o banco
+   ronda-editorial-db.
+6. Volte ao Worker, abra Settings > Bindings e adicione um D1 binding:
+      Variable name: DB
+      D1 database: ronda-editorial-db
+7. Em Settings > Triggers > Cron Triggers, adicione:
+      */5 * * * *
+8. Recomendado: em Settings > Variables and Secrets, crie um Secret:
+      Nome: MANUAL_ROUND_TOKEN
+      Valor: escolha uma chave longa e privada
+9. Abra o endereço público do Worker. Se criou a chave, entre em Ajustes no
+   painel e informe a mesma chave.
+10. Confira os diagnósticos:
+      https://SEU-WORKER.workers.dev/api/self-test
+      https://SEU-WORKER.workers.dev/api/health
+
+O primeiro endereço deve mostrar "ok":true e "readWriteDelete":true.
+O segundo deve mostrar "ready":true e "database":"connected".
+
+Depois clique em Executar ronda. A execução também ocorrerá automaticamente
+a cada cinco minutos, inclusive com o navegador e o computador desligados.
+
+IMPORTANTE
+----------
+
+- Os portais são a base da ronda. O Bluesky é apenas um complemento social.
+- Uma fonte isolada pode falhar sem derrubar a ronda; o painel mostra o estado
+  de cada uma e o Worker usa rotas alternativas.
+- Fontes externas podem mudar ou bloquear seus feeds no futuro. O autoteste
+  confirma a aplicação e o banco; o painel de fontes identifica mudanças
+  externas que precisem de manutenção.
+
+Mais detalhes técnicos estão no README.md.
