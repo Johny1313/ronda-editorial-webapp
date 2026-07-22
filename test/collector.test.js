@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectRound } from "../src/collector.js";
+import { collectFeed, collectRound } from "../src/collector.js";
 
 const now = new Date("2026-07-22T12:00:00Z");
 const fallbackXml = `<rss><channel>
@@ -40,4 +40,21 @@ test("falha de todas as fontes retorna diagnóstico estruturado", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.sources[0].ok, false);
   assert.match(result.error, /Nenhuma fonte/);
+});
+
+test("decodifica RSS Windows-1252 sem corromper acentos", async () => {
+  const xml = `<?xml version="1.0" encoding="ISO-8859-1"?><rss><channel>
+    <item><title>Assédio e polêmica no Japão</title><link>https://portal.test/acentos</link><pubDate>Wed, 22 Jul 2026 11:50:00 GMT</pubDate></item>
+  </channel></rss>`;
+  const bytes = Uint8Array.from([...xml].map((character) => {
+    const replacements = { "é": 0xe9, "ê": 0xea, "ã": 0xe3 };
+    return replacements[character] ?? character.charCodeAt(0);
+  }));
+  const feed = { id: "acentos", name: "Portal Acentos", urls: ["https://portal.test/rss"] };
+  const result = await collectFeed(feed, new Date("2026-07-21T12:00:00Z"), async () => new Response(bytes, {
+    status: 200,
+    headers: { "Content-Type": "application/rss+xml; charset=ISO-8859-1" },
+  }));
+  assert.equal(result.status.ok, true);
+  assert.equal(result.items[0].title, "Assédio e polêmica no Japão");
 });

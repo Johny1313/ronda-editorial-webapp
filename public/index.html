@@ -33,6 +33,15 @@
       <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> O painel pode ser fechado; as rondas ficam armazenadas por 48 horas.</div>
       <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
 
+      <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
+        <div class="sources-heading">
+          <div><p class="eyebrow">Portais monitorados</p><h2 id="sourcesTitle">Fontes da ronda</h2><p>Clique em um portal para ver somente as notícias recolhidas dele.</p></div>
+          <button class="secondary" id="showAllSources" type="button">Ver todas as notícias</button>
+        </div>
+        <div class="source-portal-grid" id="sourcePortalGrid"></div>
+      </section>
+
+      <div class="round-view" id="roundView">
       <section class="summary" aria-label="Resumo da ronda">
         <div><strong id="summaryContents">0</strong><span>novos conteúdos</span><small>período selecionado</small></div>
         <div><strong id="summaryTopics">0</strong><span>assuntos ativos</span><small>janela atual</small></div>
@@ -50,8 +59,11 @@
         </div>
       </section>
 
+      <div class="portal-filter" id="portalFilter" hidden><span>Exibindo somente:</span><strong id="portalFilterName"></strong><button id="clearPortalFilter" type="button">Remover filtro ×</button></div>
+
       <div class="heading"><div><h2>Assuntos em destaque</h2><p>Ordenados por relevância editorial, recorrência e atualidade</p></div><span class="last-update" id="lastUpdate">Sem coleta</span></div>
       <section class="grid" id="topicsGrid" aria-live="polite"></section>
+      </div>
     </section>
   </main>
 

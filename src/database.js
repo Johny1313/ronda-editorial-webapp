@@ -57,6 +57,21 @@ export async function releaseLock(db, lock) {
   await db.prepare("DELETE FROM locks WHERE name = ? AND token = ?").bind(lock.name, lock.token).run();
 }
 
+export async function startRun(db, { id, triggerType, startedAt }) {
+  await ensureSchema(db);
+  await db
+    .prepare(`
+      INSERT INTO runs (
+        id, trigger_type, status, started_at, completed_at,
+        items_count, topics_count, sources_count, social_items_count,
+        error, payload_json
+      ) VALUES (?, ?, 'running', ?, ?, 0, 0, 0, 0, NULL, NULL)
+    `)
+    .bind(id, triggerType, startedAt, startedAt)
+    .run();
+  return { id, status: "running", startedAt };
+}
+
 export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   await ensureSchema(db);
   const completedAt = payload.collectedAt || new Date().toISOString();
@@ -82,6 +97,17 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
           items_count, topics_count, sources_count, social_items_count,
           error, payload_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          trigger_type = excluded.trigger_type,
+          status = excluded.status,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          items_count = excluded.items_count,
+          topics_count = excluded.topics_count,
+          sources_count = excluded.sources_count,
+          social_items_count = excluded.social_items_count,
+          error = excluded.error,
+          payload_json = excluded.payload_json
       `)
       .bind(
         id,
@@ -134,6 +160,19 @@ export async function getRunHistory(db, limit = 30) {
     .bind(safeLimit)
     .all();
   return result?.results ?? [];
+}
+
+export async function getRunStatus(db, id) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare(`
+      SELECT id, trigger_type, status, started_at, completed_at,
+             items_count, topics_count, sources_count, social_items_count, error
+      FROM runs WHERE id = ? LIMIT 1
+    `)
+    .bind(id)
+    .first();
+  return row ?? null;
 }
 
 export async function databaseHealth(db) {

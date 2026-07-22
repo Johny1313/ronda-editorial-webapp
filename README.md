@@ -10,11 +10,14 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 - Ronda automática mesmo com o navegador fechado.
 - Ronda manual pelo painel.
+- Ronda manual iniciada em segundo plano, com acompanhamento de progresso no painel.
 - G1, Folha de S.Paulo, UOL, Estadão, Agência Brasil, BBC News Brasil e ronda geral.
 - Rota alternativa para cada portal quando o feed principal falha.
 - Bluesky como complemento social; uma falha do Bluesky não interrompe os portais.
 - Agrupamento de títulos semelhantes em assuntos.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
+- Tela Fontes com o estado de cada portal e filtro clicável por veículo.
+- Leitura correta de RSS em UTF-8, ISO-8859-1 e Windows-1252.
 - Histórico de rondas automáticas e manuais.
 - Banco D1 criado automaticamente na primeira requisição.
 - Trava contra rondas simultâneas e limite de uma execução manual por minuto.
@@ -103,6 +106,7 @@ Rotas principais:
 | `/api/self-test` | GET | Parser, agrupamento, card e leitura/escrita D1 |
 | `/api/latest` | GET | Última ronda válida |
 | `/api/history` | GET | Histórico das últimas 48 horas |
+| `/api/runs/:id` | GET | Acompanha uma ronda manual em andamento |
 | `/api/round` | POST | Executa uma ronda manual |
 
 ## Arquivos

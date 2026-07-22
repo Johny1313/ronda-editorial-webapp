@@ -7,13 +7,15 @@ import {
   ensureSchema,
   getLatestRound,
   getRunHistory,
+  getRunStatus,
   releaseLock,
   saveRun,
+  startRun,
 } from "./database.js";
 import { parseFeed } from "./parser.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -59,15 +61,16 @@ function requireDatabase(env) {
   return env.DB;
 }
 
-async function performRound(env, triggerType) {
+async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
-  const lock = await acquireLock(db, "editorial-round", 3 * 60 * 1000);
+  const lock = options.lock || await acquireLock(db, "editorial-round", 3 * 60 * 1000);
   if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
 
-  const runId = crypto.randomUUID();
-  const startedAt = new Date().toISOString();
+  const runId = options.runId || crypto.randomUUID();
+  const startedAt = options.startedAt || new Date().toISOString();
   try {
+    if (!options.runStarted) await startRun(db, { id: runId, triggerType, startedAt });
     let payload;
     try {
       payload = await collectRound();
@@ -111,7 +114,7 @@ async function selfTest() {
   };
 }
 
-async function handleApi(request, env, url) {
+async function handleApi(request, env, url, ctx) {
   if (url.pathname === "/api/self-test" && request.method === "GET") {
     const logic = await selfTest();
     const db = requireDatabase(env);
@@ -154,6 +157,14 @@ async function handleApi(request, env, url) {
     return json({ ok: true, runs });
   }
 
+  if (url.pathname.startsWith("/api/runs/") && request.method === "GET") {
+    const runId = decodeURIComponent(url.pathname.slice("/api/runs/".length));
+    if (!/^[a-z0-9-]{8,80}$/i.test(runId)) throw new HttpError(400, "Identificador de ronda inválido.");
+    const run = await getRunStatus(requireDatabase(env), runId);
+    if (!run) throw new HttpError(404, "Ronda ainda não encontrada.");
+    return json({ ok: true, run });
+  }
+
   if (url.pathname === "/api/round" && request.method === "POST") {
     if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
       throw new HttpError(401, "Chave de operação inválida.");
@@ -161,17 +172,31 @@ async function handleApi(request, env, url) {
     const db = requireDatabase(env);
     const throttle = await acquireLock(db, "manual-throttle", 60 * 1000);
     if (!throttle) throw new HttpError(429, "Aguarde um minuto antes de executar outra ronda manual.");
-    const data = await performRound(env, "manual");
-    return json({ ok: true, data });
+    const lock = await acquireLock(db, "editorial-round", 3 * 60 * 1000);
+    if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
+    const runId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    try {
+      await startRun(db, { id: runId, triggerType: "manual", startedAt });
+    } catch (error) {
+      await releaseLock(db, lock);
+      throw error;
+    }
+    const task = performRound(env, "manual", { lock, runId, startedAt, runStarted: true }).catch((error) => {
+      console.error("Ronda manual falhou", error);
+    });
+    if (ctx?.waitUntil) ctx.waitUntil(task);
+    else await task;
+    return json({ ok: true, queued: true, runId, status: "running" }, 202);
   }
 
   throw new HttpError(404, "Rota não encontrada.");
 }
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: SECURITY_HEADERS });
-  if (url.pathname.startsWith("/api/")) return handleApi(request, env, url);
+  if (url.pathname.startsWith("/api/")) return handleApi(request, env, url, ctx);
   if (request.method !== "GET" && request.method !== "HEAD") throw new HttpError(405, "Método não permitido.");
   if (url.pathname === "/robots.txt") return new Response("User-agent: *\nDisallow: /api/\n", { headers: { ...SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8" } });
   const asset = UI_ASSETS[url.pathname];
@@ -182,9 +207,9 @@ async function handleRequest(request, env) {
 export { handleRequest, performRound, selfTest };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handleRequest(request, env);
+      return await handleRequest(request, env, ctx);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
       const message = error instanceof HttpError ? error.message : "Erro interno do serviço.";

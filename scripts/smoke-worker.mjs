@@ -56,28 +56,38 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
+  assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
   assert(home.headers.get("content-security-policy"), "CSP ausente no dashboard.");
 
   const selfTest = await getJson("/api/self-test");
   assert(selfTest.body.ok && selfTest.body.database?.readWriteDelete, "Autoteste lógico/D1 falhou.");
 
   const round = await getJson("/api/round", { method: "POST" });
-  assert(round.body.data?.ok, "Ronda simulada não concluiu.");
-  assert(round.body.data.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
-  assert(round.body.data.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
-  assert(round.body.data.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
+  assert(round.response.status === 202 && round.body.runId, "Ronda simulada não foi iniciada em segundo plano.");
+  let runStatus;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const status = await getJson(`/api/runs/${round.body.runId}`);
+    runStatus = status.body.run;
+    if (runStatus?.status !== "running") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert(runStatus?.status === "success", "Ronda simulada não concluiu.");
 
   const latest = await getJson("/api/latest");
-  assert(latest.body.data?.runId === round.body.data.runId, "Última ronda não foi recuperada do D1.");
+  const roundData = latest.body.data;
+  assert(roundData?.runId === round.body.runId, "Última ronda não foi recuperada do D1.");
+  assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
+  assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
+  assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
 
   const history = await getJson("/api/history?limit=10");
-  assert(history.body.runs.some((run) => run.id === round.body.data.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
+  assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
   assert(health.body.ready && health.body.schedulerHealthy, "Saúde do serviço não reconheceu a ronda.");
 
   process.stdout.write(
-    `Smoke test aprovado: dashboard, D1, ${round.body.data.totals.items} conteúdos, ${round.body.data.totals.topics} assuntos e Bluesky.\n`,
+    `Smoke test aprovado: dashboard, D1, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
   );
 } finally {
   await mf.dispose();

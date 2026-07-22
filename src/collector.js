@@ -62,7 +62,7 @@ function compactError(error) {
   return message.replace(/\s+/g, " ").trim().slice(0, 150);
 }
 
-async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 12_000 } = {}) {
+async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 8_000 } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort("Tempo limite excedido"), timeoutMs);
   try {
@@ -81,13 +81,30 @@ async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 12_000 } = {
   }
 }
 
+function normalizeCharset(value) {
+  const charset = String(value || "").trim().replace(/["']/g, "").toLowerCase();
+  if (["iso-8859-1", "latin1", "latin-1", "windows-1252", "cp1252"].includes(charset)) return "windows-1252";
+  if (["utf8", "utf-8"].includes(charset)) return "utf-8";
+  if (["utf-16", "utf-16le", "utf-16be"].includes(charset)) return charset;
+  return "utf-8";
+}
+
+export async function decodeFeedResponse(response) {
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const contentType = response.headers.get("Content-Type") || "";
+  const headerCharset = /charset\s*=\s*([^;\s]+)/i.exec(contentType)?.[1];
+  const declarationSample = new TextDecoder("windows-1252").decode(bytes.slice(0, 300));
+  const declarationCharset = /<\?xml[^>]+encoding\s*=\s*["']([^"']+)["']/i.exec(declarationSample)?.[1];
+  return new TextDecoder(normalizeCharset(headerCharset || declarationCharset)).decode(bytes);
+}
+
 export async function collectFeed(feed, cutoff, fetcher = fetch) {
   const errors = [];
   for (let index = 0; index < feed.urls.length; index += 1) {
     const url = feed.urls[index];
     try {
       const response = await fetchWithTimeout(url, fetcher);
-      const xml = await response.text();
+      const xml = await decodeFeedResponse(response);
       const items = parseFeed(xml, feed, cutoff, 35);
       if (!items.length) throw new Error("Feed sem conteúdo válido nas últimas 24 horas");
       return {
@@ -178,7 +195,7 @@ export async function collectBluesky(initialClusters, cutoff, fetcher = fetch) {
   const results = await Promise.allSettled(
     queries.map(async (query) => {
       const endpoint = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=8&sort=latest`;
-      const response = await fetchWithTimeout(endpoint, fetcher, { accept: "application/json", timeoutMs: 12_000 });
+      const response = await fetchWithTimeout(endpoint, fetcher, { accept: "application/json", timeoutMs: 6_500 });
       const payload = await response.json();
       return Array.isArray(payload?.posts) ? payload.posts : [];
     }),
