@@ -113,6 +113,63 @@ function buildVerificationLinks(items = []) {
   return links;
 }
 
+const IMAGE_CONTEXT_BY_EDITORIA = Object.freeze({
+  "Política": "instituições públicas plenário cidade",
+  "Esportes": "competição estádio torcida",
+  "Entretenimento": "cultura palco audiovisual",
+  "Economia": "economia mercado trabalho",
+  "Mundo": "mapa cidade relações internacionais",
+  "Tecnologia": "tecnologia inovação laboratório",
+  "Saúde": "saúde medicina pesquisa",
+  "Notícias": "cidade cotidiano reportagem",
+});
+
+function imageQuery(value, fallback = "notícias atualidade") {
+  const tokens = titleTokens(value).slice(0, 6);
+  return tokens.length ? tokens.join(" ") : fallback;
+}
+
+function openversePublicDomainUrl(query) {
+  return `https://openverse.org/search/image?q=${encodeURIComponent(query)}&license=cc0%2Cpdm`;
+}
+
+function wikimediaPublicDomainUrl(query) {
+  const publicDomainQuery = `${query} incategory:"Public domain"`;
+  return `https://commons.wikimedia.org/wiki/Special:MediaSearch?type=image&search=${encodeURIComponent(publicDomainQuery)}`;
+}
+
+export function buildImageSuggestions({ title = "", relatedTitles = [], editoria = "Notícias" } = {}) {
+  const mainQuery = imageQuery(title, IMAGE_CONTEXT_BY_EDITORIA[editoria] || IMAGE_CONTEXT_BY_EDITORIA.Notícias);
+  const contextTerms = IMAGE_CONTEXT_BY_EDITORIA[editoria] || IMAGE_CONTEXT_BY_EDITORIA.Notícias;
+  const relatedQuery = imageQuery(relatedTitles[1] || relatedTitles[0] || title, mainQuery);
+  const queries = [
+    {
+      label: "Imagem principal",
+      description: `Foto documental do principal personagem, local ou objeto citado em “${shorten(title || "assunto principal", 90)}”.`,
+      query: mainQuery,
+    },
+    {
+      label: "Imagem de contexto",
+      description: `Cena ampla que contextualize o assunto sem afirmar visualmente fatos ainda não confirmados.`,
+      query: `${mainQuery} ${contextTerms}`,
+    },
+    {
+      label: "Imagem alternativa",
+      description: `Apoio visual relacionado aos desdobramentos citados nas matérias, útil para cards internos do carrossel.`,
+      query: `${relatedQuery} ${editoria.toLowerCase()}`,
+    },
+  ];
+
+  return queries.map((suggestion) => ({
+    ...suggestion,
+    license: "Usar somente arquivos marcados como CC0 ou domínio público e confirmar a licença na página da imagem.",
+    sources: [
+      { name: "Openverse — CC0/domínio público", url: openversePublicDomainUrl(suggestion.query) },
+      { name: "Wikimedia Commons — domínio público", url: wikimediaPublicDomainUrl(suggestion.query) },
+    ],
+  }));
+}
+
 export function buildCarouselBrief(topic = {}) {
   const items = Array.isArray(topic.items) ? topic.items : [];
   const editoria = topic.editoria || classifyEditoria(items);
@@ -141,8 +198,9 @@ export function buildCarouselBrief(topic = {}) {
     language: "pt-BR",
     voiceTone: carouselTone(editoria, topic.priority),
     postModel: carouselModel({ ...topic, editoria }, normalizedText),
-    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Abra os links de apuração, revise e confirme antes de publicar.",
+    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Abra os links de apuração, revise e confirme antes de publicar. Nas imagens, use apenas arquivos CC0 ou em domínio público e confira a licença na página original.",
     verificationLinks,
+    imageSuggestions: buildImageSuggestions({ title, relatedTitles, editoria }),
     slides: [
       { number: 1, role: "Capa", title, body: `${editoria} · ${displayedSourceCount} ${displayedSourceCount === 1 ? "fonte monitorada" : "fontes monitoradas"}` },
       { number: 2, role: "Contexto", title: "O que aconteceu", body: context },

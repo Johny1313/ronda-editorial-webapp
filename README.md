@@ -2,6 +2,8 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
+**Versão 1.9.1:** botão “Ver roteiro do carrossel” ampliado para 44 px de altura, com fonte maior e adaptação responsiva para telas menores.
+
 ## Versão GitHub recomendada
 
 Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consulte primeiro `PUBLICAR-COM-GITHUB.txt`. O banco D1 usa provisionamento automático no primeiro deploy e o Cron Trigger já está definido no `wrangler.jsonc`.
@@ -23,12 +25,13 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
-- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post, fontes e botão para copiar.
+- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post, sugestões de imagens e botão para copiar.
 - Carrosséis gerados exclusivamente a partir do conteúdo em português e identificados como `pt-BR`.
 - O roteiro usa somente títulos, descrições e indicadores da ronda e exibe aviso obrigatório de revisão editorial.
 - Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
 - Cards, conteúdos relacionados e histórico exibem um botão individual **Abrir para apuração**.
-- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal e URL de cada apuração.
+- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal, URL de cada apuração e sugestões visuais com buscas em acervos CC0/domínio público.
+- As sugestões de imagens são geradas a partir dos títulos das matérias e incluem links filtrados para Openverse e Wikimedia Commons; a licença deve ser confirmada na página do arquivo.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
 - Tela Fontes agrupada em Brasil, Mundo e complemento social, com o estado de cada portal e filtro clicável por veículo.
 - Chips superiores clicáveis: cada portal filtra imediatamente somente o conteúdo recolhido dele; fontes sem coleta ficam desativadas.

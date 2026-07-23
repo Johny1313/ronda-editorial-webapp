@@ -87,9 +87,7 @@ function itemWithinPeriod(item) {
 
 function sourceMarkup(item, primary = false) {
   const platform = item.platform || (item.kind === "portal" ? "Portal" : "Rede");
-  const metrics = [`<span>Views: <strong>${metricValue(item.views)}</strong></span>`];
-  if (item.kind === "social") metrics.push(`<span>Comentários: <strong>${metricValue(item.comments)}</strong></span>`);
-  return `<div class="${primary ? "primary" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><div class="source-metrics">${metrics.join("")}</div><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
+  return `<div class="${primary ? "primary" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
 }
 
 function sourceInitials(name) {
@@ -218,13 +216,11 @@ function render() {
     const primary = items.find((item) => item.kind === "portal") || items[0];
     const additional = items.filter((item) => item.id !== primary.id);
     const sources = [...new Set(items.map((item) => item.sourceName))];
-    const views = items.reduce((sum, item) => sum + (Number(item.views) || 0), 0);
-    const comments = items.reduce((sum, item) => sum + (Number(item.comments) || 0), 0);
     const latest = items[0].publishedAt;
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="metrics"><div class="metric"><span>Visualizações observadas</span><strong>${metricValue(views)}</strong></div><div class="metric"><span>Comentários</span><strong>${metricValue(comments)}</strong></div><div class="metric"><span>Fontes diferentes</span><strong>${sources.length}</strong></div><div class="metric"><span>Conteúdos</span><strong>${items.length}</strong></div></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Tom de voz</span><strong>${escapeHtml(carousel.voiceTone || "Informativo e objetivo")}</strong></div><div><span>Modelo de post</span><strong>${escapeHtml(carousel.postModel || "Resumo factual em 5 cards")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ver roteiro do carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Tom de voz</span><strong>${escapeHtml(carousel.voiceTone || "Informativo e objetivo")}</strong></div><div><span>Modelo de post</span><strong>${escapeHtml(carousel.postModel || "Resumo factual em 5 cards")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ver roteiro do carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -429,10 +425,55 @@ function topicVerificationLinks(topic) {
   return links;
 }
 
+function imageSearchQuery(value, fallback = "notícias atualidade") {
+  const normalized = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const stopwords = new Set(["a", "ao", "aos", "as", "com", "como", "da", "das", "de", "do", "dos", "e", "em", "na", "nas", "no", "nos", "o", "os", "ou", "para", "por", "que", "se", "um", "uma", "foi", "novo", "nova", "noticia", "noticias", "hoje"]);
+  const tokens = normalized.split(/\s+/).filter((token) => token.length >= 3 && !stopwords.has(token)).slice(0, 6);
+  return tokens.length ? tokens.join(" ") : fallback;
+}
+
+function topicImageSuggestions(topic) {
+  const stored = Array.isArray(topic?.carousel?.imageSuggestions) ? topic.carousel.imageSuggestions : [];
+  if (stored.length) return stored;
+  const editoria = topic?.editoria || "Notícias";
+  const contextByEditoria = {
+    "Política": "instituições públicas plenário cidade",
+    "Esportes": "competição estádio torcida",
+    "Entretenimento": "cultura palco audiovisual",
+    "Economia": "economia mercado trabalho",
+    "Mundo": "mapa cidade relações internacionais",
+    "Tecnologia": "tecnologia inovação laboratório",
+    "Saúde": "saúde medicina pesquisa",
+    "Notícias": "cidade cotidiano reportagem",
+  };
+  const mainQuery = imageSearchQuery(topic?.title, contextByEditoria[editoria] || contextByEditoria.Notícias);
+  const relatedTitle = topic?.items?.[1]?.title || topic?.items?.[0]?.title || topic?.title;
+  const relatedQuery = imageSearchQuery(relatedTitle, mainQuery);
+  const suggestions = [
+    { label: "Imagem principal", description: `Foto documental do principal personagem, local ou objeto citado em “${topic?.title || "assunto principal"}”.`, query: mainQuery },
+    { label: "Imagem de contexto", description: "Cena ampla que contextualize o assunto sem afirmar visualmente fatos ainda não confirmados.", query: `${mainQuery} ${contextByEditoria[editoria] || contextByEditoria.Notícias}` },
+    { label: "Imagem alternativa", description: "Apoio visual relacionado aos desdobramentos citados nas matérias, útil para cards internos do carrossel.", query: `${relatedQuery} ${editoria.toLowerCase()}` },
+  ];
+  return suggestions.map((suggestion) => ({
+    ...suggestion,
+    license: "Usar somente arquivos marcados como CC0 ou domínio público e confirmar a licença na página da imagem.",
+    sources: [
+      { name: "Openverse — CC0/domínio público", url: `https://openverse.org/search/image?q=${encodeURIComponent(suggestion.query)}&license=cc0%2Cpdm` },
+      { name: "Wikimedia Commons — domínio público", url: `https://commons.wikimedia.org/wiki/Special:MediaSearch?type=image&search=${encodeURIComponent(`${suggestion.query} incategory:"Public domain"`)}` },
+    ],
+  }));
+}
+
 function carouselAsText(topic) {
   const carousel = topic.carousel || {};
   const slides = Array.isArray(carousel.slides) ? carousel.slides : [];
   const verificationLinks = topicVerificationLinks(topic);
+  const imageSuggestions = topicImageSuggestions(topic);
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
     `Tom de voz: ${carousel.voiceTone || "Informativo e objetivo"}`,
@@ -442,6 +483,15 @@ function carouselAsText(topic) {
       `CARD ${slide.number} — ${String(slide.role || "").toUpperCase()}`,
       slide.title || "",
       slide.body || "",
+      "",
+    ]),
+    "SUGESTÕES DE IMAGENS LIVRES",
+    ...imageSuggestions.flatMap((suggestion, index) => [
+      `${index + 1}. ${suggestion.label}`,
+      suggestion.description || "",
+      `Termos de busca: ${suggestion.query || ""}`,
+      ...(suggestion.sources || []).map((source) => `${source.name}: ${source.url}`),
+      suggestion.license || "Use somente CC0 ou domínio público e confirme a licença.",
       "",
     ]),
     "LINKS PARA APURAÇÃO",
@@ -465,6 +515,8 @@ function showCarousel(topicId) {
   document.getElementById("carouselTitle").textContent = topic.title;
   document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone)}</strong></span><span><small>Modelo de post</small><strong>${escapeHtml(carousel.postModel)}</strong></span>`;
   document.getElementById("carouselSlides").innerHTML = carousel.slides.map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
+  const imageSuggestions = topicImageSuggestions(topic);
+  document.getElementById("carouselImages").innerHTML = `<div class="carousel-images-head"><div><p class="eyebrow">Banco de imagens</p><h3>Sugestões visuais com licença aberta</h3></div><span>Busca baseada nas matérias</span></div><p class="carousel-images-intro">Os links priorizam resultados CC0 ou em domínio público. Confirme a licença e eventuais exigências de crédito na página de cada arquivo antes de publicar.</p><div class="carousel-image-grid">${imageSuggestions.map((suggestion) => `<article class="carousel-image-card"><div><span>${escapeHtml(suggestion.label)}</span><strong>${escapeHtml(suggestion.query)}</strong></div><p>${escapeHtml(suggestion.description)}</p><div class="carousel-image-links">${(suggestion.sources || []).map((source) => `<a href="${escapeHtml(safeUrl(source.url))}" target="_blank" rel="noreferrer">${escapeHtml(source.name)} ↗</a>`).join("")}</div><small>${escapeHtml(suggestion.license || "Use somente CC0 ou domínio público e confirme a licença.")}</small></article>`).join("")}</div>`;
   const verificationLinks = topicVerificationLinks(topic);
   document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Links das notícias usadas</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
   document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
