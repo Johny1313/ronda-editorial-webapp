@@ -33,9 +33,7 @@ test("gera cards editoriais ordenados", () => {
   assert.ok(topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel));
   assert.ok(topics.every((topic) => topic.carousel?.language === "pt-BR"));
   assert.ok(topics.every((topic) => topic.carousel?.verificationLinks?.length >= 1));
-  assert.ok(topics.every((topic) => topic.carousel?.imageSuggestions?.length === 3));
-  assert.ok(topics.every((topic) => topic.carousel.imageSuggestions.every((suggestion) => suggestion.query && suggestion.sources?.length === 2)));
-  assert.ok(topics.every((topic) => topic.carousel.imageSuggestions.every((suggestion) => suggestion.sources.every((source) => /^https?:\/\//i.test(source.url)))));
+  assert.ok(topics.every((topic) => !("imageSuggestions" in topic.carousel)));
   assert.ok(topics.every((topic) => topic.carousel.verificationLinks.every((link) => /^https?:\/\//i.test(link.url))));
   assert.deepEqual(
     new Set(topics[0].carousel.verificationLinks.map((link) => link.url)),

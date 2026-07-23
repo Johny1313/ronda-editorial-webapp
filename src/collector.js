@@ -21,7 +21,7 @@ function feed(id, name, region, primaryUrl, googleSource = name) {
 }
 
 export const FEEDS = Object.freeze([
-  // Brasil — 16 portais
+  // Brasil — 17 portais
   feed("g1", "G1", "Brasil", "https://g1.globo.com/rss/g1/"),
   feed("cnn-brasil", "CNN Brasil", "Brasil", "https://www.cnnbrasil.com.br/feed/", "CNN Brasil"),
   feed("folha", "Folha de S.Paulo", "Brasil", "https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", "Folha de S.Paulo"),
@@ -34,6 +34,7 @@ export const FEEDS = Object.freeze([
   feed("infomoney", "InfoMoney", "Brasil", "https://www.infomoney.com.br/feed/"),
   feed("money-times", "Money Times", "Brasil", "https://www.moneytimes.com.br/feed/", "Money Times"),
   feed("ge", "ge", "Brasil", "https://ge.globo.com/rss/ge/", "ge"),
+  feed("canaltech", "Canaltech", "Brasil", "https://feeds2.feedburner.com/canaltechbr", "Canaltech"),
   feed("tecmundo", "TecMundo", "Brasil", "https://www.tecmundo.com.br/rss", "TecMundo"),
   feed("o-liberal", "O Liberal", "Brasil", "https://www.oliberal.com/rss", "O Liberal"),
   feed("metropoles", "Metrópoles", "Brasil", "https://www.metropoles.com/feed", "Metrópoles"),

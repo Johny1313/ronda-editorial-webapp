@@ -56,11 +56,11 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=1.9.1") && html.includes("/styles.css?v=1.9.1"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=1.9.3") && html.includes("/styles.css?v=1.9.3"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
   assert(html.includes('id="carouselSources"'), "Lista de links para apuração não foi incorporada ao carrossel.");
-  assert(html.includes('id="carouselImages"'), "Sugestões de imagens livres não foram incorporadas ao carrossel.");
+  assert(!html.includes('id="carouselImages"'), "A área de sugestões de imagens ainda está presente no carrossel.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
   assert(html.includes('id="regionFilter"'), "Filtro Brasil/Mundo não foi incorporado ao Worker.");
   assert(html.includes('id="historyDetail"') && html.includes('id="historyBack"'), "Detalhes clicáveis do histórico não foram incorporados ao Worker.");
@@ -88,8 +88,8 @@ try {
   assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
   assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
   assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
-  assert(roundData.sources.length === 30, "O catálogo não contém os 29 portais e o complemento Bluesky.");
-  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 16, "Catálogo Brasil incompleto.");
+  assert(roundData.sources.length === 31, "O catálogo não contém os 30 portais e o complemento Bluesky.");
+  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 17, "Catálogo Brasil incompleto.");
   assert(roundData.sources.filter((source) => source.region === "Mundo").length === 13, "Catálogo Mundo incompleto.");
   assert(roundData.translation?.targetLanguage === "pt-BR" && roundData.translation?.portugueseOnly, "A ronda não garantiu saída em português.");
   assert(roundData.translation?.translatedWorldItems > 0 && roundData.translation?.generatedFields > 0, "A tradução internacional não foi executada.");
@@ -99,8 +99,7 @@ try {
   assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 5), "Os roteiros de carrossel não foram gerados.");
   assert(roundData.topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel), "Tom de voz ou modelo de post ausente.");
   assert(roundData.topics.every((topic) => topic.carousel?.language === "pt-BR"), "Um carrossel não está marcado como português.");
-  assert(roundData.topics.every((topic) => topic.carousel?.imageSuggestions?.length === 3), "Um carrossel não contém as sugestões de imagens livres.");
-  assert(roundData.topics.every((topic) => topic.carousel.imageSuggestions.every((suggestion) => suggestion.sources?.length === 2)), "Uma sugestão visual não contém os acervos de licença aberta.");
+  assert(roundData.topics.every((topic) => !("imageSuggestions" in topic.carousel)), "A API ainda gera sugestões de imagens para o carrossel.");
   assert(roundData.topics.every((topic) => {
     const itemUrls = new Set((topic.items || []).map((item) => item.url).filter((url) => /^https?:\/\//i.test(url)));
     const linkUrls = new Set((topic.carousel?.verificationLinks || []).map((item) => item.url));
@@ -115,7 +114,7 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.9.1", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.9.3", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
   assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
 
   process.stdout.write(

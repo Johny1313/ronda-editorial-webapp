@@ -8,13 +8,15 @@ const fallbackXml = `<rss><channel>
   <item><title>Plano de mobilidade urbana é anunciado pela prefeitura</title><link>https://portal.test/b</link><pubDate>Wed, 22 Jul 2026 11:45:00 GMT</pubDate></item>
 </channel></rss>`;
 
-test("catálogo contém 16 portais do Brasil e 13 do Mundo", () => {
-  assert.equal(FEEDS.length, 29);
-  assert.deepEqual(FEED_COUNTS, { Brasil: 16, Mundo: 13, total: 29 });
-  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 29);
-  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 29);
+test("catálogo contém 17 portais do Brasil e 13 do Mundo", () => {
+  assert.equal(FEEDS.length, 30);
+  assert.deepEqual(FEED_COUNTS, { Brasil: 17, Mundo: 13, total: 30 });
+  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 30);
+  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 30);
   assert.ok(FEEDS.every((feed) => feed.canonicalSource && feed.urls.length >= 1));
   assert.ok(FEEDS.some((feed) => feed.name === "Metrópoles"));
+  assert.ok(FEEDS.some((feed) => feed.name === "Canaltech"));
+  assert.ok(FEEDS.some((feed) => feed.name === "TecMundo"));
   assert.ok(FEEDS.some((feed) => feed.name === "ABC News Australia"));
 });
 

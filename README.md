@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 1.9.1:** botão “Ver roteiro do carrossel” ampliado para 44 px de altura, com fonte maior e adaptação responsiva para telas menores.
+**Versão 1.9.3:** removida a geração e a exibição de sugestões de imagens no roteiro de carrossel. Canaltech e TecMundo permanecem ativos e identificados separadamente nas buscas.
 
 ## Versão GitHub recomendada
 
@@ -14,8 +14,8 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Ronda manual pelo painel.
 - Ronda manual iniciada em segundo plano, com acompanhamento de progresso no painel.
 - Interface e Worker usam a mesma versão sem cache antigo; respostas antigas e novas são tratadas sem quebrar o painel.
-- 29 portais identificados individualmente, divididos em Brasil e Mundo.
-- Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, TecMundo, O Liberal, Metrópoles e Campo Grande News.
+- 30 portais identificados individualmente, divididos em Brasil e Mundo.
+- Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, Canaltech, TecMundo, O Liberal, Metrópoles e Campo Grande News.
 - Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
 - Títulos e descrições das fontes do Mundo traduzidos para português pelo Workers AI antes do agrupamento e do armazenamento no histórico.
 - Cache de traduções no D1: conteúdos repetidos não consomem uma nova tradução a cada ronda.
@@ -25,13 +25,12 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
-- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post, sugestões de imagens e botão para copiar.
+- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post e botão para copiar.
 - Carrosséis gerados exclusivamente a partir do conteúdo em português e identificados como `pt-BR`.
 - O roteiro usa somente títulos, descrições e indicadores da ronda e exibe aviso obrigatório de revisão editorial.
 - Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
 - Cards, conteúdos relacionados e histórico exibem um botão individual **Abrir para apuração**.
-- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal, URL de cada apuração e sugestões visuais com buscas em acervos CC0/domínio público.
-- As sugestões de imagens são geradas a partir dos títulos das matérias e incluem links filtrados para Openverse e Wikimedia Commons; a licença deve ser confirmada na página do arquivo.
+- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal e URL de cada apuração.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
 - Tela Fontes agrupada em Brasil, Mundo e complemento social, com o estado de cada portal e filtro clicável por veículo.
 - Chips superiores clicáveis: cada portal filtra imediatamente somente o conteúdo recolhido dele; fontes sem coleta ficam desativadas.
