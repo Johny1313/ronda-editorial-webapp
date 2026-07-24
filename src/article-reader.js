@@ -6,7 +6,12 @@ const MAX_HTML_BYTES = 2_500_000;
 const MAX_ARTICLE_CHARS = 8_000;
 const MAX_PROMPT_CHARS = 30_000;
 const MIN_ARTICLE_WORDS = 80;
-const ARTICLE_FETCH_TIMEOUT_MS = 7_500;
+const ARTICLE_FETCH_TIMEOUT_MS = 5_500;
+const AMP_FETCH_TIMEOUT_MS = 3_000;
+const ARTICLE_TOTAL_TIMEOUT_MS = 10_000;
+const ARTICLE_READ_CONCURRENCY = 3;
+const READING_PROGRESS_START = 8;
+const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 14_000;
 
 const NOISE_PATTERN = /(ad-|ads|advert|anuncio|banner|breadcrumb|cookie|coment|comments|footer|header|menu|nav|newsletter|paywall|popup|promo|publicidade|recommend|related|share|sidebar|social|subscribe|widget)/i;
@@ -218,9 +223,16 @@ function linkedPageUrl(html, baseUrl, relName) {
   return null;
 }
 
-async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_MS) {
+async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_MS, parentSignal = null) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort("Tempo limite da matéria excedido"), timeoutMs);
+  const abortFromParent = () => {
+    if (!controller.signal.aborted) controller.abort(parentSignal?.reason || "Leitura da matéria cancelada");
+  };
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener?.("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort("Tempo limite da matéria excedido");
+  }, Math.max(250, Number(timeoutMs) || ARTICLE_FETCH_TIMEOUT_MS));
   try {
     const response = await fetcher(url, {
       redirect: "follow",
@@ -228,7 +240,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.1; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.1.2; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -241,21 +253,29 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
     return { html: decodeHtmlBuffer(buffer.slice(0, MAX_HTML_BYTES), contentType), finalUrl };
   } finally {
     clearTimeout(timeout);
+    parentSignal?.removeEventListener?.("abort", abortFromParent);
   }
 }
 
-export async function readArticle(item, fetcher = fetch) {
+export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS } = {}) {
   let url = String(item?.url || "");
+  const controller = new AbortController();
+  const totalTimeoutMs = Math.max(1_000, Number(timeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS);
+  const deadline = Date.now() + totalTimeoutMs;
+  const timeout = setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort("Tempo total da leitura excedido");
+  }, totalTimeoutMs);
+  const remaining = (limit) => Math.max(250, Math.min(limit, deadline - Date.now()));
   try {
     url = validateArticleUrl(url);
-    const first = await fetchArticleHtml(url, fetcher);
+    const first = await fetchArticleHtml(url, fetcher, remaining(ARTICLE_FETCH_TIMEOUT_MS), controller.signal);
     let extracted = extractArticleFromHtml(first.html, item);
     let extractionUrl = first.finalUrl;
-    if (extracted.wordCount < MIN_ARTICLE_WORDS) {
+    if (extracted.wordCount < MIN_ARTICLE_WORDS && deadline - Date.now() > 900) {
       const ampUrl = linkedPageUrl(first.html, first.finalUrl, "amphtml");
       if (ampUrl && ampUrl !== first.finalUrl) {
         try {
-          const amp = await fetchArticleHtml(ampUrl, fetcher, 6_000);
+          const amp = await fetchArticleHtml(ampUrl, fetcher, remaining(AMP_FETCH_TIMEOUT_MS), controller.signal);
           const ampExtracted = extractArticleFromHtml(amp.html, item);
           if (ampExtracted.wordCount > extracted.wordCount) {
             extracted = { ...ampExtracted, method: `amp-${ampExtracted.method}` };
@@ -281,6 +301,7 @@ export async function readArticle(item, fetcher = fetch) {
       error: null,
     };
   } catch (error) {
+    const timedOut = controller.signal.aborted || /tempo limite|tempo total/i.test(String(error?.message || error));
     return {
       ok: false,
       url,
@@ -291,11 +312,13 @@ export async function readArticle(item, fetcher = fetch) {
       byline: null,
       wordCount: 0,
       contentLevel: null,
-      readMode: "failed",
+      readMode: timedOut ? "timeout" : "failed",
       extractionMethod: null,
       content: "",
-      error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
+      error: timedOut ? "Tempo limite da leitura direta; usado o conteúdo disponível no feed" : error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -362,12 +385,59 @@ function collectedRecord(item) {
 }
 
 
-async function articleRecordWithFallback(item, fetcher) {
+async function articleRecordWithFallback(item, fetcher, { timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS } = {}) {
   const fallback = { ...collectedRecord(item), readMode: "feed-fallback", liveReadError: null };
   if (!/^https?:\/\//i.test(String(item?.url || ""))) return fallback;
-  const live = await readArticle(item, fetcher);
+  const live = await readArticle(item, fetcher, { timeoutMs });
   if (live.ok && live.content) return { ...live, fallbackWordCount: fallback.wordCount, liveReadError: null };
-  return { ...fallback, liveReadError: live.error || "Matéria indisponível", error: live.error || null };
+  return {
+    ...fallback,
+    readMode: live.readMode === "timeout" ? "feed-timeout" : "feed-fallback",
+    liveReadError: live.error || "Matéria indisponível",
+    error: live.error || null,
+  };
+}
+
+async function collectArticlesWithProgress(items, {
+  fetcher,
+  onProgress,
+  timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS,
+  concurrency = ARTICLE_READ_CONCURRENCY,
+} = {}) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  let completed = 0;
+  const workers = Math.max(1, Math.min(items.length, Number(concurrency) || ARTICLE_READ_CONCURRENCY));
+  const taskTimeoutMs = Math.max(1_200, Number(timeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS);
+
+  const runWorker = async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      const item = items[index];
+      const fallback = { ...collectedRecord(item), readMode: "feed-timeout", liveReadError: "Tempo limite da leitura direta; usado o conteúdo disponível no feed", error: "Tempo limite da leitura direta; usado o conteúdo disponível no feed" };
+      let record;
+      try {
+        record = await withTimeout(
+          articleRecordWithFallback(item, fetcher, { timeoutMs: taskTimeoutMs }),
+          taskTimeoutMs + 750,
+          "Tempo limite da fonte excedido",
+        );
+      } catch {
+        record = fallback;
+      }
+      results[index] = record;
+      completed += 1;
+      const progress = READING_PROGRESS_START + Math.round((completed / items.length) * (READING_PROGRESS_END - READING_PROGRESS_START));
+      const source = compact(record.sourceName || item?.sourceName || item?.collectorName || `Fonte ${completed}`, 70);
+      const resultLabel = record.readMode === "full-article" ? "texto principal extraído" : "fallback do feed aplicado";
+      await reportProgress(onProgress, progress, "reading", `Leitura ${completed} de ${items.length}: ${source} — ${resultLabel}.`);
+    }
+  };
+
+  await Promise.all(Array.from({ length: workers }, () => runWorker()));
+  return results.filter((item) => item?.content);
 }
 
 async function reportProgress(callback, progress, stage, message) {
@@ -604,7 +674,7 @@ function publicArticleRecord(article) {
 
 export function intelligentCarouselCacheKey(runId, topic) {
   const items = (topic?.items || []).map((item) => [item?.url, item?.title, item?.content, item?.description].filter(Boolean).join("|")).filter(Boolean).sort();
-  return `smart-v3-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${items.join("||")}`)}`;
+  return `smart-v4-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${items.join("||")}`)}`;
 }
 
 export async function buildIntelligentCarousel(topic, {
@@ -613,15 +683,21 @@ export async function buildIntelligentCarousel(topic, {
   fetcher = fetch,
   liveReading = true,
   onProgress = null,
+  articleTimeoutMs = ARTICLE_TOTAL_TIMEOUT_MS,
+  readingConcurrency = ARTICLE_READ_CONCURRENCY,
 } = {}) {
   const requestedItems = distinctPortalItems(topic);
   if (!requestedItems.length) throw new Error("Este assunto não possui conteúdo de portal armazenado na ronda.");
 
-  await reportProgress(onProgress, 8, "reading", "Abrindo as matérias e extraindo o conteúdo principal.");
-  const collected = (liveReading
-    ? await Promise.all(requestedItems.map((item) => articleRecordWithFallback(item, fetcher)))
-    : requestedItems.map((item) => ({ ...collectedRecord(item), readMode: "feed-only", liveReadError: null })))
-    .filter((item) => item.content);
+  await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Preparando a leitura de ${requestedItems.length} ${requestedItems.length === 1 ? "matéria" : "matérias"} em lotes seguros.`);
+  const collected = liveReading
+    ? await collectArticlesWithProgress(requestedItems, {
+        fetcher,
+        onProgress,
+        timeoutMs: articleTimeoutMs,
+        concurrency: readingConcurrency,
+      })
+    : requestedItems.map((item) => ({ ...collectedRecord(item), readMode: "feed-only", liveReadError: null })).filter((item) => item.content);
   if (!collected.length) throw new Error("Não foi encontrado conteúdo suficiente para este assunto.");
 
   const quality = readingQuality(collected);

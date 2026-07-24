@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.1.1:** a Leitura Inteligente abre até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando indicada. O processamento pesado foi movido para uma Cloudflare Queue, evitando a interrupção causada pelo limite de tarefas HTTP em segundo plano. O painel acompanha o progresso pelo D1; quando um portal bloqueia a leitura, o sistema usa o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
+**Versão 2.1.2:** a Leitura Inteligente abre até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando indicada. O processamento pesado foi movido para uma Cloudflare Queue, evitando a interrupção causada pelo limite de tarefas HTTP em segundo plano. O painel acompanha o progresso pelo D1; quando um portal bloqueia a leitura, o sistema usa o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
 
 ## Versão GitHub recomendada
 

@@ -98,3 +98,59 @@ test("gera roteiro preliminar mesmo quando a ronda possui apenas títulos", asyn
   assert.equal(result.slides.length, 7);
   assert.match(result.disclaimer, /preliminar/i);
 });
+
+test("avança o progresso por fonte e não trava quando um portal demora", async () => {
+  const topic = {
+    id: "topic-multifonte",
+    title: "Assunto acompanhado por vários portais",
+    editoria: "Notícias",
+    items: [
+      { id: "a", kind: "portal", title: "Portal A publica a informação principal", description: "Informação principal confirmada pelo primeiro portal.", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/a" },
+      { id: "b", kind: "portal", title: "Portal B detalha o assunto", description: "O segundo portal apresenta contexto e detalhes adicionais.", sourceName: "Portal B", publishedAt: "2026-07-24T09:59:00Z", url: "https://portal-b.test/b" },
+      { id: "c", kind: "portal", title: "Portal C repercute a notícia", description: "O terceiro portal registra a repercussão do acontecimento.", sourceName: "Portal C", publishedAt: "2026-07-24T09:58:00Z", url: "https://portal-c.test/c" },
+      { id: "d", kind: "portal", title: "Portal D acompanha os desdobramentos", description: "O quarto portal acompanha os próximos passos.", sourceName: "Portal D", publishedAt: "2026-07-24T09:57:00Z", url: "https://portal-d.test/d" },
+    ],
+  };
+  let active = 0;
+  let maxActive = 0;
+  const fetcher = async (url, options = {}) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    try {
+      if (String(url).includes("portal-a.test")) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return new Response(articleHtml("Portal A publica a informação principal"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+      }
+      if (String(url).includes("portal-b.test")) throw new Error("bloqueado pelo portal");
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 5_000);
+        options.signal?.addEventListener?.("abort", () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        }, { once: true });
+      });
+      throw new Error("resposta lenta");
+    } finally {
+      active -= 1;
+    }
+  };
+  const progress = [];
+  const startedAt = Date.now();
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher,
+    articleTimeoutMs: 80,
+    readingConcurrency: 2,
+    onProgress: async (event) => progress.push(event),
+  });
+  const elapsed = Date.now() - startedAt;
+
+  assert.ok(elapsed < 1_500, `processamento demorou ${elapsed}ms`);
+  assert.ok(maxActive <= 2);
+  assert.equal(result.reading.successful, 4);
+  assert.equal(result.reading.liveSuccessful, 1);
+  assert.equal(result.reading.fallbackSources, 3);
+  assert.ok(progress.some((event) => event.progress > 8 && event.progress <= 60));
+  assert.ok(progress.filter((event) => event.stage === "reading").length >= 5);
+  assert.match(progress.findLast((event) => event.stage === "reading")?.message || "", /Leitura 4 de 4/);
+  assert.equal(result.slides.length, 7);
+});

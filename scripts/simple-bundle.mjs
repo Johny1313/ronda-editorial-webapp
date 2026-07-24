@@ -92,7 +92,7 @@ async function visit(file) {
 }
 
 await visit(entry);
-const banner = `// Ronda Editorial 2.1.1 — bundle autossuficiente para Cloudflare Workers\n// Gerado em ${new Date().toISOString()}\n`;
+const banner = `// Ronda Editorial 2.1.2 — bundle autossuficiente para Cloudflare Workers\n// Gerado em ${new Date().toISOString()}\n`;
 let bundle = banner + order.map((file) => modules.get(file).wrapped).join('\n');
 const rootModule = modules.get(entry);
 for (const name of rootModule.exports) bundle += `\nexport const ${name} = ${moduleId(entry)}[${JSON.stringify(name)}];`;

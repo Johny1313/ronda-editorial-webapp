@@ -23,7 +23,7 @@ import { parseFeed } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.1.1";
+const VERSION = "2.1.2";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -384,6 +384,9 @@ async function handleApi(request, env, url, ctx) {
         queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
         executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 5,
+        multiSourceProgress: true,
+        perSourceTimeoutSeconds: 10,
+        readingConcurrency: 3,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
     });
@@ -581,8 +584,8 @@ export default {
     }
   },
 
-  async queue(batch, env, ctx) {
-    ctx.waitUntil(processIntelligentQueueBatch(batch, env));
+  async queue(batch, env) {
+    await processIntelligentQueueBatch(batch, env);
   },
 
   async scheduled(_controller, env, ctx) {
