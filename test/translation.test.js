@@ -34,6 +34,8 @@ test("traduz títulos e descrições internacionais para português", async () =
   assert.equal(result.omittedItems, 0);
   assert.equal(result.translatedItems[0].title, "Líderes mundiais se reúnem hoje");
   assert.equal(result.translatedItems[0].description, "A reunião discute um novo acordo.");
+  assert.equal(result.translatedItems[0].content, "A reunião discute um novo acordo.");
+  assert.equal(result.translatedItems[0].contentSource, "translated-feed-description");
   assert.equal(result.translatedItems[0].targetLanguage, "pt-BR");
   assert.equal(result.translatedItems[0].translationStatus, "translated");
 });

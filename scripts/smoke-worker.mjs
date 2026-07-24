@@ -61,7 +61,7 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=2.0.0") && html.includes("/styles.css?v=2.0.0"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=2.0.1") && html.includes("/styles.css?v=2.0.1"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
   assert(html.includes('id="carouselSources"'), "Lista de links para apuração não foi incorporada ao carrossel.");
@@ -121,7 +121,7 @@ try {
   });
   assert(intelligent.body.data?.slides?.length === 7, "A leitura inteligente não gerou sete slides.");
   assert(intelligent.body.data?.analysisMode === "ai", "A leitura inteligente não usou o Workers AI simulado.");
-  assert(intelligent.body.data?.reading?.successful >= 1 && intelligent.body.data?.reading?.totalWords > 100, "A matéria completa não foi extraída.");
+  assert(intelligent.body.data?.reading?.successful >= 1 && intelligent.body.data?.reading?.totalWords > 20 && intelligent.body.data?.reading?.basis === "round-collected-content", "O conteúdo coletado pela ronda não foi utilizado.");
   assert(intelligent.body.data?.questions?.whatHappened && intelligent.body.data?.entities?.themes?.length, "Interpretação ou dados estruturados ausentes.");
   const intelligentCached = await getJson(`/api/topics/${topicForReading.id}/intelligent-carousel`, {
     method: "POST",
@@ -138,9 +138,9 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.0.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.0.1", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
   assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
-  assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.articleLimit === 5, "Saúde não confirmou a leitura inteligente.");
+  assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.mode === "round-collected-content" && health.body.intelligentReading?.articleLimit === 5, "Saúde não confirmou a leitura inteligente.");
 
   process.stdout.write(
     `Smoke test aprovado: dashboard, D1, leitura inteligente, carrosséis de 7 slides, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,

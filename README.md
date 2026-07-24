@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.0.0:** adicionada a Leitura Inteligente de Notícias. Ao abrir o roteiro, o Worker lê sob demanda até cinco matérias completas do assunto, remove ruídos de página, analisa o conteúdo e gera um carrossel Instagram com sete slides. Canaltech e TecMundo permanecem ativos; sugestões de imagens continuam removidas.
+**Versão 2.0.1:** a Leitura Inteligente agora utiliza exclusivamente o conteúdo que a própria ronda recebeu dos feeds. O Worker não reabre as URLs das matérias para gerar o roteiro, evitando bloqueios 403/503, paywalls e estados de processamento presos. O resultado contém sete slides com título e subtítulo. Canva e sugestões de imagens não fazem parte desta versão.
 
 ## Versão GitHub recomendada
 
@@ -17,7 +17,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - 30 portais identificados individualmente, divididos em Brasil e Mundo.
 - Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, Canaltech, TecMundo, O Liberal, Metrópoles e Campo Grande News.
 - Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
-- Títulos e descrições das fontes do Mundo traduzidos para português pelo Workers AI antes do agrupamento e do armazenamento no histórico.
+- Títulos, descrições e o conteúdo usado pelo roteiro das fontes do Mundo permanecem em português antes do agrupamento e do armazenamento no histórico.
 - Cache de traduções no D1: conteúdos repetidos não consomem uma nova tradução a cada ronda.
 - Proteção de idioma: se uma tradução falhar, o conteúdo afetado é omitido em vez de aparecer em inglês ou espanhol.
 - Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker.
@@ -26,13 +26,14 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
 - Prévia editorial de carrossel em sete slides na coleta.
-- Botão **Ler matérias e gerar carrossel** executa a leitura completa sob demanda para não sobrecarregar cada ronda automática.
-- Leitura de até cinco matérias distintas por assunto, com limite de tempo e tamanho por página.
-- Extração do conteúdo principal por JSON-LD, `<article>`, `<main>` e blocos editoriais; menus, anúncios, newsletters, barras laterais e outros ruídos são descartados.
+- Botão **Gerar roteiro de carrossel** cruza até cinco fontes distintas do assunto.
+- A análise usa o texto, resumo ou título que o feed já forneceu durante a ronda; nenhuma URL é reaberta nessa etapa.
+- Cada item preserva até 2.400 caracteres do conteúdo recebido, mantendo o payload seguro para armazenamento no D1.
+- O painel identifica a qualidade disponível como conteúdo amplo, parcial ou limitado.
 - Respostas estruturadas para: o que aconteceu, quem está envolvido, onde, quando, impacto e repercussão.
 - Extração de personagens, empresas, locais, datas, temas e palavras-chave.
-- Carrossel Instagram com exatamente sete slides: título, contexto, informação principal, detalhamento, consequência, conclusão e CTA.
-- Resultado armazenado no D1 por 48 horas para evitar reler e reprocessar o mesmo assunto.
+- Carrossel Instagram com exatamente sete slides: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA; cada slide possui título e subtítulo.
+- Resultado armazenado no D1 por 48 horas para evitar reprocessar o mesmo assunto.
 - Carrosséis gerados exclusivamente em português e identificados como `pt-BR`.
 - Aviso obrigatório de revisão editorial e links das matérias originais para conferência.
 - Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
@@ -54,7 +55,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 O código e a infraestrutura são verificáveis, mas fontes externas podem mudar endereços ou bloquear consultas. Por isso a coleta aceita falhas parciais, registra a situação de cada fonte e utiliza fallbacks. Sem APIs oficiais ou comerciais, esta versão não monitora integralmente Instagram, TikTok ou X.
 
-O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para analisar matérias completas. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA de análise falhar, o sistema gera um roteiro de contingência a partir do texto extraído e sinaliza que a revisão deve ser completa.
+O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para analisar conteúdo coletado pela ronda. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA de análise falhar, o sistema gera um roteiro de contingência a partir do conteúdo coletado e sinaliza que a revisão deve ser completa.
 
 ## Alternativa sem GitHub — editor do Worker
 
@@ -125,7 +126,7 @@ npm run smoke
 npm run dev
 ```
 
-`npm run smoke` executa o Worker compilado no emulador oficial, simula portais, Bluesky e páginas completas de notícias, grava a ronda no D1 e confirma dashboard, leitura inteligente, sete slides, cache, histórico e saúde.
+`npm run smoke` executa o Worker compilado no emulador oficial, simula portais e Bluesky, grava a ronda no D1 e confirma dashboard, análise do conteúdo coletado, sete slides, cache, histórico e saúde.
 
 Rotas principais:
 
@@ -139,7 +140,7 @@ Rotas principais:
 | `/api/runs/:id` | GET | Acompanha uma ronda manual em andamento |
 | `/api/runs/:id/data` | GET | Recupera as notícias armazenadas em uma ronda histórica |
 | `/api/round` | POST | Executa uma ronda manual |
-| `/api/topics/:topicId/intelligent-carousel` | POST | Lê as matérias do assunto, analisa e devolve o carrossel de sete slides |
+| `/api/topics/:topicId/intelligent-carousel` | POST | Analisa o conteúdo armazenado no assunto e devolve o carrossel de sete slides |
 
 ## Arquivos
 

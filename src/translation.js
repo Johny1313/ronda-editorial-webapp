@@ -102,10 +102,15 @@ export async function translateWorldItems(items, { ai, cached = new Map(), concu
     const description = item.description
       ? cached.get(translationKey(item.description, language)) || ""
       : "";
+    const translatedTitle = cleanTranslation(title, 240);
+    const translatedDescription = cleanTranslation(description, 900);
     translatedItems.push({
       ...item,
-      title: cleanTranslation(title, 240),
-      description: cleanTranslation(description, 420),
+      title: translatedTitle,
+      description: translatedDescription,
+      content: translatedDescription || translatedTitle,
+      contentSource: translatedDescription ? "translated-feed-description" : "translated-title",
+      contentWordCount: plainText(translatedDescription || translatedTitle).split(/\s+/).filter(Boolean).length,
       sourceLanguage: language,
       targetLanguage: "pt-BR",
       translationStatus: description || !item.description ? "translated" : "partial",

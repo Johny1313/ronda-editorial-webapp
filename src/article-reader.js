@@ -264,18 +264,19 @@ export async function readArticle(item, fetcher = fetch) {
 
 function distinctPortalItems(topic) {
   const items = Array.isArray(topic?.items) ? topic.items : [];
-  const seenUrls = new Set();
+  const seen = new Set();
   const seenSources = new Set();
   const ordered = [...items]
-    .filter((item) => item?.kind !== "social" && /^https?:\/\//i.test(String(item?.url || "")))
-    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
+    .filter((item) => item?.kind !== "social" && plainText(item?.title))
+    .sort((left, right) => Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0));
   const preferred = [];
   const remainder = [];
   for (const item of ordered) {
-    if (seenUrls.has(item.url)) continue;
-    seenUrls.add(item.url);
-    const source = item.collectorName || item.sourceName;
-    if (source && !seenSources.has(source)) {
+    const identity = String(item?.url || item?.id || `${item?.sourceName}|${item?.title}`);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const source = item.collectorName || item.sourceName || "Fonte não informada";
+    if (!seenSources.has(source)) {
       seenSources.add(source);
       preferred.push(item);
     } else remainder.push(item);
@@ -283,12 +284,72 @@ function distinctPortalItems(topic) {
   return [...preferred, ...remainder].slice(0, ARTICLE_READER_LIMIT);
 }
 
+function collectedContent(item) {
+  const parts = [];
+  const seen = new Set();
+  const add = (value, method) => {
+    const text = plainText(value).slice(0, MAX_ARTICLE_CHARS).trim();
+    const key = text.toLocaleLowerCase("pt-BR");
+    if (!text || seen.has(key)) return;
+    seen.add(key);
+    parts.push({ text, method });
+  };
+  add(item?.content, item?.contentSource || "feed-content");
+  add(item?.contentEncoded, "feed-content");
+  add(item?.description, "feed-description");
+  add(item?.contentSnippet, "feed-summary");
+  add(item?.summary, "feed-summary");
+  if (!parts.length) add(item?.title, "title-only");
+  const content = parts.map((part) => part.text).join("\n\n").slice(0, MAX_ARTICLE_CHARS).trim();
+  const count = wordCount(content);
+  const hasFullFeedContent = parts.some((part) => part.method === "feed-content") && count >= 60;
+  const level = hasFullFeedContent ? "content" : count >= 18 ? "summary" : "title";
+  return { content, wordCount: count, level, extractionMethod: parts[0]?.method || "title-only" };
+}
+
+function collectedRecord(item) {
+  const collected = collectedContent(item);
+  return {
+    ok: Boolean(collected.content),
+    url: /^https?:\/\//i.test(String(item?.url || "")) ? item.url : null,
+    sourceName: item?.sourceName || item?.collectorName || "Fonte não informada",
+    title: item?.title || "Notícia sem título",
+    publishedAt: item?.publishedAt || null,
+    byline: null,
+    wordCount: collected.wordCount,
+    contentLevel: collected.level,
+    extractionMethod: collected.extractionMethod,
+    content: collected.content,
+    error: null,
+  };
+}
+
+function readingQuality(records) {
+  const totalWords = records.reduce((sum, item) => sum + item.wordCount, 0);
+  const contentSources = records.filter((item) => item.contentLevel === "content").length;
+  const summarySources = records.filter((item) => item.contentLevel === "summary").length;
+  const titleOnlySources = records.filter((item) => item.contentLevel === "title").length;
+  let code = "insufficient";
+  let label = "Conteúdo insuficiente";
+  if (totalWords >= 280 && (contentSources >= 1 || records.length >= 3)) {
+    code = "broad";
+    label = "Conteúdo amplo";
+  } else if (totalWords >= 90 || (records.length >= 2 && totalWords >= 55)) {
+    code = "partial";
+    label = "Conteúdo parcial";
+  } else if (totalWords >= 8) {
+    code = "limited";
+    label = "Conteúdo limitado";
+  }
+  return { code, label, totalWords, contentSources, summarySources, titleOnlySources };
+}
+
 function sentences(value) {
-  return plainText(value).split(/(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])/).map((item) => item.trim()).filter((item) => item.length >= 35);
+  return plainText(value).split(/(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])/).map((item) => item.trim()).filter((item) => item.length >= 25);
 }
 
 function firstMatchingSentence(list, pattern, fallback) {
-  return compact(list.find((item) => pattern.test(item)) || fallback || "Não informado nas matérias lidas.", 360);
+  return compact(list.find((item) => pattern.test(item)) || fallback || "Não informado no conteúdo coletado pela ronda.", 360);
 }
 
 function heuristicEntities(text) {
@@ -311,7 +372,7 @@ function heuristicEntities(text) {
   themeCatalog.forEach((theme) => { if (normalized.includes(theme)) add(themes, theme); });
   const frequency = new Map();
   for (const token of normalized.normalize("NFD").replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]{5,}/g) || []) {
-    if (/^(sobre|entre|ainda|tambem|foram|segundo|noticia|materia|quando|depois|antes|todos|todas|porque|porem|desde|apenas)$/.test(token)) continue;
+    if (/^(sobre|entre|ainda|tambem|foram|segundo|noticia|materia|quando|depois|antes|todos|todas|porque|porem|desde|apenas|conteudo|ronda)$/.test(token)) continue;
     frequency.set(token, (frequency.get(token) || 0) + 1);
   }
   [...frequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([token]) => add(keywords, token));
@@ -319,36 +380,37 @@ function heuristicEntities(text) {
 }
 
 function fallbackAnalysis(topic, articles, socialItems) {
-  const combined = articles.map((article) => article.content).join("\n\n");
+  const combined = articles.map((article) => `${article.title}. ${article.content}`).join("\n\n");
   const list = sentences(combined);
   const headline = compact(topic?.title || articles[0]?.title || "Assunto em acompanhamento", 110);
   const whatHappened = compact(list.slice(0, 2).join(" ") || topic?.items?.[0]?.description || headline, 420);
-  const context = compact(list.slice(2, 4).join(" ") || whatHappened, 420);
-  const details = compact(list.slice(4, 7).join(" ") || context, 420);
+  const context = compact(list.slice(2, 4).join(" ") || articles[1]?.content || whatHappened, 420);
+  const details = compact(list.slice(4, 7).join(" ") || articles.slice(1, 3).map((item) => item.content).join(" ") || context, 420);
   const impact = firstMatchingSentence(list, /impact|consequ|efeito|mudan|risco|benef|preju|custo|afeta|pode/i, details);
   const repercussion = socialItems.length
     ? `O assunto também apareceu em ${socialItems.length} publicação${socialItems.length === 1 ? "" : "ões"} do Bluesky monitoradas pela ronda.`
-    : firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta/i, "As matérias lidas ainda não detalham uma repercussão consolidada.");
+    : firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta/i, "O conteúdo coletado ainda não detalha uma repercussão consolidada.");
   const entities = heuristicEntities(`${headline}\n${combined}`);
+  const slides = [
+    { number: 1, role: "Título principal", title: headline, subtitle: compact(whatHappened, 260) },
+    { number: 2, role: "Contexto", title: "Entenda o cenário", subtitle: context },
+    { number: 3, role: "Informação principal", title: "O que aconteceu", subtitle: whatHappened },
+    { number: 4, role: "Detalhamento", title: "Os principais detalhes", subtitle: details },
+    { number: 5, role: "Consequência", title: "Qual é o impacto", subtitle: impact },
+    { number: 6, role: "Conclusão", title: "O que fica da notícia", subtitle: compact(repercussion, 360) },
+    { number: 7, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte as fontes originais e acompanhe as próximas atualizações." },
+  ].map((slide) => ({ ...slide, body: slide.subtitle }));
   return {
     questions: {
       whatHappened,
-      who: entities.people.length || entities.companies.length ? [...entities.people, ...entities.companies].slice(0, 8).join(", ") : "Não informado com segurança nas matérias lidas.",
-      where: entities.places.join(", ") || "Não informado com segurança nas matérias lidas.",
+      who: entities.people.length || entities.companies.length ? [...entities.people, ...entities.companies].slice(0, 8).join(", ") : "Não informado com segurança no conteúdo coletado.",
+      where: entities.places.join(", ") || "Não informado com segurança no conteúdo coletado.",
       when: entities.dates.join(", ") || articles.map((item) => item.publishedAt).filter(Boolean).slice(0, 2).join("; ") || "Não informado.",
       impact,
       repercussion,
     },
     entities,
-    slides: [
-      { number: 1, role: "Título principal", title: headline, body: "O ponto central da notícia em linguagem direta." },
-      { number: 2, role: "Contexto", title: "Entenda o cenário", body: context },
-      { number: 3, role: "Informação principal", title: "O que aconteceu", body: whatHappened },
-      { number: 4, role: "Detalhamento", title: "Os principais detalhes", body: details },
-      { number: 5, role: "Consequência", title: "Qual é o impacto", body: impact },
-      { number: 6, role: "Conclusão", title: "O que fica da notícia", body: compact(repercussion, 360) },
-      { number: 7, role: "CTA", title: "Acompanhe os desdobramentos", body: "Consulte as fontes originais, salve este conteúdo e acompanhe as próximas atualizações." },
-    ],
+    slides,
   };
 }
 
@@ -389,9 +451,9 @@ const ANALYSIS_SCHEMA = {
           number: { type: "integer" },
           role: { type: "string" },
           title: { type: "string" },
-          body: { type: "string" },
+          subtitle: { type: "string" },
         },
-        required: ["number", "role", "title", "body"],
+        required: ["number", "role", "title", "subtitle"],
       },
     },
   },
@@ -418,35 +480,40 @@ function normalizeAnalysis(value, fallback) {
     entities[key] = normalizeList(source.entities?.[key]?.length ? source.entities[key] : fallback.entities[key]);
   }
   const rawSlides = Array.isArray(source.slides) ? source.slides : [];
-  const slides = EXPECTED_SLIDES.map(([number, role], index) => ({
-    number,
-    role,
-    title: compact(rawSlides[index]?.title || fallback.slides[index]?.title || role, 120),
-    body: compact(rawSlides[index]?.body || fallback.slides[index]?.body || "", 460),
-  }));
+  const slides = EXPECTED_SLIDES.map(([number, role], index) => {
+    const subtitle = compact(rawSlides[index]?.subtitle || rawSlides[index]?.body || fallback.slides[index]?.subtitle || fallback.slides[index]?.body || "", 460);
+    return {
+      number,
+      role,
+      title: compact(rawSlides[index]?.title || fallback.slides[index]?.title || role, 120),
+      subtitle,
+      body: subtitle,
+    };
+  });
   return { questions, entities, slides };
 }
 
-function promptFor(topic, articles, socialItems) {
+function promptFor(topic, articles, socialItems, quality) {
   const sourceBlocks = articles.map((article, index) => [
-    `MATÉRIA ${index + 1}`,
+    `CONTEÚDO ${index + 1}`,
     `Portal: ${article.sourceName}`,
     `Título: ${article.title}`,
     `Data: ${article.publishedAt || "não informada"}`,
-    `Texto extraído:\n${article.content.slice(0, 5_500)}`,
+    `Tipo de conteúdo: ${article.contentLevel === "content" ? "texto fornecido pelo feed" : article.contentLevel === "summary" ? "resumo fornecido pelo feed" : "somente título"}`,
+    `Conteúdo coletado na ronda:\n${article.content.slice(0, 5_500)}`,
   ].join("\n")).join("\n\n---\n\n");
   const social = socialItems.slice(0, 8).map((item) => `- ${item.sourceName}: ${compact(item.title, 260)} (${Number(item.interactions) || 0} interações observadas)`).join("\n") || "Nenhuma publicação social relacionada foi captada.";
-  return `ASSUNTO DA RONDA: ${compact(topic?.title, 180)}\nEDITORIA: ${topic?.editoria || "Notícias"}\n\n${sourceBlocks}\n\nSINAIS DE REPERCUSSÃO NO BLUESKY:\n${social}`.slice(0, MAX_PROMPT_CHARS);
+  return `ASSUNTO DA RONDA: ${compact(topic?.title, 180)}\nEDITORIA: ${topic?.editoria || "Notícias"}\nQUALIDADE DO CONTEÚDO: ${quality.label}\n\n${sourceBlocks}\n\nSINAIS DE REPERCUSSÃO NO BLUESKY:\n${social}`.slice(0, MAX_PROMPT_CHARS);
 }
 
-async function runAiAnalysis(ai, model, topic, articles, socialItems) {
+async function runAiAnalysis(ai, model, topic, articles, socialItems, quality) {
   const response = await ai.run(model, {
     messages: [
       {
         role: "system",
-        content: "Você é um editor jornalístico brasileiro. Analise somente os textos fornecidos. Não invente fatos, nomes, datas, locais, impacto ou repercussão. Quando a informação não estiver comprovada, escreva 'Não informado nas matérias lidas'. Diferencie fato, contexto, consequência e repercussão. Produza um carrossel Instagram em português do Brasil com exatamente 7 slides: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA. Use títulos claros e corpos curtos, factuais e independentes. Não use hashtags, emojis ou sensacionalismo.",
+        content: "Você é um editor jornalístico brasileiro. Analise somente o conteúdo que a ronda editorial já coletou dos feeds. Não afirme que leu a matéria completa. Não invente fatos, nomes, datas, locais, impacto ou repercussão. Quando a informação não estiver comprovada, escreva 'Não informado no conteúdo coletado'. Produza um carrossel em português do Brasil com exatamente 7 slides. Cada slide deve conter apenas título e subtítulo. Estrutura: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA. Não use hashtags, emojis ou sensacionalismo.",
       },
-      { role: "user", content: promptFor(topic, articles, socialItems) },
+      { role: "user", content: promptFor(topic, articles, socialItems, quality) },
     ],
     response_format: { type: "json_schema", json_schema: ANALYSIS_SCHEMA },
     max_tokens: 2_400,
@@ -462,24 +529,24 @@ function publicArticleRecord(article) {
 }
 
 export function intelligentCarouselCacheKey(runId, topic) {
-  const urls = (topic?.items || []).map((item) => String(item?.url || "").trim()).filter(Boolean).sort();
-  return `smart-v1-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${urls.join("|")}`)}`;
+  const items = (topic?.items || []).map((item) => [item?.url, item?.title, item?.content, item?.description].filter(Boolean).join("|")).filter(Boolean).sort();
+  return `smart-v2-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${items.join("||")}`)}`;
 }
 
-export async function buildIntelligentCarousel(topic, { ai, fetcher = fetch, model = ARTICLE_ANALYSIS_MODEL } = {}) {
+export async function buildIntelligentCarousel(topic, { ai, model = ARTICLE_ANALYSIS_MODEL } = {}) {
   const requestedItems = distinctPortalItems(topic);
-  if (!requestedItems.length) throw new Error("Este assunto não possui matérias de portal com URL válida para leitura.");
-  const readResults = await Promise.all(requestedItems.map((item) => readArticle(item, fetcher)));
-  const readable = readResults.filter((item) => item.ok && item.content);
-  if (!readable.length) throw new Error("Nenhum portal liberou conteúdo suficiente para a leitura completa. Use os links de apuração manual.");
+  if (!requestedItems.length) throw new Error("Este assunto não possui conteúdo de portal armazenado na ronda.");
+  const collected = requestedItems.map(collectedRecord).filter((item) => item.content);
+  if (!collected.length) throw new Error("A ronda não armazenou título ou resumo suficiente para este assunto.");
+  const quality = readingQuality(collected);
   const socialItems = (topic?.items || []).filter((item) => item?.kind === "social");
-  const fallback = fallbackAnalysis(topic, readable, socialItems);
+  const fallback = fallbackAnalysis(topic, collected, socialItems);
   let analysis = fallback;
   let analysisMode = "fallback";
   let aiError = null;
   if (ai?.run) {
     try {
-      const generated = await runAiAnalysis(ai, model, topic, readable, socialItems);
+      const generated = await runAiAnalysis(ai, model, topic, collected, socialItems, quality);
       if (!generated) throw new Error("A IA não retornou JSON válido");
       analysis = normalizeAnalysis(generated, fallback);
       analysisMode = "ai";
@@ -495,7 +562,13 @@ export async function buildIntelligentCarousel(topic, { ai, fetcher = fetch, mod
     publishedAt: item.publishedAt || null,
     url: item.url,
   })).filter((item, index, list) => list.findIndex((other) => other.url === item.url) === index);
-  const totalWords = readable.reduce((sum, item) => sum + item.wordCount, 0);
+
+  const disclaimer = quality.code === "broad"
+    ? "Carrossel gerado com base no conteúdo coletado pela ronda editorial. Confirme nomes, números, datas e contexto nos links originais antes de publicar."
+    : quality.code === "partial"
+      ? "Carrossel baseado em títulos, textos e resumos fornecidos pelos feeds. Revise os links originais antes de publicar."
+      : "Carrossel preliminar baseado em conteúdo limitado da ronda. Faça apuração manual antes de publicar.";
+
   return {
     language: "pt-BR",
     generatedAt: new Date().toISOString(),
@@ -503,21 +576,25 @@ export async function buildIntelligentCarousel(topic, { ai, fetcher = fetch, mod
     model: analysisMode === "ai" ? model : null,
     aiError,
     voiceTone: "Jornalístico, factual e explicativo",
-    postModel: "Instagram · 7 slides",
+    postModel: "Instagram · 7 slides · título + subtítulo",
     reading: {
+      basis: "round-collected-content",
       requested: requestedItems.length,
-      successful: readable.length,
-      failed: readResults.length - readable.length,
-      totalWords,
-      sources: readResults.map(publicArticleRecord),
+      successful: collected.length,
+      failed: 0,
+      totalWords: quality.totalWords,
+      quality: quality.code,
+      qualityLabel: quality.label,
+      contentSources: quality.contentSources,
+      summarySources: quality.summarySources,
+      titleOnlySources: quality.titleOnlySources,
+      sources: collected.map(publicArticleRecord),
     },
     questions: analysis.questions,
     entities: analysis.entities,
     slides: analysis.slides,
     verificationLinks,
-    disclaimer: analysisMode === "ai"
-      ? "Roteiro gerado após leitura automática do conteúdo principal das matérias. Revise nomes, números, datas e contexto nos links originais antes de publicar."
-      : "A leitura das matérias foi concluída, mas a análise de IA não ficou disponível; o roteiro usa extração automática e exige revisão editorial completa.",
+    disclaimer,
     cacheKey: intelligentCarouselCacheKey("generated", topic),
   };
 }

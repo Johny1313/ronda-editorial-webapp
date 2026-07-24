@@ -123,7 +123,10 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
   for (const block of blocks) {
     if (result.length >= limit) break;
     const title = tagValue(block, ["title"]);
-    const description = tagValue(block, ["description", "summary", "encoded", "content"]);
+    const feedDescription = tagValue(block, ["description", "summary"]);
+    const feedContent = tagValue(block, ["encoded", "content"]);
+    const collectedContent = feedContent || feedDescription;
+    const storedContent = collectedContent.slice(0, 2_400);
     const publishedAt = isoDate(tagValue(block, ["pubDate", "published", "updated", "date"]));
     const url = linkValue(block);
     const timestamp = Date.parse(publishedAt);
@@ -135,7 +138,10 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
     result.push({
       id: `rss-${feed.id}-${stableHash(url)}`,
       title,
-      description: description.slice(0, 280),
+      description: (feedDescription || feedContent).slice(0, 900),
+      content: storedContent,
+      contentSource: feedContent ? "feed-content" : feedDescription ? "feed-description" : "title-only",
+      contentWordCount: storedContent.split(/\s+/).filter(Boolean).length,
       sourceName: feed.canonicalSource ? feed.name : declaredSource || feed.name,
       collectorName: feed.name,
       region: feed.region || null,

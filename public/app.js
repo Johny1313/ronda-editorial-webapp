@@ -219,7 +219,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Até 5 matérias completas</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ler matérias e gerar carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Conteúdo já coletado de até 5 fontes</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -439,10 +439,11 @@ function carouselAsText(topic, carousel) {
   const reading = carousel?.reading || {};
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
-    "LEITURA INTELIGENTE DE NOTÍCIAS",
-    `Modo: ${carousel?.analysisMode === "ai" ? "Workers AI" : "Extração automática de contingência"}`,
-    `Matérias lidas: ${Number(reading.successful) || 0}/${Number(reading.requested) || 0}`,
-    `Palavras analisadas: ${Number(reading.totalWords) || 0}`,
+    "LEITURA INTELIGENTE — CONTEÚDO DA RONDA",
+    `Modo: ${carousel?.analysisMode === "ai" ? "Workers AI" : "Análise automática de contingência"}`,
+    `Qualidade: ${reading.qualityLabel || "Conteúdo coletado"}`,
+    `Fontes utilizadas: ${Number(reading.successful) || 0}/${Number(reading.requested) || 0}`,
+    `Palavras coletadas: ${Number(reading.totalWords) || 0}`,
     `Tom de voz: ${carousel?.voiceTone || "Jornalístico, factual e explicativo"}`,
     `Formato: ${carousel?.postModel || "Instagram · 7 slides"}`,
     "",
@@ -465,7 +466,7 @@ function carouselAsText(topic, carousel) {
     ...slides.flatMap((slide) => [
       `SLIDE ${slide.number} — ${String(slide.role || "").toUpperCase()}`,
       slide.title || "",
-      slide.body || "",
+      slide.subtitle || slide.body || "",
       "",
     ]),
     "LINKS PARA APURAÇÃO",
@@ -489,13 +490,13 @@ function setCarouselLoading(loading, message = "") {
   holder.hidden = false;
   holder.classList.toggle("error", !loading && Boolean(message));
   holder.innerHTML = loading
-    ? '<span class="reader-spinner">↻</span><div><strong>Lendo as matérias completas…</strong><small>Abrindo os portais, removendo anúncios e menus e identificando o conteúdo principal.</small></div>'
-    : `<span class="reader-error">!</span><div><strong>Leitura inteligente não concluída</strong><small>${escapeHtml(message)}</small></div>`;
+    ? '<span class="reader-spinner">↻</span><div><strong>Analisando o conteúdo da ronda…</strong><small>Cruzando títulos, textos e resumos que as fontes já entregaram durante a coleta.</small></div>'
+    : `<span class="reader-error">!</span><div><strong>Roteiro não concluído</strong><small>${escapeHtml(message)}</small></div>`;
   document.getElementById("copyCarousel").disabled = loading || Boolean(message);
 }
 
 function questionCard(label, value) {
-  return `<article><small>${escapeHtml(label)}</small><p>${escapeHtml(value || "Não informado nas matérias lidas.")}</p></article>`;
+  return `<article><small>${escapeHtml(label)}</small><p>${escapeHtml(value || "Não informado no conteúdo coletado.")}</p></article>`;
 }
 
 function entityGroup(label, values) {
@@ -510,7 +511,7 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
-  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Captura da matéria</p><h3>Leitura concluída</h3></div><span>${Number(reading.successful) || 0}/${Number(reading.requested) || 0} matérias</span></div><div class="reading-stats"><span><small>Conteúdo principal</small><strong>${Number(reading.totalWords) || 0} palavras</strong></span><span><small>Falhas ou bloqueios</small><strong>${Number(reading.failed) || 0}</strong></span><span><small>Processamento</small><strong>${carousel.analysisMode === "ai" ? "IA estruturada" : "Fallback local"}</strong></span></div>`;
+  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Conteúdo da ronda</p><h3>Análise baseada no material já coletado</h3></div><span>${Number(reading.successful) || 0}/${Number(reading.requested) || 0} fontes</span></div><div class="reading-stats"><span><small>Qualidade do material</small><strong>${escapeHtml(reading.qualityLabel || "Conteúdo coletado")}</strong></span><span><small>Palavras coletadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Processamento</small><strong>${carousel.analysisMode === "ai" ? "IA estruturada" : "Fallback local"}</strong></span></div>`;
 
   const questions = carousel.questions || {};
   const analysisHolder = document.getElementById("carouselAnalysis");
@@ -522,13 +523,14 @@ function renderIntelligentCarousel(topic, carousel) {
   entityHolder.hidden = false;
   entityHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Estrutura de dados</p><h3>Elementos extraídos</h3></div></div><div class="entity-grid">${entityGroup("Personagens", entities.people)}${entityGroup("Empresas", entities.companies)}${entityGroup("Locais", entities.places)}${entityGroup("Datas", entities.dates)}${entityGroup("Temas", entities.themes)}${entityGroup("Palavras-chave", entities.keywords)}</div>`;
 
-  document.getElementById("carouselSlides").innerHTML = (carousel.slides || []).map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
+  document.getElementById("carouselSlides").innerHTML = (carousel.slides || []).map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.subtitle || slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
   const verificationLinks = Array.isArray(carousel.verificationLinks) ? carousel.verificationLinks : topicVerificationLinks(topic);
   const readingSources = new Map((reading.sources || []).map((item) => [safeUrl(item.url), item]));
-  document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Matérias e resultado da leitura</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
+  document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Fontes utilizadas e links originais</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
     const source = readingSources.get(safeUrl(link.url));
-    const status = source ? source.ok ? `${Number(source.wordCount) || 0} palavras lidas` : `Não lida: ${source.error || "portal bloqueou a extração"}` : "Link adicional para apuração";
-    return `<a class="carousel-source-link ${source?.ok ? "read-ok" : source ? "read-error" : ""}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
+    const level = source?.contentLevel === "content" ? "Texto do feed" : source?.contentLevel === "summary" ? "Resumo do feed" : source ? "Somente título" : "Link adicional";
+    const status = source ? `${level} · ${Number(source.wordCount) || 0} palavras` : "Link adicional para apuração";
+    return `<a class="carousel-source-link ${source ? "read-ok" : ""}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
   }).join("")}</div>`;
   document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
   document.getElementById("copyCarouselMessage").textContent = carousel.aiError ? `A IA falhou e foi usado o modo de contingência: ${carousel.aiError}` : "";

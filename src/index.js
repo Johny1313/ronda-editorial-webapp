@@ -20,7 +20,7 @@ import { parseFeed } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.0.0";
+const VERSION = "2.0.1";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -240,8 +240,9 @@ async function handleApi(request, env, url, ctx) {
         model: TRANSLATION_MODEL,
       },
       intelligentReading: {
-        ready: Boolean(articleAnalysisAi(env)?.run),
-        mode: "on-demand",
+        ready: true,
+        aiReady: Boolean(articleAnalysisAi(env)?.run),
+        mode: "round-collected-content",
         articleLimit: 5,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
@@ -309,8 +310,6 @@ async function handleApi(request, env, url, ctx) {
       const cached = await getIntelligentCarousel(db, cacheKey);
       if (cached) return json({ ok: true, cached: true, data: cached });
     }
-    const lock = await acquireLock(db, `intelligent-${cacheKey}`, 90 * 1000);
-    if (!lock) throw new HttpError(409, "A leitura inteligente deste assunto já está em andamento.");
     try {
       const data = await buildIntelligentCarousel(topic, {
         ai: articleAnalysisAi(env),
@@ -320,9 +319,7 @@ async function handleApi(request, env, url, ctx) {
       await saveIntelligentCarousel(db, { cacheKey, runId, topicId, payload: storedData, ttlHours: 48 });
       return json({ ok: true, cached: false, data: storedData });
     } catch (error) {
-      throw new HttpError(503, "Não foi possível concluir a leitura inteligente.", error instanceof Error ? error.message : String(error));
-    } finally {
-      await releaseLock(db, lock);
+      throw new HttpError(422, "Não foi possível gerar o roteiro com o conteúdo armazenado na ronda.", error instanceof Error ? error.message : String(error));
     }
   }
 

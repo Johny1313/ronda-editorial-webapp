@@ -43,7 +43,7 @@ O wrangler.jsonc já define:
 
 - Worker: ronda-editorial-webapp
 - Banco D1 com binding DB e provisionamento automático
-- Workers AI com binding AI para traduzir as fontes Mundo e analisar matérias completas
+- Workers AI com binding AI para traduzir as fontes Mundo e analisar conteúdo coletado pela ronda
 - Ronda automática a cada cinco minutos
 - Observabilidade ativada
 

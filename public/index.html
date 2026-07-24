@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.0">
+  <link rel="stylesheet" href="/styles.css?v=2.0.1">
 </head>
 <body>
   <main class="app">
@@ -30,7 +30,7 @@
         </div>
       </header>
 
-      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> Fontes internacionais e carrosséis são exibidos sempre em português; a leitura completa das matérias é executada sob demanda e armazenada por 48 horas.</div>
+      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> Fontes internacionais e carrosséis são exibidos sempre em português; o roteiro usa títulos, textos e resumos já coletados pela ronda e fica armazenado por 48 horas.</div>
       <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
@@ -107,7 +107,7 @@
   <div class="modal-backdrop" id="carouselModal" hidden>
     <section class="modal modal-wide carousel-modal" role="dialog" aria-modal="true" aria-labelledby="carouselTitle">
       <div class="modal-head"><div><p class="eyebrow">Apoio editorial</p><h2 id="carouselTitle">Roteiro para carrossel</h2></div><button class="close-modal" data-close="carouselModal" type="button" aria-label="Fechar">×</button></div>
-      <div class="carousel-loading" id="carouselLoading" hidden><span class="reader-spinner">↻</span><div><strong>Lendo as matérias completas…</strong><small>Abrindo os portais, removendo anúncios e menus e identificando o conteúdo principal.</small></div></div>
+      <div class="carousel-loading" id="carouselLoading" hidden><span class="reader-spinner">↻</span><div><strong>Analisando o conteúdo da ronda…</strong><small>Cruzando títulos, textos e resumos já coletados das fontes.</small></div></div>
       <div class="carousel-meta" id="carouselMeta"></div>
       <section class="carousel-reading" id="carouselReading" hidden aria-label="Resumo da leitura inteligente"></section>
       <section class="carousel-analysis" id="carouselAnalysis" hidden aria-label="Interpretação da notícia"></section>
@@ -120,6 +120,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.0.0" defer></script>
+  <script src="/app.js?v=2.0.1" defer></script>
 </body>
 </html>

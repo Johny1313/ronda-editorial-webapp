@@ -17,6 +17,8 @@ test("lê RSS 2.0 e respeita a janela de 24 horas", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "Matéria & teste");
   assert.equal(items[0].description, "Resumo");
+  assert.equal(items[0].content, "Resumo");
+  assert.equal(items[0].contentSource, "feed-description");
   assert.equal(items[0].url, "https://example.com/a");
 });
 
@@ -39,4 +41,15 @@ test("mantém o nome canônico e a região do portal em feeds agregados", () => 
 test("hash é estável", () => {
   assert.equal(stableHash("https://example.com"), stableHash("https://example.com"));
   assert.notEqual(stableHash("a"), stableHash("b"));
+});
+
+
+test("preserva conteúdo amplo entregue pelo feed", () => {
+  const body = "A notícia apresenta detalhes suficientes sobre o fato, os envolvidos, o local, a data, o impacto e os próximos passos. ".repeat(12);
+  const xml = `<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item><title>Notícia detalhada</title><link>https://example.com/full</link><pubDate>Wed, 22 Jul 2026 11:00:00 GMT</pubDate><description>Resumo curto</description><content:encoded><![CDATA[<p>${body}</p>]]></content:encoded></item></channel></rss>`;
+  const items = parseFeed(xml, { id: "full", name: "Fonte" }, new Date("2026-07-21T12:00:00Z"));
+  assert.equal(items.length, 1);
+  assert.equal(items[0].contentSource, "feed-content");
+  assert.ok(items[0].contentWordCount > 100);
+  assert.match(items[0].content, /próximos passos/);
 });

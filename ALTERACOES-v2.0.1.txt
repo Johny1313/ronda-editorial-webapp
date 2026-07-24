@@ -1,0 +1,17 @@
+RONDA EDITORIAL v2.0.1 — CONTEÚDO DA RONDA
+
+- O roteiro não reabre as URLs das matérias.
+- Usa o texto, resumo ou título recebido durante a coleta RSS/Atom.
+- Preserva até 2.400 caracteres por notícia para análise e armazenamento seguro no D1.
+- Remove o bloqueio específico de leitura que causava “já está em andamento”.
+- Evita erros 403/503 de portais durante a geração do carrossel.
+- Classifica a base como conteúdo amplo, parcial ou limitado.
+- Gera exatamente 7 slides com título e subtítulo.
+- Mantém links originais para apuração manual.
+- Fontes internacionais continuam em português.
+- Canva e sugestões de imagens não fazem parte desta versão.
+
+VALIDAÇÃO
+- 23 testes automatizados aprovados.
+- Bundle único do Cloudflare Worker gerado e importado com sucesso.
+- O smoke test com Miniflare não foi executado neste ambiente porque a dependência não estava instalada.

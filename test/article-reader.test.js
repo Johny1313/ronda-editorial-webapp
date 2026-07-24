@@ -28,18 +28,19 @@ test("bloqueia URLs locais e privadas", () => {
   assert.equal(validateArticleUrl("https://portal.test/materia"), "https://portal.test/materia");
 });
 
-test("lê matérias completas e gera os sete slides com IA estruturada", async () => {
+test("usa o conteúdo armazenado pela ronda e gera sete slides com título e subtítulo", async () => {
   const topic = {
     id: "topic-mobilidade",
     title: "Congresso aprova plano de mobilidade urbana",
     editoria: "Política",
     items: [
-      { id: "a", kind: "portal", title: "Congresso aprova plano", sourceName: "Portal A", collectorName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/materia" },
-      { id: "b", kind: "portal", title: "Plano prevê investimentos", sourceName: "Portal B", collectorName: "Portal B", publishedAt: "2026-07-24T09:50:00Z", url: "https://portal-b.test/materia" },
+      { id: "a", kind: "portal", title: "Congresso aprova plano", description: "O Congresso aprovou um plano nacional de mobilidade urbana, com novas diretrizes de transporte e investimentos.", content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content", sourceName: "Portal A", collectorName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/materia" },
+      { id: "b", kind: "portal", title: "Plano prevê investimentos", description: "O texto prevê corredores de ônibus, ciclovias e integração tarifária, mas ainda depende de detalhamento.", sourceName: "Portal B", collectorName: "Portal B", publishedAt: "2026-07-24T09:50:00Z", url: "https://portal-b.test/materia" },
       { id: "c", kind: "social", title: "Plano repercute entre especialistas", sourceName: "Jornalista", publishedAt: "2026-07-24T10:05:00Z", url: "https://bsky.app/profile/test/post/abc", interactions: 30 },
     ],
   };
-  const fetcher = async (url) => new Response(articleHtml(url.includes("portal-a") ? "Congresso aprova plano" : "Plano prevê investimentos"), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  let externalFetches = 0;
+  const fetcher = async () => { externalFetches += 1; throw new Error("não deveria buscar a matéria"); };
   const ai = {
     run: async () => ({ response: {
       questions: {
@@ -53,17 +54,36 @@ test("lê matérias completas e gera os sete slides com IA estruturada", async (
       entities: {
         people: [], companies: ["Congresso Nacional"], places: ["Brasil"], dates: ["24 de julho de 2026"], themes: ["mobilidade urbana"], keywords: ["transporte", "investimentos"],
       },
-      slides: Array.from({ length: 7 }, (_, index) => ({ number: index + 1, role: `Papel ${index + 1}`, title: `Título ${index + 1}`, body: `Corpo factual do slide ${index + 1}.` })),
+      slides: Array.from({ length: 7 }, (_, index) => ({ number: index + 1, role: `Papel ${index + 1}`, title: `Título ${index + 1}`, subtitle: `Subtítulo factual do slide ${index + 1}.` })),
     } }),
   };
 
   const result = await buildIntelligentCarousel(topic, { ai, fetcher });
+  assert.equal(externalFetches, 0);
   assert.equal(result.analysisMode, "ai");
+  assert.equal(result.reading.basis, "round-collected-content");
   assert.equal(result.reading.successful, 2);
-  assert.ok(result.reading.totalWords > 240);
+  assert.ok(result.reading.totalWords > 100);
   assert.equal(result.slides.length, 7);
+  assert.ok(result.slides.every((slide) => slide.title && slide.subtitle && slide.body === slide.subtitle));
   assert.deepEqual(result.slides.map((slide) => slide.role), ["Título principal", "Contexto", "Informação principal", "Detalhamento", "Consequência", "Conclusão", "CTA"]);
   assert.equal(result.questions.where, "Brasil.");
-  assert.ok(result.verificationLinks.length === 3);
+  assert.equal(result.verificationLinks.length, 3);
   assert.ok(result.reading.sources.every((source) => !("content" in source)));
+});
+
+test("gera roteiro preliminar mesmo quando a ronda possui apenas títulos", async () => {
+  const topic = {
+    id: "topic-limitado",
+    title: "Assunto em desenvolvimento",
+    editoria: "Notícias",
+    items: [
+      { id: "a", kind: "portal", title: "Primeira atualização do assunto", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/a" },
+      { id: "b", kind: "portal", title: "Nova informação é divulgada", sourceName: "Portal B", publishedAt: "2026-07-24T09:50:00Z", url: "https://portal-b.test/b" },
+    ],
+  };
+  const result = await buildIntelligentCarousel(topic);
+  assert.equal(result.reading.quality, "limited");
+  assert.equal(result.slides.length, 7);
+  assert.match(result.disclaimer, /preliminar/i);
 });
