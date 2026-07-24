@@ -11,6 +11,23 @@
       "binding": "DB"
     }
   ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "INTELLIGENT_JOBS_QUEUE",
+        "queue": "ronda-editorial-intelligent-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ronda-editorial-intelligent-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "retry_delay": 5
+      }
+    ]
+  },
   "ai": {
     "binding": "AI"
   },

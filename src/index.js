@@ -23,7 +23,8 @@ import { parseFeed } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.1.0";
+const VERSION = "2.1.1";
+const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -216,6 +217,64 @@ async function processIntelligentCarouselJob(env, job, topic) {
   }
 }
 
+
+async function resolveTopicForIntelligentJob(env, job) {
+  const db = requireDatabase(env);
+  let payload;
+  if (job.runId && job.runId !== "latest") {
+    const stored = await getRunPayload(db, job.runId);
+    if (!stored?.payload) throw new Error("A ronda vinculada a esta tarefa não está mais disponível.");
+    payload = withEditorias({
+      ...stored.payload,
+      runId: stored.id,
+      triggerType: stored.triggerType,
+      storedAt: stored.completedAt,
+    });
+  } else {
+    payload = withEditorias(await getLatestRound(db));
+  }
+  if (!payload?.ok || !Array.isArray(payload.topics)) throw new Error("Não há uma ronda válida para processar esta tarefa.");
+  const topic = payload.topics.find((item) => item?.id === job.topicId);
+  if (!topic) throw new Error("O assunto da tarefa não foi encontrado na ronda armazenada.");
+  return topic;
+}
+
+async function processIntelligentQueueBatch(batch, env) {
+  for (const message of batch.messages || []) {
+    const body = message?.body && typeof message.body === "object" ? message.body : {};
+    const jobId = String(body.jobId || "").trim();
+    if (!jobId) {
+      message?.ack?.();
+      continue;
+    }
+    try {
+      const db = requireDatabase(env);
+      const job = await getIntelligentJob(db, jobId);
+      if (!job || (job.status === "succeeded" && job.payload)) {
+        message?.ack?.();
+        continue;
+      }
+      const topic = await resolveTopicForIntelligentJob(env, job);
+      await processIntelligentCarouselJob(env, job, topic);
+      message?.ack?.();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error("Consumidor da fila de leitura inteligente falhou", detail);
+      try {
+        await updateIntelligentJob(requireDatabase(env), {
+          jobId,
+          status: "failed",
+          progress: 100,
+          message: "A leitura foi interrompida no consumidor da fila.",
+          error: detail,
+        });
+      } catch {}
+      if (Number(message?.attempts || 1) < 3 && message?.retry) message.retry({ delaySeconds: 5 });
+      else message?.ack?.();
+    }
+  }
+}
+
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
@@ -322,6 +381,8 @@ async function handleApi(request, env, url, ctx) {
         aiReady: Boolean(articleAnalysisAi(env)?.run),
         mode: "live-article-with-feed-fallback",
         asynchronousJobs: true,
+        queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
+        executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 5,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
@@ -374,7 +435,7 @@ async function handleApi(request, env, url, ctx) {
         status: "failed",
         progress: 100,
         message: "O processamento foi interrompido e pode ser reiniciado.",
-        error: "A tarefa ficou sem atualização por mais de 45 segundos.",
+        error: `A tarefa ficou sem atualização por mais de ${INTELLIGENT_JOB_STALE_LABEL}.`,
       });
     }
     return json({
@@ -416,11 +477,34 @@ async function handleApi(request, env, url, ctx) {
       return json({ ok: true, cached: true, status: "succeeded", data: queued.job.payload });
     }
     if (queued.created) {
-      const task = processIntelligentCarouselJob(env, queued.job, topic);
-      if (ctx?.waitUntil) ctx.waitUntil(task);
-      else {
-        const data = await task;
+      if (env.INTELLIGENT_JOBS_QUEUE?.send) {
+        try {
+          await env.INTELLIGENT_JOBS_QUEUE.send({
+            jobId: queued.job.jobId,
+            runId: queued.job.runId,
+            topicId: queued.job.topicId,
+          });
+          queued.job = await updateIntelligentJob(db, {
+            jobId: queued.job.jobId,
+            status: "queued",
+            progress: 2,
+            message: "Leitura enviada para processamento seguro.",
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          await updateIntelligentJob(db, {
+            jobId: queued.job.jobId,
+            status: "failed",
+            progress: 100,
+            message: "Não foi possível enviar a leitura para a fila.",
+            error: detail,
+          });
+          throw new HttpError(503, "Fila de leitura indisponível.", detail);
+        }
+      } else {
+        const data = await processIntelligentCarouselJob(env, queued.job, topic);
         if (data) return json({ ok: true, cached: false, status: "succeeded", data });
+        throw new HttpError(503, "A leitura inteligente não foi concluída.", "Configure o binding INTELLIGENT_JOBS_QUEUE para processamento assíncrono estável.");
       }
     }
     return json({
@@ -483,7 +567,7 @@ async function handleRequest(request, env, ctx) {
   return json({ ok: false, error: "Página não encontrada." }, 404);
 }
 
-export { handleRequest, performRound, processIntelligentCarouselJob, selfTest };
+export { handleRequest, performRound, processIntelligentCarouselJob, processIntelligentQueueBatch, selfTest };
 
 export default {
   async fetch(request, env, ctx) {
@@ -495,6 +579,10 @@ export default {
       const detail = error instanceof HttpError ? error.detail : error instanceof Error ? error.message.slice(0, 300) : null;
       return json({ ok: false, error: message, ...(detail ? { detail } : {}) }, status);
     }
+  },
+
+  async queue(batch, env, ctx) {
+    ctx.waitUntil(processIntelligentQueueBatch(batch, env));
   },
 
   async scheduled(_controller, env, ctx) {

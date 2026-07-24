@@ -514,7 +514,7 @@ function setCarouselJobProgress(job = {}) {
 }
 
 async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1_200) {
-  const deadline = Date.now() + 65_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (requestSerial !== state.carouselRequestSerial) return null;
     await wait(Math.max(700, Number(pollAfterMs) || 1_200));
@@ -525,7 +525,7 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1_200) 
     if (job.status === "failed") throw new Error(job.error || job.message || "O processamento foi interrompido.");
     setCarouselJobProgress(job);
   }
-  throw new Error("A leitura ultrapassou o tempo esperado. Tente novamente para retomar o processamento.");
+  throw new Error("A leitura ultrapassou três minutos. O processamento pode continuar na fila; feche e abra novamente este assunto para consultar o resultado.");
 }
 
 function questionCard(label, value) {

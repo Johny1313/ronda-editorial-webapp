@@ -348,7 +348,7 @@ function parseIntelligentJob(row) {
     createdAt: row.created_at,
     updatedAt,
     expiresAt: row.expires_at,
-    stale: active && Date.now() - Date.parse(updatedAt) > 45_000,
+    stale: active && Date.now() - Date.parse(updatedAt) > 10 * 60 * 1000,
   };
 }
 
@@ -361,7 +361,7 @@ export async function getIntelligentJob(db, jobId) {
   return parseIntelligentJob(row);
 }
 
-export async function createIntelligentJob(db, { cacheKey, runId, topicId, staleMs = 45_000, ttlMinutes = 120 } = {}) {
+export async function createIntelligentJob(db, { cacheKey, runId, topicId, staleMs = 10 * 60 * 1000, ttlMinutes = 120 } = {}) {
   await ensureSchema(db);
   const existingRow = await db
     .prepare("SELECT * FROM intelligent_jobs WHERE cache_key = ? LIMIT 1")
