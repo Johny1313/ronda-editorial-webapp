@@ -43,7 +43,7 @@ O wrangler.jsonc já define:
 
 - Worker: ronda-editorial-webapp
 - Banco D1 com binding DB e provisionamento automático
-- Workers AI com binding AI para traduzir as fontes Mundo e analisar conteúdo coletado pela ronda
+- Workers AI com binding AI para traduzir as fontes Mundo e estruturar o roteiro das matérias
 - Ronda automática a cada cinco minutos
 - Observabilidade ativada
 
@@ -71,7 +71,7 @@ Resultados esperados:
 - self-test: "ok":true e "readWriteDelete":true
 - health: "ready":true, "database":"connected", "translation":{"ready":true} e "intelligentReading":{"ready":true}
 
-Depois abra a página principal, clique em Executar ronda e use “Ler matérias e gerar carrossel” em um assunto. A primeira leitura pode levar alguns segundos; as seguintes usam o cache de 48 horas.
+Depois abra a página principal, clique em Executar ronda e use “Ler matérias e gerar carrossel” em um assunto. A primeira leitura aparece como uma tarefa com progresso; as seguintes usam o cache de 48 horas. Se um portal bloquear a matéria, o feed é usado automaticamente.
 
 ATUALIZAÇÕES FUTURAS
 --------------------

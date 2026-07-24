@@ -28,7 +28,7 @@ test("bloqueia URLs locais e privadas", () => {
   assert.equal(validateArticleUrl("https://portal.test/materia"), "https://portal.test/materia");
 });
 
-test("usa o conteúdo armazenado pela ronda e gera sete slides com título e subtítulo", async () => {
+test("lê as matérias, usa fallback do feed e gera sete slides com título e subtítulo", async () => {
   const topic = {
     id: "topic-mobilidade",
     title: "Congresso aprova plano de mobilidade urbana",
@@ -40,7 +40,13 @@ test("usa o conteúdo armazenado pela ronda e gera sete slides com título e sub
     ],
   };
   let externalFetches = 0;
-  const fetcher = async () => { externalFetches += 1; throw new Error("não deveria buscar a matéria"); };
+  const fetcher = async (url) => {
+    externalFetches += 1;
+    if (String(url).includes("portal-a.test")) {
+      return new Response(articleHtml("Congresso aprova plano"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+    throw new Error("portal bloqueou a leitura direta");
+  };
   const ai = {
     run: async () => ({ response: {
       questions: {
@@ -59,10 +65,13 @@ test("usa o conteúdo armazenado pela ronda e gera sete slides com título e sub
   };
 
   const result = await buildIntelligentCarousel(topic, { ai, fetcher });
-  assert.equal(externalFetches, 0);
+  assert.equal(externalFetches, 2);
   assert.equal(result.analysisMode, "ai");
-  assert.equal(result.reading.basis, "round-collected-content");
+  assert.equal(result.reading.basis, "live-article-with-feed-fallback");
   assert.equal(result.reading.successful, 2);
+  assert.equal(result.reading.liveSuccessful, 1);
+  assert.equal(result.reading.fallbackSources, 1);
+  assert.equal(result.reading.blockedSources, 1);
   assert.ok(result.reading.totalWords > 100);
   assert.equal(result.slides.length, 7);
   assert.ok(result.slides.every((slide) => slide.title && slide.subtitle && slide.body === slide.subtitle));
@@ -82,8 +91,10 @@ test("gera roteiro preliminar mesmo quando a ronda possui apenas títulos", asyn
       { id: "b", kind: "portal", title: "Nova informação é divulgada", sourceName: "Portal B", publishedAt: "2026-07-24T09:50:00Z", url: "https://portal-b.test/b" },
     ],
   };
-  const result = await buildIntelligentCarousel(topic);
+  const result = await buildIntelligentCarousel(topic, { fetcher: async () => { throw new Error("bloqueado"); } });
   assert.equal(result.reading.quality, "limited");
+  assert.equal(result.reading.liveSuccessful, 0);
+  assert.equal(result.reading.fallbackSources, 2);
   assert.equal(result.slides.length, 7);
   assert.match(result.disclaimer, /preliminar/i);
 });

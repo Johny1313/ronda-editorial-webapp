@@ -39,11 +39,13 @@ IMPORTANTE
 - Os portais são a base da ronda. O Bluesky é apenas um complemento social.
 - Notícias das fontes Mundo são traduzidas para português pelo Workers AI.
   Se uma tradução falhar, a notícia é omitida em vez de aparecer em outro idioma.
-- No botão de roteiro, a Leitura Inteligente abre até cinco conteúdo coletado pela ronda,
+- No botão de roteiro, a Leitura Inteligente abre até cinco matérias em paralelo,
   remove menus e anúncios, responde às perguntas editoriais e cria sete slides.
-- O resultado da leitura fica salvo no D1 por 48 horas. Portais com paywall ou
-  bloqueio podem impedir a extração; o painel identifica cada falha e mantém
-  os links originais para apuração manual.
+- A tarefa continua no Worker e o painel acompanha o progresso. Uma leitura já
+  iniciada é reutilizada; tarefas interrompidas podem ser reiniciadas.
+- O resultado fica salvo no D1 por 48 horas. Portais com paywall ou bloqueio
+  usam automaticamente o texto ou resumo do feed, mantendo os links originais
+  para apuração manual.
 - Uma fonte isolada pode falhar sem derrubar a ronda; o painel mostra o estado
   de cada uma e o Worker usa rotas alternativas.
 - Fontes externas podem mudar ou bloquear seus feeds no futuro. O autoteste

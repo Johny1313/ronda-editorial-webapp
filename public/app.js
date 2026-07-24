@@ -16,6 +16,7 @@ const state = {
   smartCarousels: new Map(),
   activeTopicId: null,
   carouselLoading: false,
+  carouselRequestSerial: 0,
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -64,7 +65,8 @@ async function api(path, options = {}) {
   const response = await fetch(path, { cache: "no-store", ...options });
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(payload?.error || payload?.detail || `Falha HTTP ${response.status}`);
+    const parts = [payload?.error, payload?.detail].filter((value, index, list) => value && list.indexOf(value) === index);
+    const error = new Error(parts.join(" — ") || `Falha HTTP ${response.status}`);
     error.status = response.status;
     error.payload = payload;
     throw error;
@@ -219,7 +221,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Conteúdo já coletado de até 5 fontes</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Leitura de até 5 matérias com fallback automático</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -261,6 +263,7 @@ function openModal(id) {
 
 function closeModal(id) {
   document.getElementById(id).hidden = true;
+  if (id === "carouselModal") state.carouselRequestSerial += 1;
 }
 
 function operationToken() {
@@ -439,11 +442,13 @@ function carouselAsText(topic, carousel) {
   const reading = carousel?.reading || {};
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
-    "LEITURA INTELIGENTE — CONTEÚDO DA RONDA",
+    "LEITURA INTELIGENTE — MATÉRIAS + FALLBACK DE FEED",
     `Modo: ${carousel?.analysisMode === "ai" ? "Workers AI" : "Análise automática de contingência"}`,
-    `Qualidade: ${reading.qualityLabel || "Conteúdo coletado"}`,
+    `Qualidade: ${reading.qualityLabel || "Conteúdo disponível"}`,
     `Fontes utilizadas: ${Number(reading.successful) || 0}/${Number(reading.requested) || 0}`,
-    `Palavras coletadas: ${Number(reading.totalWords) || 0}`,
+    `Matérias lidas diretamente: ${Number(reading.liveSuccessful) || 0}`,
+    `Fontes em fallback: ${Number(reading.fallbackSources) || 0}`,
+    `Palavras analisadas: ${Number(reading.totalWords) || 0}`,
     `Tom de voz: ${carousel?.voiceTone || "Jornalístico, factual e explicativo"}`,
     `Formato: ${carousel?.postModel || "Instagram · 7 slides"}`,
     "",
@@ -484,15 +489,43 @@ function carouselCacheKey(topicId) {
   return `${state.data?.runId || state.lastRunId || "latest"}:${topicId}`;
 }
 
-function setCarouselLoading(loading, message = "") {
+function setCarouselLoading(loading, message = "", options = {}) {
   state.carouselLoading = loading;
   const holder = document.getElementById("carouselLoading");
   holder.hidden = false;
   holder.classList.toggle("error", !loading && Boolean(message));
-  holder.innerHTML = loading
-    ? '<span class="reader-spinner">↻</span><div><strong>Analisando o conteúdo da ronda…</strong><small>Cruzando títulos, textos e resumos que as fontes já entregaram durante a coleta.</small></div>'
-    : `<span class="reader-error">!</span><div><strong>Roteiro não concluído</strong><small>${escapeHtml(message)}</small></div>`;
+  const progress = Math.max(0, Math.min(100, Number(options.progress) || 0));
+  const title = options.title || (loading ? "Leitura inteligente em andamento" : "Roteiro não concluído");
+  if (loading) {
+    holder.innerHTML = `<span class="reader-spinner">↻</span><div class="reader-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(message || "Abrindo as matérias e preparando o roteiro.")}</small><div class="reader-progress"><i style="width:${progress}%"></i></div><em>${progress}%</em></div>`;
+  } else {
+    const retry = options.retry ? '<button class="reader-retry" data-retry-carousel type="button">Tentar novamente</button>' : "";
+    holder.innerHTML = `<span class="reader-error">!</span><div class="reader-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(message)}</small>${retry}</div>`;
+  }
   document.getElementById("copyCarousel").disabled = loading || Boolean(message);
+}
+
+function setCarouselJobProgress(job = {}) {
+  const statusTitle = job.status === "queued" ? "Leitura adicionada à fila" : "Leitura inteligente em andamento";
+  setCarouselLoading(true, job.message || "Processando as fontes.", {
+    progress: Number(job.progress) || 1,
+    title: statusTitle,
+  });
+}
+
+async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1_200) {
+  const deadline = Date.now() + 65_000;
+  while (Date.now() < deadline) {
+    if (requestSerial !== state.carouselRequestSerial) return null;
+    await wait(Math.max(700, Number(pollAfterMs) || 1_200));
+    if (requestSerial !== state.carouselRequestSerial) return null;
+    const response = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
+    const job = response?.job || {};
+    if (job.status === "succeeded" && response?.data?.slides?.length) return response.data;
+    if (job.status === "failed") throw new Error(job.error || job.message || "O processamento foi interrompido.");
+    setCarouselJobProgress(job);
+  }
+  throw new Error("A leitura ultrapassou o tempo esperado. Tente novamente para retomar o processamento.");
 }
 
 function questionCard(label, value) {
@@ -511,7 +544,7 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
-  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Conteúdo da ronda</p><h3>Análise baseada no material já coletado</h3></div><span>${Number(reading.successful) || 0}/${Number(reading.requested) || 0} fontes</span></div><div class="reading-stats"><span><small>Qualidade do material</small><strong>${escapeHtml(reading.qualityLabel || "Conteúdo coletado")}</strong></span><span><small>Palavras coletadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Processamento</small><strong>${carousel.analysisMode === "ai" ? "IA estruturada" : "Fallback local"}</strong></span></div>`;
+  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Leitura das matérias</p><h3>Extração direta com fallback automático</h3></div><span>${Number(reading.successful) || 0}/${Number(reading.requested) || 0} fontes</span></div><div class="reading-stats"><span><small>Matérias lidas</small><strong>${Number(reading.liveSuccessful) || 0}</strong></span><span><small>Fallback de feed</small><strong>${Number(reading.fallbackSources) || 0}</strong></span><span><small>Palavras analisadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Qualidade</small><strong>${escapeHtml(reading.qualityLabel || "Conteúdo disponível")}</strong></span></div>`;
 
   const questions = carousel.questions || {};
   const analysisHolder = document.getElementById("carouselAnalysis");
@@ -528,9 +561,11 @@ function renderIntelligentCarousel(topic, carousel) {
   const readingSources = new Map((reading.sources || []).map((item) => [safeUrl(item.url), item]));
   document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Fontes utilizadas e links originais</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
     const source = readingSources.get(safeUrl(link.url));
-    const level = source?.contentLevel === "content" ? "Texto do feed" : source?.contentLevel === "summary" ? "Resumo do feed" : source ? "Somente título" : "Link adicional";
-    const status = source ? `${level} · ${Number(source.wordCount) || 0} palavras` : "Link adicional para apuração";
-    return `<a class="carousel-source-link ${source ? "read-ok" : ""}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
+    const direct = source?.readMode === "full-article";
+    const level = direct ? "Matéria lida" : source?.contentLevel === "content" ? "Fallback · texto do feed" : source?.contentLevel === "summary" ? "Fallback · resumo do feed" : source ? "Fallback · somente título" : "Link adicional";
+    const status = source ? `${level} · ${Number(source.wordCount) || 0} palavras${source.liveReadError ? ` · ${source.liveReadError}` : ""}` : "Link adicional para apuração";
+    const sourceClass = direct ? "read-ok" : source ? "read-fallback" : "";
+    return `<a class="carousel-source-link ${sourceClass}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
   }).join("")}</div>`;
   document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
   document.getElementById("copyCarouselMessage").textContent = carousel.aiError ? `A IA falhou e foi usado o modo de contingência: ${carousel.aiError}` : "";
@@ -538,12 +573,14 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("copyCarousel").disabled = false;
 }
 
-async function showCarousel(topicId) {
+async function showCarousel(topicId, { force = false } = {}) {
   const topic = (state.data?.topics || []).find((item) => item.id === topicId);
   if (!topic) {
     setStatus("warn", "Assunto indisponível", "Atualize a ronda e tente novamente.");
     return;
   }
+  const requestSerial = state.carouselRequestSerial + 1;
+  state.carouselRequestSerial = requestSerial;
   state.activeTopicId = topicId;
   document.getElementById("carouselTitle").textContent = topic.title;
   document.getElementById("carouselMeta").innerHTML = "";
@@ -558,27 +595,35 @@ async function showCarousel(topicId) {
   openModal("carouselModal");
 
   const key = carouselCacheKey(topicId);
-  const cached = state.smartCarousels.get(key);
+  const cached = !force ? state.smartCarousels.get(key) : null;
   if (cached) {
     renderIntelligentCarousel(topic, cached);
     return;
   }
-  setCarouselLoading(true);
+  setCarouselLoading(true, "Abrindo as matérias e preparando o processamento.", { progress: 1 });
   const token = operationToken();
   try {
     const response = await api(`/api/topics/${encodeURIComponent(topicId)}/intelligent-carousel`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "X-Round-Token": token } : {}) },
-      body: JSON.stringify({ runId: state.data?.runId || state.lastRunId || null }),
+      body: JSON.stringify({ runId: state.data?.runId || state.lastRunId || null, force }),
     });
-    if (!response?.data?.slides?.length) throw new Error("O servidor não retornou os sete slides esperados.");
-    state.smartCarousels.set(key, response.data);
-    renderIntelligentCarousel(topic, response.data);
+    if (requestSerial !== state.carouselRequestSerial) return;
+    let data = response?.data;
+    if (!data?.slides?.length && response?.job?.jobId) {
+      setCarouselJobProgress(response.job);
+      data = await waitForIntelligentJob(response.job.jobId, requestSerial, response.pollAfterMs);
+    }
+    if (requestSerial !== state.carouselRequestSerial || !data) return;
+    if (!data.slides?.length) throw new Error("O servidor não retornou os sete slides esperados.");
+    state.smartCarousels.set(key, data);
+    renderIntelligentCarousel(topic, data);
   } catch (error) {
+    if (requestSerial !== state.carouselRequestSerial) return;
     if (error.status === 401) {
       document.getElementById("tokenMessage").textContent = "Informe a chave do Worker para usar a leitura inteligente.";
     }
-    setCarouselLoading(false, error.message);
+    setCarouselLoading(false, error.message, { retry: true });
     document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração manual</p><h3>Abra as notícias originais</h3></div></div><div class="carousel-source-list">${topicVerificationLinks(topic).map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
   }
 }
@@ -648,6 +693,10 @@ document.getElementById("topicsGrid").addEventListener("click", (event) => {
   if (button) showCarousel(button.dataset.carouselTopic);
 });
 document.getElementById("copyCarousel").addEventListener("click", copyCarouselText);
+document.getElementById("carouselLoading").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-retry-carousel]");
+  if (button && state.activeTopicId) showCarousel(state.activeTopicId, { force: true });
+});
 document.getElementById("settingsButton").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("openSettings").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("navHistory").addEventListener("click", showHistory);

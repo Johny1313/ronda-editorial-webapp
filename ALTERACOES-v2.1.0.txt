@@ -1,0 +1,34 @@
+RONDA EDITORIAL v2.1.0 — LEITURA ESTÁVEL DE MATÉRIAS
+
+CORREÇÃO PRINCIPAL
+- A leitura inteligente não depende mais de uma única requisição HTTP aberta.
+- Cada roteiro é processado como uma tarefa assíncrona persistida no D1.
+- O painel consulta o progresso até receber o resultado.
+- Uma tarefa já em execução é reutilizada, sem retornar o erro “já está em andamento”.
+- Tarefas sem atualização por 45 segundos são marcadas como interrompidas e podem ser recriadas.
+
+LEITURA DAS MATÉRIAS
+- Abre até cinco URLs simultaneamente.
+- Timeout de 7,5 segundos por matéria.
+- Extrai JSON-LD, article, main e blocos editoriais.
+- Remove anúncios, menus, widgets, newsletters, comentários e conteúdo repetido.
+- Tenta o link AMP indicado pelo portal quando o texto principal é insuficiente.
+- Valida redirecionamentos e bloqueia endereços privados.
+
+CONTINGÊNCIA
+- Se um portal responder 403, 429, 503, timeout, paywall ou conteúdo insuficiente, usa o conteúdo armazenado no feed.
+- A falha de uma fonte não interrompe as demais.
+- Workers AI possui timeout de 14 segundos.
+- Se a IA falhar ou retornar JSON inválido, o roteiro heurístico de sete slides é concluído e salvo.
+
+INTERFACE
+- Exibe fila, progresso e etapa atual.
+- Mostra quantas matérias foram lidas e quantas usaram fallback.
+- Identifica o status de cada fonte.
+- Inclui botão Tentar novamente.
+- Cache de 48 horas preservado.
+
+VALIDAÇÃO
+- 23 testes automatizados aprovados.
+- Bundle único do Cloudflare Worker gerado e validado por sintaxe.
+- O smoke test Miniflare está incluído e atualizado para o fluxo assíncrono.

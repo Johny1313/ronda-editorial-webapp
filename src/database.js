@@ -44,6 +44,22 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_run_topic ON intelligent_carousels(run_id, topic_id)",
   "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at)",
+  `CREATE TABLE IF NOT EXISTS intelligent_jobs (
+    cache_key TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    progress INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    error TEXT,
+    payload_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_job_id ON intelligent_jobs(job_id)",
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_expires ON intelligent_jobs(expires_at)",
 ];
 
 export async function ensureSchema(db) {
@@ -162,6 +178,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(Date.now() - 5 * 60 * 1000),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(new Date().toISOString()),
+    db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(new Date().toISOString()),
   ]);
   return { id, status, completedAt };
 }
@@ -307,6 +324,123 @@ export async function saveIntelligentCarousel(db, { cacheKey, runId, topicId, pa
     .bind(cacheKey, runId, topicId, JSON.stringify(payload), updatedAt, expiresAt)
     .run();
   return { updatedAt, expiresAt };
+}
+
+
+function parseIntelligentJob(row) {
+  if (!row) return null;
+  let payload = null;
+  if (row.payload_json) {
+    try { payload = JSON.parse(row.payload_json); } catch {}
+  }
+  const updatedAt = row.updated_at || row.created_at;
+  const active = row.status === "queued" || row.status === "running";
+  return {
+    cacheKey: row.cache_key,
+    jobId: row.job_id,
+    runId: row.run_id,
+    topicId: row.topic_id,
+    status: row.status,
+    progress: Math.max(0, Math.min(100, Number(row.progress) || 0)),
+    message: row.message || "",
+    error: row.error || null,
+    payload,
+    createdAt: row.created_at,
+    updatedAt,
+    expiresAt: row.expires_at,
+    stale: active && Date.now() - Date.parse(updatedAt) > 45_000,
+  };
+}
+
+export async function getIntelligentJob(db, jobId) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT * FROM intelligent_jobs WHERE job_id = ? LIMIT 1")
+    .bind(jobId)
+    .first();
+  return parseIntelligentJob(row);
+}
+
+export async function createIntelligentJob(db, { cacheKey, runId, topicId, staleMs = 45_000, ttlMinutes = 120 } = {}) {
+  await ensureSchema(db);
+  const existingRow = await db
+    .prepare("SELECT * FROM intelligent_jobs WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  const existing = parseIntelligentJob(existingRow);
+  const existingAge = existing?.updatedAt ? Date.now() - Date.parse(existing.updatedAt) : Number.POSITIVE_INFINITY;
+  if (existing && ((["queued", "running"].includes(existing.status) && existingAge <= staleMs) || (existing.status === "succeeded" && existing.payload))) {
+    return { created: false, job: existing };
+  }
+
+  const now = new Date().toISOString();
+  const jobId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + Math.max(15, Number(ttlMinutes) || 120) * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO intelligent_jobs (
+      cache_key, job_id, run_id, topic_id, status, progress, message, error,
+      payload_json, created_at, updated_at, expires_at
+    ) VALUES (?, ?, ?, ?, 'queued', 1, ?, NULL, NULL, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      job_id = excluded.job_id,
+      run_id = excluded.run_id,
+      topic_id = excluded.topic_id,
+      status = excluded.status,
+      progress = excluded.progress,
+      message = excluded.message,
+      error = NULL,
+      payload_json = NULL,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      expires_at = excluded.expires_at
+  `).bind(cacheKey, jobId, runId, topicId, "Leitura adicionada à fila.", now, now, expiresAt).run();
+  return {
+    created: true,
+    job: {
+      cacheKey,
+      jobId,
+      runId,
+      topicId,
+      status: "queued",
+      progress: 1,
+      message: "Leitura adicionada à fila.",
+      error: null,
+      payload: null,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt,
+      stale: false,
+    },
+  };
+}
+
+export async function updateIntelligentJob(db, {
+  jobId,
+  status,
+  progress = 0,
+  message = "",
+  error = null,
+  payload = null,
+  ttlMinutes = 120,
+} = {}) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(15, Number(ttlMinutes) || 120) * 60 * 1000).toISOString();
+  await db.prepare(`
+    UPDATE intelligent_jobs
+    SET status = ?, progress = ?, message = ?, error = ?, payload_json = ?, updated_at = ?, expires_at = ?
+    WHERE job_id = ?
+  `).bind(
+    status,
+    Math.max(0, Math.min(100, Number(progress) || 0)),
+    message || "",
+    error ? String(error).slice(0, 300) : null,
+    payload ? JSON.stringify(payload) : null,
+    updatedAt,
+    expiresAt,
+    jobId,
+  ).run();
+  return getIntelligentJob(db, jobId);
 }
 
 export async function databaseHealth(db) {

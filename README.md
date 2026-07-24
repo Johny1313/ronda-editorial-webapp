@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.0.1:** a Leitura Inteligente agora utiliza exclusivamente o conteúdo que a própria ronda recebeu dos feeds. O Worker não reabre as URLs das matérias para gerar o roteiro, evitando bloqueios 403/503, paywalls e estados de processamento presos. O resultado contém sete slides com título e subtítulo. Canva e sugestões de imagens não fazem parte desta versão.
+**Versão 2.1.0:** a Leitura Inteligente volta a abrir até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando ela é indicada pelo portal. O processamento acontece em uma tarefa assíncrona acompanhada por polling, sem manter a janela presa a uma única requisição. Quando um portal bloqueia a leitura, o sistema usa automaticamente o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
 
 ## Versão GitHub recomendada
 
@@ -26,10 +26,15 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
 - Prévia editorial de carrossel em sete slides na coleta.
-- Botão **Gerar roteiro de carrossel** cruza até cinco fontes distintas do assunto.
-- A análise usa o texto, resumo ou título que o feed já forneceu durante a ronda; nenhuma URL é reaberta nessa etapa.
-- Cada item preserva até 2.400 caracteres do conteúdo recebido, mantendo o payload seguro para armazenamento no D1.
-- O painel identifica a qualidade disponível como conteúdo amplo, parcial ou limitado.
+- Botão **Gerar roteiro de carrossel** abre simultaneamente até cinco matérias de fontes distintas.
+- Extração do conteúdo principal por JSON-LD, `<article>`, `<main>` e blocos editoriais; menus, anúncios, widgets e textos repetidos são removidos.
+- Quando a página indica uma versão AMP e a leitura principal é insuficiente, o Worker tenta a versão AMP.
+- Cada portal possui tempo limite independente. Falhas 403/429/503, paywall, HTML insuficiente ou timeout não derrubam o roteiro.
+- Em caso de bloqueio, a análise usa automaticamente o texto, resumo ou título que o feed já forneceu durante a ronda.
+- O processamento é gravado no D1 como tarefa com estados `queued`, `running`, `succeeded` e `failed`; tarefas sem atualização são liberadas para nova tentativa.
+- O painel acompanha o progresso, reutiliza uma tarefa já em execução e oferece **Tentar novamente** quando necessário.
+- Cada item preserva até 2.400 caracteres do conteúdo recebido na ronda, mantendo uma base de contingência segura.
+- O painel informa quantas matérias foram lidas diretamente, quantas usaram fallback e a qualidade do material.
 - Respostas estruturadas para: o que aconteceu, quem está envolvido, onde, quando, impacto e repercussão.
 - Extração de personagens, empresas, locais, datas, temas e palavras-chave.
 - Carrossel Instagram com exatamente sete slides: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA; cada slide possui título e subtítulo.
@@ -55,7 +60,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 O código e a infraestrutura são verificáveis, mas fontes externas podem mudar endereços ou bloquear consultas. Por isso a coleta aceita falhas parciais, registra a situação de cada fonte e utiliza fallbacks. Sem APIs oficiais ou comerciais, esta versão não monitora integralmente Instagram, TikTok ou X.
 
-O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para analisar conteúdo coletado pela ronda. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA de análise falhar, o sistema gera um roteiro de contingência a partir do conteúdo coletado e sinaliza que a revisão deve ser completa.
+O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para estruturar o roteiro. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA exceder o tempo limite, retornar JSON inválido ou falhar, o sistema conclui a tarefa com um roteiro de contingência. Para desativar temporariamente a leitura direta e trabalhar apenas com os feeds, defina `ARTICLE_LIVE_READING=0`.
 
 ## Alternativa sem GitHub — editor do Worker
 
@@ -126,7 +131,7 @@ npm run smoke
 npm run dev
 ```
 
-`npm run smoke` executa o Worker compilado no emulador oficial, simula portais e Bluesky, grava a ronda no D1 e confirma dashboard, análise do conteúdo coletado, sete slides, cache, histórico e saúde.
+`npm run smoke` executa o Worker compilado no emulador oficial, simula portais e Bluesky, grava a ronda no D1 e confirma dashboard, tarefa assíncrona, leitura direta das matérias, fallback, sete slides, cache, histórico e saúde.
 
 Rotas principais:
 
@@ -140,7 +145,8 @@ Rotas principais:
 | `/api/runs/:id` | GET | Acompanha uma ronda manual em andamento |
 | `/api/runs/:id/data` | GET | Recupera as notícias armazenadas em uma ronda histórica |
 | `/api/round` | POST | Executa uma ronda manual |
-| `/api/topics/:topicId/intelligent-carousel` | POST | Analisa o conteúdo armazenado no assunto e devolve o carrossel de sete slides |
+| `/api/topics/:topicId/intelligent-carousel` | POST | Recupera o cache ou inicia a tarefa assíncrona de leitura e roteiro |
+| `/api/intelligent-jobs/:jobId` | GET | Acompanha progresso, falha ou resultado da leitura inteligente |
 
 ## Arquivos
 

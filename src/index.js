@@ -3,10 +3,12 @@ import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtm
 import { collectRound } from "./collector.js";
 import {
   acquireLock,
+  createIntelligentJob,
   databaseHealth,
   databaseSelfTest,
   ensureSchema,
   getIntelligentCarousel,
+  getIntelligentJob,
   getLatestRound,
   getRunHistory,
   getRunPayload,
@@ -15,12 +17,13 @@ import {
   saveIntelligentCarousel,
   saveRun,
   startRun,
+  updateIntelligentJob,
 } from "./database.js";
 import { parseFeed } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.0.1";
+const VERSION = "2.1.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -138,6 +141,81 @@ function articleAnalysisAi(env) {
   return null;
 }
 
+
+function publicIntelligentJob(job) {
+  return {
+    jobId: job.jobId,
+    status: job.status,
+    progress: job.progress,
+    message: job.message,
+    error: job.error,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    expiresAt: job.expiresAt,
+    stale: Boolean(job.stale),
+  };
+}
+
+async function processIntelligentCarouselJob(env, job, topic) {
+  const db = requireDatabase(env);
+  const started = await updateIntelligentJob(db, {
+    jobId: job.jobId,
+    status: "running",
+    progress: 4,
+    message: "Preparando a leitura das fontes.",
+  });
+  if (!started) return null;
+  try {
+    const data = await buildIntelligentCarousel(topic, {
+      ai: articleAnalysisAi(env),
+      model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+      fetcher: fetch,
+      liveReading: env.ARTICLE_LIVE_READING !== "0",
+      onProgress: async ({ progress, message }) => {
+        await updateIntelligentJob(db, {
+          jobId: job.jobId,
+          status: "running",
+          progress,
+          message,
+        });
+      },
+    });
+    const storedData = {
+      ...data,
+      cacheKey: job.cacheKey,
+      runId: job.runId,
+      topicId: job.topicId,
+      topicTitle: topic.title,
+    };
+    await saveIntelligentCarousel(db, {
+      cacheKey: job.cacheKey,
+      runId: job.runId,
+      topicId: job.topicId,
+      payload: storedData,
+      ttlHours: 48,
+    });
+    await updateIntelligentJob(db, {
+      jobId: job.jobId,
+      status: "succeeded",
+      progress: 100,
+      message: "Roteiro concluído.",
+      payload: storedData,
+    });
+    return storedData;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await updateIntelligentJob(db, {
+      jobId: job.jobId,
+      status: "failed",
+      progress: 100,
+      message: "A leitura foi interrompida.",
+      error: detail,
+    });
+    console.error("Leitura inteligente falhou", detail);
+    return null;
+  }
+}
+
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
@@ -242,7 +320,8 @@ async function handleApi(request, env, url, ctx) {
       intelligentReading: {
         ready: true,
         aiReady: Boolean(articleAnalysisAi(env)?.run),
-        mode: "round-collected-content",
+        mode: "live-article-with-feed-fallback",
+        asynchronousJobs: true,
         articleLimit: 5,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
@@ -284,6 +363,27 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true, run });
   }
 
+  const intelligentJobRoute = /^\/api\/intelligent-jobs\/([a-z0-9-]{16,80})$/i.exec(url.pathname);
+  if (intelligentJobRoute && request.method === "GET") {
+    const db = requireDatabase(env);
+    let job = await getIntelligentJob(db, intelligentJobRoute[1]);
+    if (!job) throw new HttpError(404, "Processamento não encontrado ou expirado.");
+    if (job.stale && ["queued", "running"].includes(job.status)) {
+      job = await updateIntelligentJob(db, {
+        jobId: job.jobId,
+        status: "failed",
+        progress: 100,
+        message: "O processamento foi interrompido e pode ser reiniciado.",
+        error: "A tarefa ficou sem atualização por mais de 45 segundos.",
+      });
+    }
+    return json({
+      ok: true,
+      job: publicIntelligentJob(job),
+      ...(job.status === "succeeded" && job.payload ? { data: job.payload } : {}),
+    });
+  }
+
   const intelligentCarouselRoute = /^\/api\/topics\/([a-z0-9-]{6,100})\/intelligent-carousel$/i.exec(url.pathname);
   if (intelligentCarouselRoute && request.method === "POST") {
     if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
@@ -308,19 +408,28 @@ async function handleApi(request, env, url, ctx) {
     const cacheKey = intelligentCarouselCacheKey(runId, topic);
     if (!body?.force) {
       const cached = await getIntelligentCarousel(db, cacheKey);
-      if (cached) return json({ ok: true, cached: true, data: cached });
+      if (cached) return json({ ok: true, cached: true, status: "succeeded", data: cached });
     }
-    try {
-      const data = await buildIntelligentCarousel(topic, {
-        ai: articleAnalysisAi(env),
-        model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
-      });
-      const storedData = { ...data, cacheKey, runId, topicId, topicTitle: topic.title };
-      await saveIntelligentCarousel(db, { cacheKey, runId, topicId, payload: storedData, ttlHours: 48 });
-      return json({ ok: true, cached: false, data: storedData });
-    } catch (error) {
-      throw new HttpError(422, "Não foi possível gerar o roteiro com o conteúdo armazenado na ronda.", error instanceof Error ? error.message : String(error));
+
+    const queued = await createIntelligentJob(db, { cacheKey, runId, topicId });
+    if (queued.job.status === "succeeded" && queued.job.payload) {
+      return json({ ok: true, cached: true, status: "succeeded", data: queued.job.payload });
     }
+    if (queued.created) {
+      const task = processIntelligentCarouselJob(env, queued.job, topic);
+      if (ctx?.waitUntil) ctx.waitUntil(task);
+      else {
+        const data = await task;
+        if (data) return json({ ok: true, cached: false, status: "succeeded", data });
+      }
+    }
+    return json({
+      ok: true,
+      queued: true,
+      status: queued.job.status,
+      job: publicIntelligentJob(queued.job),
+      pollAfterMs: 1_200,
+    }, 202);
   }
 
   if (url.pathname === "/api/round" && request.method === "POST") {
@@ -374,7 +483,7 @@ async function handleRequest(request, env, ctx) {
   return json({ ok: false, error: "Página não encontrada." }, 404);
 }
 
-export { handleRequest, performRound, selfTest };
+export { handleRequest, performRound, processIntelligentCarouselJob, selfTest };
 
 export default {
   async fetch(request, env, ctx) {

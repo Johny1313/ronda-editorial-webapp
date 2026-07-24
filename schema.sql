@@ -35,3 +35,20 @@ CREATE TABLE IF NOT EXISTS intelligent_carousels (
 );
 CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_run_topic ON intelligent_carousels(run_id, topic_id);
 CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at);
+
+CREATE TABLE IF NOT EXISTS intelligent_jobs (
+  cache_key TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE,
+  run_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  progress INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  error TEXT,
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_job_id ON intelligent_jobs(job_id);
+CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_expires ON intelligent_jobs(expires_at);
