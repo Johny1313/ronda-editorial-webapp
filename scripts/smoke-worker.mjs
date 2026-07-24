@@ -5,6 +5,11 @@ const createdAt = new Date().toISOString();
 
 async function mockExternalSource(request) {
   const url = new URL(request.url);
+  if (url.hostname === "noticias.test") {
+    const articleText = "O Congresso aprovou um novo plano nacional de mobilidade urbana para orientar investimentos em transporte público, ciclovias, acessibilidade e segurança viária. A proposta estabelece diretrizes para a integração entre governos, definição de prioridades e acompanhamento dos projetos. A implantação deverá ocorrer em etapas e ainda depende de detalhamento técnico, prazos, fontes de financiamento e regras complementares. Especialistas ouvidos pelos portais afirmam que a medida pode influenciar a distribuição de recursos e a escolha das obras realizadas nas cidades. O tema ganhou repercussão entre profissionais do setor e representantes de administrações locais, que pedem clareza sobre os próximos passos.";
+    return new Response(`<!doctype html><html><head><meta property="og:title" content="Plano nacional de mobilidade urbana"><script type="application/ld+json">${JSON.stringify({ "@type": "NewsArticle", headline: "Plano nacional de mobilidade urbana", datePublished: createdAt, author: { name: "Redação" }, articleBody: `${articleText} ${articleText}` })}</script></head><body><nav>Menu</nav><div class="publicidade">Anúncio</div><article><p>${articleText}</p></article></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  }
+
   if (url.hostname === "public.api.bsky.app") {
     return Response.json({
       posts: [
@@ -36,7 +41,7 @@ const mf = new Miniflare({
   modules: true,
   scriptPath: new URL("../dist/cloudflare-worker-unico.js", import.meta.url).pathname,
   compatibilityDate: "2026-07-22",
-  bindings: { ENVIRONMENT: "test", TRANSLATION_TEST_MODE: "1" },
+  bindings: { ENVIRONMENT: "test", TRANSLATION_TEST_MODE: "1", ARTICLE_ANALYSIS_TEST_MODE: "1" },
   d1Databases: { DB: `ronda-smoke-${crypto.randomUUID()}` },
   outboundService: mockExternalSource,
 });
@@ -56,10 +61,11 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=1.9.3") && html.includes("/styles.css?v=1.9.3"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=2.0.0") && html.includes("/styles.css?v=2.0.0"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
   assert(html.includes('id="carouselSources"'), "Lista de links para apuração não foi incorporada ao carrossel.");
+  assert(html.includes('id="carouselReading"') && html.includes('id="carouselAnalysis"') && html.includes('id="carouselEntities"'), "Leitura inteligente não foi incorporada ao modal.");
   assert(!html.includes('id="carouselImages"'), "A área de sugestões de imagens ainda está presente no carrossel.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
   assert(html.includes('id="regionFilter"'), "Filtro Brasil/Mundo não foi incorporado ao Worker.");
@@ -96,7 +102,7 @@ try {
   assert(roundData.items.filter((item) => item.region === "Mundo").every((item) => item.targetLanguage === "pt-BR"), "Há conteúdo internacional sem tradução.");
   assert(roundData.items.every((item) => /^https?:\/\//i.test(item.url)), "Há notícia captada sem link válido para apuração.");
   assert(roundData.topics.every((topic) => topic.editoria), "Os assuntos não receberam editorias.");
-  assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 5), "Os roteiros de carrossel não foram gerados.");
+  assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 7), "As prévias de carrossel em sete slides não foram geradas.");
   assert(roundData.topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel), "Tom de voz ou modelo de post ausente.");
   assert(roundData.topics.every((topic) => topic.carousel?.language === "pt-BR"), "Um carrossel não está marcado como português.");
   assert(roundData.topics.every((topic) => !("imageSuggestions" in topic.carousel)), "A API ainda gera sugestões de imagens para o carrossel.");
@@ -106,6 +112,24 @@ try {
     return itemUrls.size > 0 && [...itemUrls].every((url) => linkUrls.has(url));
   }), "Um carrossel não contém todos os links individuais para apuração.");
 
+  const topicForReading = roundData.topics.find((topic) => (topic.items || []).some((item) => item.kind === "portal"));
+  assert(topicForReading, "Nenhum assunto com matéria de portal foi encontrado para a leitura inteligente.");
+  const intelligent = await getJson(`/api/topics/${topicForReading.id}/intelligent-carousel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: round.body.runId }),
+  });
+  assert(intelligent.body.data?.slides?.length === 7, "A leitura inteligente não gerou sete slides.");
+  assert(intelligent.body.data?.analysisMode === "ai", "A leitura inteligente não usou o Workers AI simulado.");
+  assert(intelligent.body.data?.reading?.successful >= 1 && intelligent.body.data?.reading?.totalWords > 100, "A matéria completa não foi extraída.");
+  assert(intelligent.body.data?.questions?.whatHappened && intelligent.body.data?.entities?.themes?.length, "Interpretação ou dados estruturados ausentes.");
+  const intelligentCached = await getJson(`/api/topics/${topicForReading.id}/intelligent-carousel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: round.body.runId }),
+  });
+  assert(intelligentCached.body.cached === true, "O carrossel inteligente não foi reutilizado do cache D1.");
+
   const historicalData = await getJson(`/api/runs/${round.body.runId}/data`);
   assert(historicalData.body.data?.items?.length === roundData.items.length, "Notícias da ronda histórica não foram recuperadas.");
   assert(historicalData.body.data.items[0]?.title, "Detalhe histórico não contém os títulos apurados.");
@@ -114,11 +138,12 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "1.9.3", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.0.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
   assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
+  assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.articleLimit === 5, "Saúde não confirmou a leitura inteligente.");
 
   process.stdout.write(
-    `Smoke test aprovado: dashboard, D1, editorias, carrosséis, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
+    `Smoke test aprovado: dashboard, D1, leitura inteligente, carrosséis de 7 slides, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
   );
 } finally {
   await mf.dispose();

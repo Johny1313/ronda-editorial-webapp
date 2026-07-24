@@ -27,8 +27,8 @@ Você não precisa instalar Node.js nem manter o computador ligado.
       https://SEU-WORKER.workers.dev/api/health
 
 O primeiro endereço deve mostrar "ok":true e "readWriteDelete":true.
-O segundo deve mostrar "ready":true, "database":"connected" e
-"translation":{"ready":true}.
+O segundo deve mostrar "ready":true, "database":"connected",
+"translation":{"ready":true} e "intelligentReading":{"ready":true}.
 
 Depois clique em Executar ronda. A execução também ocorrerá automaticamente
 a cada cinco minutos, inclusive com o navegador e o computador desligados.
@@ -39,6 +39,11 @@ IMPORTANTE
 - Os portais são a base da ronda. O Bluesky é apenas um complemento social.
 - Notícias das fontes Mundo são traduzidas para português pelo Workers AI.
   Se uma tradução falhar, a notícia é omitida em vez de aparecer em outro idioma.
+- No botão de roteiro, a Leitura Inteligente abre até cinco matérias completas,
+  remove menus e anúncios, responde às perguntas editoriais e cria sete slides.
+- O resultado da leitura fica salvo no D1 por 48 horas. Portais com paywall ou
+  bloqueio podem impedir a extração; o painel identifica cada falha e mantém
+  os links originais para apuração manual.
 - Uma fonte isolada pode falhar sem derrubar a ronda; o painel mostra o estado
   de cada uma e o Worker usa rotas alternativas.
 - Fontes externas podem mudar ou bloquear seus feeds no futuro. O autoteste

@@ -23,3 +23,15 @@ CREATE TABLE IF NOT EXISTS translation_cache (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_translation_cache_updated ON translation_cache(updated_at DESC);
+
+
+CREATE TABLE IF NOT EXISTS intelligent_carousels (
+  cache_key TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_run_topic ON intelligent_carousels(run_id, topic_id);
+CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at);

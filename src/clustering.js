@@ -89,11 +89,11 @@ function carouselTone(editoria, priority) {
 }
 
 function carouselModel(topic, normalizedText) {
-  if (topic.priority === "Pautar agora") return "Plantão em 5 cards";
-  if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Post de serviço";
-  if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Explicativo em 5 cards";
-  if (["Esportes", "Entretenimento"].includes(topic.editoria)) return "Destaques em 5 cards";
-  return "Resumo factual em 5 cards";
+  if (topic.priority === "Pautar agora") return "Instagram · Plantão em 7 slides";
+  if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Instagram · Serviço em 7 slides";
+  if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Instagram · Explicativo em 7 slides";
+  if (["Esportes", "Entretenimento"].includes(topic.editoria)) return "Instagram · Destaques em 7 slides";
+  return "Instagram · 7 slides";
 }
 
 function buildVerificationLinks(items = []) {
@@ -141,14 +141,18 @@ export function buildCarouselBrief(topic = {}) {
     language: "pt-BR",
     voiceTone: carouselTone(editoria, topic.priority),
     postModel: carouselModel({ ...topic, editoria }, normalizedText),
-    disclaimer: "Roteiro automático baseado nos títulos e descrições dos feeds. Abra os links de apuração, revise e confirme antes de publicar.",
+    disclaimer: "Prévia baseada nos títulos e descrições dos feeds. Use a Leitura Inteligente para abrir as matérias, extrair o conteúdo principal e gerar o roteiro final antes de publicar.",
     verificationLinks,
     slides: [
-      { number: 1, role: "Capa", title, body: `${editoria} · ${displayedSourceCount} ${displayedSourceCount === 1 ? "fonte monitorada" : "fontes monitoradas"}` },
-      { number: 2, role: "Contexto", title: "O que aconteceu", body: context },
-      { number: 3, role: "Pontos principais", title: "O que já sabemos", body: knownFacts },
-      { number: 4, role: "Relevância", title: "Por que acompanhar", body: significance },
-      { number: 5, role: "Fontes e CTA", title: "Continue acompanhando", body: `${sourceLine}\n${verificationLinks.length} ${verificationLinks.length === 1 ? "link de apuração disponível" : "links de apuração disponíveis"}.\n${callToAction}` },
+      { number: 1, role: "Título principal", title, body: `${editoria} · ${displayedSourceCount} ${displayedSourceCount === 1 ? "fonte monitorada" : "fontes monitoradas"}` },
+      { number: 2, role: "Contexto", title: "Entenda o cenário", body: context },
+      { number: 3, role: "Informação principal", title: "O que aconteceu", body: knownFacts },
+      { number: 4, role: "Detalhamento", title: "O que precisa ser confirmado", body: `${sourceLine}
+Abra os links originais para conferir nomes, números, datas e declarações.` },
+      { number: 5, role: "Consequência", title: "Por que isso importa", body: significance },
+      { number: 6, role: "Conclusão", title: "O que acompanhar agora", body: topic.priority === "Pautar agora" ? "O assunto exige atualização rápida e confirmação contínua nas fontes originais." : "Acompanhe novos fatos e procure uma segunda fonte independente antes de fechar a pauta." },
+      { number: 7, role: "CTA", title: "Continue acompanhando", body: `${verificationLinks.length} ${verificationLinks.length === 1 ? "link de apuração disponível" : "links de apuração disponíveis"}.
+${callToAction}` },
     ],
   };
 }

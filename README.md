@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 1.9.3:** removida a geração e a exibição de sugestões de imagens no roteiro de carrossel. Canaltech e TecMundo permanecem ativos e identificados separadamente nas buscas.
+**Versão 2.0.0:** adicionada a Leitura Inteligente de Notícias. Ao abrir o roteiro, o Worker lê sob demanda até cinco matérias completas do assunto, remove ruídos de página, analisa o conteúdo e gera um carrossel Instagram com sete slides. Canaltech e TecMundo permanecem ativos; sugestões de imagens continuam removidas.
 
 ## Versão GitHub recomendada
 
@@ -25,9 +25,16 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
 - Filtro clicável por editoria e identificação visível em cada assunto.
-- Roteiro automático de carrossel em cinco cards, com tom de voz, modelo de post e botão para copiar.
-- Carrosséis gerados exclusivamente a partir do conteúdo em português e identificados como `pt-BR`.
-- O roteiro usa somente títulos, descrições e indicadores da ronda e exibe aviso obrigatório de revisão editorial.
+- Prévia editorial de carrossel em sete slides na coleta.
+- Botão **Ler matérias e gerar carrossel** executa a leitura completa sob demanda para não sobrecarregar cada ronda automática.
+- Leitura de até cinco matérias distintas por assunto, com limite de tempo e tamanho por página.
+- Extração do conteúdo principal por JSON-LD, `<article>`, `<main>` e blocos editoriais; menus, anúncios, newsletters, barras laterais e outros ruídos são descartados.
+- Respostas estruturadas para: o que aconteceu, quem está envolvido, onde, quando, impacto e repercussão.
+- Extração de personagens, empresas, locais, datas, temas e palavras-chave.
+- Carrossel Instagram com exatamente sete slides: título, contexto, informação principal, detalhamento, consequência, conclusão e CTA.
+- Resultado armazenado no D1 por 48 horas para evitar reler e reprocessar o mesmo assunto.
+- Carrosséis gerados exclusivamente em português e identificados como `pt-BR`.
+- Aviso obrigatório de revisão editorial e links das matérias originais para conferência.
 - Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
 - Cards, conteúdos relacionados e histórico exibem um botão individual **Abrir para apuração**.
 - O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal e URL de cada apuração.
@@ -47,7 +54,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 O código e a infraestrutura são verificáveis, mas fontes externas podem mudar endereços ou bloquear consultas. Por isso a coleta aceita falhas parciais, registra a situação de cada fonte e utiliza fallbacks. Sem APIs oficiais ou comerciais, esta versão não monitora integralmente Instagram, TikTok ou X.
 
-A tradução internacional usa o binding `AI` definido no `wrangler.jsonc` e o modelo `@cf/meta/m2m100-1.2b`. O Cloudflare aplica a franquia e os limites da conta. Se o limite de tradução estiver indisponível, o portal continua registrado, mas notícias não traduzidas não são exibidas.
+O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para analisar matérias completas. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA de análise falhar, o sistema gera um roteiro de contingência a partir do texto extraído e sinaliza que a revisão deve ser completa.
 
 ## Alternativa sem GitHub — editor do Worker
 
@@ -91,7 +98,7 @@ https://SEU-WORKER.workers.dev/api/health
 Resultados esperados:
 
 - `/api/self-test`: `"ok": true`, dois itens, um assunto agrupado e `"readWriteDelete": true`. O teste também confirma escrita, leitura e exclusão no D1.
-- `/api/health`: `"ready": true`, `"database": "connected"` e `"translation":{"ready":true}`.
+- `/api/health`: `"ready": true`, `"database": "connected"`, `"translation":{"ready":true}` e `"intelligentReading":{"ready":true}`.
 
 Depois, clique em **Executar ronda**. Alguns feeds podem aparecer como `falhou`, mas a ronda será válida quando pelo menos um portal fornecer conteúdo recente. O indicador ficará verde após uma coleta concluída.
 
@@ -118,7 +125,7 @@ npm run smoke
 npm run dev
 ```
 
-`npm run smoke` executa o Worker compilado no emulador oficial, simula portais e Bluesky, grava a ronda no D1 e confirma dashboard, autoteste, última ronda, histórico e saúde.
+`npm run smoke` executa o Worker compilado no emulador oficial, simula portais, Bluesky e páginas completas de notícias, grava a ronda no D1 e confirma dashboard, leitura inteligente, sete slides, cache, histórico e saúde.
 
 Rotas principais:
 
@@ -132,6 +139,7 @@ Rotas principais:
 | `/api/runs/:id` | GET | Acompanha uma ronda manual em andamento |
 | `/api/runs/:id/data` | GET | Recupera as notícias armazenadas em uma ronda histórica |
 | `/api/round` | POST | Executa uma ronda manual |
+| `/api/topics/:topicId/intelligent-carousel` | POST | Lê as matérias do assunto, analisa e devolve o carrossel de sete slides |
 
 ## Arquivos
 

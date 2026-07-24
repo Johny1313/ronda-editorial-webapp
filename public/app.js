@@ -13,6 +13,9 @@ const state = {
   running: false,
   lastRunId: null,
   carouselText: "",
+  smartCarousels: new Map(),
+  activeTopicId: null,
+  carouselLoading: false,
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -36,10 +39,6 @@ function safeUrl(value) {
   } catch {
     return "#";
   }
-}
-
-function metricValue(value) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? numberFormat.format(value) : "Não disponível";
 }
 
 function formatDate(value) {
@@ -220,7 +219,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Tom de voz</span><strong>${escapeHtml(carousel.voiceTone || "Informativo e objetivo")}</strong></div><div><span>Modelo de post</span><strong>${escapeHtml(carousel.postModel || "Resumo factual em 5 cards")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ver roteiro do carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Até 5 matérias completas</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Ler matérias e gerar carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -425,17 +424,46 @@ function topicVerificationLinks(topic) {
   return links;
 }
 
-function carouselAsText(topic) {
-  const carousel = topic.carousel || {};
-  const slides = Array.isArray(carousel.slides) ? carousel.slides : [];
-  const verificationLinks = topicVerificationLinks(topic);
+function entityLine(label, values) {
+  const list = Array.isArray(values) ? values.filter(Boolean) : [];
+  return `${label}: ${list.length ? list.join(", ") : "Não identificado"}`;
+}
+
+function carouselAsText(topic, carousel) {
+  const slides = Array.isArray(carousel?.slides) ? carousel.slides : [];
+  const verificationLinks = Array.isArray(carousel?.verificationLinks) && carousel.verificationLinks.length
+    ? carousel.verificationLinks
+    : topicVerificationLinks(topic);
+  const questions = carousel?.questions || {};
+  const entities = carousel?.entities || {};
+  const reading = carousel?.reading || {};
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
-    `Tom de voz: ${carousel.voiceTone || "Informativo e objetivo"}`,
-    `Modelo: ${carousel.postModel || "Resumo factual em 5 cards"}`,
+    "LEITURA INTELIGENTE DE NOTÍCIAS",
+    `Modo: ${carousel?.analysisMode === "ai" ? "Workers AI" : "Extração automática de contingência"}`,
+    `Matérias lidas: ${Number(reading.successful) || 0}/${Number(reading.requested) || 0}`,
+    `Palavras analisadas: ${Number(reading.totalWords) || 0}`,
+    `Tom de voz: ${carousel?.voiceTone || "Jornalístico, factual e explicativo"}`,
+    `Formato: ${carousel?.postModel || "Instagram · 7 slides"}`,
+    "",
+    "INTERPRETAÇÃO DA NOTÍCIA",
+    `O que aconteceu: ${questions.whatHappened || "Não informado"}`,
+    `Quem está envolvido: ${questions.who || "Não informado"}`,
+    `Onde aconteceu: ${questions.where || "Não informado"}`,
+    `Quando aconteceu: ${questions.when || "Não informado"}`,
+    `Qual o impacto: ${questions.impact || "Não informado"}`,
+    `Qual a repercussão: ${questions.repercussion || "Não informado"}`,
+    "",
+    "DADOS ESTRUTURADOS",
+    entityLine("Personagens", entities.people),
+    entityLine("Empresas", entities.companies),
+    entityLine("Locais", entities.places),
+    entityLine("Datas", entities.dates),
+    entityLine("Temas", entities.themes),
+    entityLine("Palavras-chave", entities.keywords),
     "",
     ...slides.flatMap((slide) => [
-      `CARD ${slide.number} — ${String(slide.role || "").toUpperCase()}`,
+      `SLIDE ${slide.number} — ${String(slide.role || "").toUpperCase()}`,
       slide.title || "",
       slide.body || "",
       "",
@@ -447,26 +475,110 @@ function carouselAsText(topic) {
       `URL: ${link.url}`,
       "",
     ]),
-    carousel.disclaimer || "Revise e confirme as informações antes de publicar.",
+    carousel?.disclaimer || "Revise e confirme as informações antes de publicar.",
   ].join("\n").trim();
 }
 
-function showCarousel(topicId) {
+function carouselCacheKey(topicId) {
+  return `${state.data?.runId || state.lastRunId || "latest"}:${topicId}`;
+}
+
+function setCarouselLoading(loading, message = "") {
+  state.carouselLoading = loading;
+  const holder = document.getElementById("carouselLoading");
+  holder.hidden = false;
+  holder.classList.toggle("error", !loading && Boolean(message));
+  holder.innerHTML = loading
+    ? '<span class="reader-spinner">↻</span><div><strong>Lendo as matérias completas…</strong><small>Abrindo os portais, removendo anúncios e menus e identificando o conteúdo principal.</small></div>'
+    : `<span class="reader-error">!</span><div><strong>Leitura inteligente não concluída</strong><small>${escapeHtml(message)}</small></div>`;
+  document.getElementById("copyCarousel").disabled = loading || Boolean(message);
+}
+
+function questionCard(label, value) {
+  return `<article><small>${escapeHtml(label)}</small><p>${escapeHtml(value || "Não informado nas matérias lidas.")}</p></article>`;
+}
+
+function entityGroup(label, values) {
+  const list = Array.isArray(values) ? values.filter(Boolean) : [];
+  return `<div><small>${escapeHtml(label)}</small><div class="entity-chips">${list.length ? list.map((item) => `<span>${escapeHtml(item)}</span>`).join("") : '<em>Não identificado</em>'}</div></div>`;
+}
+
+function renderIntelligentCarousel(topic, carousel) {
+  document.getElementById("carouselLoading").hidden = true;
+  document.getElementById("carouselTitle").textContent = topic.title;
+  const reading = carousel.reading || {};
+  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
+  const readingHolder = document.getElementById("carouselReading");
+  readingHolder.hidden = false;
+  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Captura da matéria</p><h3>Leitura concluída</h3></div><span>${Number(reading.successful) || 0}/${Number(reading.requested) || 0} matérias</span></div><div class="reading-stats"><span><small>Conteúdo principal</small><strong>${Number(reading.totalWords) || 0} palavras</strong></span><span><small>Falhas ou bloqueios</small><strong>${Number(reading.failed) || 0}</strong></span><span><small>Processamento</small><strong>${carousel.analysisMode === "ai" ? "IA estruturada" : "Fallback local"}</strong></span></div>`;
+
+  const questions = carousel.questions || {};
+  const analysisHolder = document.getElementById("carouselAnalysis");
+  analysisHolder.hidden = false;
+  analysisHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Interpretação da notícia</p><h3>Respostas editoriais</h3></div></div><div class="question-grid">${questionCard("O que aconteceu?", questions.whatHappened)}${questionCard("Quem está envolvido?", questions.who)}${questionCard("Onde aconteceu?", questions.where)}${questionCard("Quando aconteceu?", questions.when)}${questionCard("Qual o impacto?", questions.impact)}${questionCard("Qual a repercussão?", questions.repercussion)}</div>`;
+
+  const entities = carousel.entities || {};
+  const entityHolder = document.getElementById("carouselEntities");
+  entityHolder.hidden = false;
+  entityHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Estrutura de dados</p><h3>Elementos extraídos</h3></div></div><div class="entity-grid">${entityGroup("Personagens", entities.people)}${entityGroup("Empresas", entities.companies)}${entityGroup("Locais", entities.places)}${entityGroup("Datas", entities.dates)}${entityGroup("Temas", entities.themes)}${entityGroup("Palavras-chave", entities.keywords)}</div>`;
+
+  document.getElementById("carouselSlides").innerHTML = (carousel.slides || []).map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
+  const verificationLinks = Array.isArray(carousel.verificationLinks) ? carousel.verificationLinks : topicVerificationLinks(topic);
+  const readingSources = new Map((reading.sources || []).map((item) => [safeUrl(item.url), item]));
+  document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Matérias e resultado da leitura</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
+    const source = readingSources.get(safeUrl(link.url));
+    const status = source ? source.ok ? `${Number(source.wordCount) || 0} palavras lidas` : `Não lida: ${source.error || "portal bloqueou a extração"}` : "Link adicional para apuração";
+    return `<a class="carousel-source-link ${source?.ok ? "read-ok" : source ? "read-error" : ""}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
+  }).join("")}</div>`;
+  document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
+  document.getElementById("copyCarouselMessage").textContent = carousel.aiError ? `A IA falhou e foi usado o modo de contingência: ${carousel.aiError}` : "";
+  state.carouselText = carouselAsText(topic, carousel);
+  document.getElementById("copyCarousel").disabled = false;
+}
+
+async function showCarousel(topicId) {
   const topic = (state.data?.topics || []).find((item) => item.id === topicId);
-  if (!topic?.carousel?.slides?.length) {
-    setStatus("warn", "Roteiro indisponível", "Execute uma nova ronda para gerar o modelo de carrossel.");
+  if (!topic) {
+    setStatus("warn", "Assunto indisponível", "Atualize a ronda e tente novamente.");
     return;
   }
-  const carousel = topic.carousel;
+  state.activeTopicId = topicId;
   document.getElementById("carouselTitle").textContent = topic.title;
-  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone)}</strong></span><span><small>Modelo de post</small><strong>${escapeHtml(carousel.postModel)}</strong></span>`;
-  document.getElementById("carouselSlides").innerHTML = carousel.slides.map((slide) => `<article class="carousel-slide"><div><span>${Number(slide.number) || ""}</span><small>${escapeHtml(slide.role)}</small></div><h3>${escapeHtml(slide.title)}</h3><p>${escapeHtml(slide.body).replace(/\n/g, "<br>")}</p></article>`).join("");
-  const verificationLinks = topicVerificationLinks(topic);
-  document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Links das notícias usadas</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
-  document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";
+  document.getElementById("carouselMeta").innerHTML = "";
+  document.getElementById("carouselReading").hidden = true;
+  document.getElementById("carouselAnalysis").hidden = true;
+  document.getElementById("carouselEntities").hidden = true;
+  document.getElementById("carouselSlides").innerHTML = "";
+  document.getElementById("carouselSources").innerHTML = "";
+  document.getElementById("carouselDisclaimer").textContent = "";
   document.getElementById("copyCarouselMessage").textContent = "";
-  state.carouselText = carouselAsText(topic);
+  state.carouselText = "";
   openModal("carouselModal");
+
+  const key = carouselCacheKey(topicId);
+  const cached = state.smartCarousels.get(key);
+  if (cached) {
+    renderIntelligentCarousel(topic, cached);
+    return;
+  }
+  setCarouselLoading(true);
+  const token = operationToken();
+  try {
+    const response = await api(`/api/topics/${encodeURIComponent(topicId)}/intelligent-carousel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { "X-Round-Token": token } : {}) },
+      body: JSON.stringify({ runId: state.data?.runId || state.lastRunId || null }),
+    });
+    if (!response?.data?.slides?.length) throw new Error("O servidor não retornou os sete slides esperados.");
+    state.smartCarousels.set(key, response.data);
+    renderIntelligentCarousel(topic, response.data);
+  } catch (error) {
+    if (error.status === 401) {
+      document.getElementById("tokenMessage").textContent = "Informe a chave do Worker para usar a leitura inteligente.";
+    }
+    setCarouselLoading(false, error.message);
+    document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração manual</p><h3>Abra as notícias originais</h3></div></div><div class="carousel-source-list">${topicVerificationLinks(topic).map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
+  }
 }
 
 async function copyCarouselText() {

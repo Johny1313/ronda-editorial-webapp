@@ -1,15 +1,18 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
+import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
 import { collectRound } from "./collector.js";
 import {
   acquireLock,
   databaseHealth,
   databaseSelfTest,
   ensureSchema,
+  getIntelligentCarousel,
   getLatestRound,
   getRunHistory,
   getRunPayload,
   getRunStatus,
   releaseLock,
+  saveIntelligentCarousel,
   saveRun,
   startRun,
 } from "./database.js";
@@ -17,7 +20,7 @@ import { parseFeed } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "1.9.3";
+const VERSION = "2.0.0";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -97,6 +100,44 @@ function translationAi(env) {
   return null;
 }
 
+function articleAnalysisAi(env) {
+  if (env.AI?.run) return env.AI;
+  if (env.ENVIRONMENT === "test" && env.ARTICLE_ANALYSIS_TEST_MODE === "1") {
+    return {
+      run: async () => ({
+        response: {
+          questions: {
+            whatHappened: "O Congresso aprovou um plano nacional de mobilidade urbana.",
+            who: "Congresso Nacional e órgãos públicos responsáveis pela mobilidade.",
+            where: "Brasil.",
+            when: "Na data informada pelas matérias da ronda.",
+            impact: "A medida pode orientar investimentos e mudanças na mobilidade urbana.",
+            repercussion: "O tema também apareceu em publicações sociais monitoradas pela ronda.",
+          },
+          entities: {
+            people: [],
+            companies: ["Congresso Nacional"],
+            places: ["Brasil"],
+            dates: [],
+            themes: ["mobilidade urbana", "política pública"],
+            keywords: ["mobilidade", "Congresso", "investimentos"],
+          },
+          slides: [
+            { number: 1, role: "Título principal", title: "Congresso aprova plano de mobilidade urbana", body: "A proposta avança e passa a orientar novas medidas no país." },
+            { number: 2, role: "Contexto", title: "Por que o tema importa", body: "A mobilidade urbana afeta deslocamentos, transporte público e planejamento das cidades." },
+            { number: 3, role: "Informação principal", title: "O que foi aprovado", body: "O Congresso aprovou um novo plano nacional para o setor." },
+            { number: 4, role: "Detalhamento", title: "O que as matérias mostram", body: "Os textos relacionam a medida a investimentos e projetos de infraestrutura." },
+            { number: 5, role: "Consequência", title: "Impacto esperado", body: "A decisão pode influenciar prioridades e recursos destinados às cidades." },
+            { number: 6, role: "Conclusão", title: "Próximos passos", body: "A aplicação prática dependerá dos desdobramentos e das regras complementares." },
+            { number: 7, role: "CTA", title: "Acompanhe a pauta", body: "Consulte as fontes originais e acompanhe as próximas atualizações." },
+          ],
+        },
+      }),
+    };
+  }
+  return null;
+}
+
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
@@ -151,11 +192,15 @@ async function selfTest() {
   </channel></rss>`;
   const items = parseFeed(fixture, { id: "test", name: "Teste" }, new Date(now.getTime() - 86_400_000));
   const topics = buildTopics(items, now);
+  const article = extractArticleFromHtml(`<html><body><nav>Menu principal</nav><div class="publicidade">Compre agora</div><article><h1>Plano de mobilidade</h1><p>A prefeitura apresentou um plano de mobilidade urbana para melhorar o transporte público e reorganizar os deslocamentos na cidade.</p><p>O projeto prevê corredores de ônibus, integração tarifária, novas ciclovias e revisão das linhas que atendem os bairros mais afastados.</p><p>Segundo a administração municipal, a implantação será feita em etapas e dependerá de estudos técnicos, recursos orçamentários e audiências públicas.</p></article></body></html>`, { title: "Plano de mobilidade" });
+  const articleOk = article.wordCount >= 45 && !article.content.includes("Compre agora") && !article.content.includes("Menu principal");
   return {
-    ok: items.length === 2 && topics.length === 1 && topics[0].itemCount === 2,
+    ok: items.length === 2 && topics.length === 1 && topics[0].itemCount === 2 && articleOk,
     parserItems: items.length,
     groupedTopics: topics.length,
     cardItems: topics[0]?.itemCount ?? 0,
+    articleWords: article.wordCount,
+    articleNoiseRemoved: articleOk,
   };
 }
 
@@ -194,6 +239,12 @@ async function handleApi(request, env, url, ctx) {
         targetLanguage: "pt-BR",
         model: TRANSLATION_MODEL,
       },
+      intelligentReading: {
+        ready: Boolean(articleAnalysisAi(env)?.run),
+        mode: "on-demand",
+        articleLimit: 5,
+        model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+      },
     });
   }
 
@@ -230,6 +281,49 @@ async function handleApi(request, env, url, ctx) {
     const run = await getRunStatus(requireDatabase(env), runId);
     if (!run) throw new HttpError(404, "Ronda ainda não encontrada.");
     return json({ ok: true, run });
+  }
+
+  const intelligentCarouselRoute = /^\/api\/topics\/([a-z0-9-]{6,100})\/intelligent-carousel$/i.exec(url.pathname);
+  if (intelligentCarouselRoute && request.method === "POST") {
+    if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
+      throw new HttpError(401, "Chave de operação inválida para usar a leitura inteligente.");
+    }
+    const body = await request.json().catch(() => ({}));
+    const db = requireDatabase(env);
+    let runId = String(body?.runId || "").trim();
+    let payload;
+    if (runId) {
+      const stored = await getRunPayload(db, runId);
+      if (!stored?.payload) throw new HttpError(404, "Ronda não encontrada para a leitura inteligente.");
+      payload = withEditorias({ ...stored.payload, runId: stored.id, triggerType: stored.triggerType, storedAt: stored.completedAt });
+    } else {
+      payload = withEditorias(await getLatestRound(db));
+      runId = payload?.runId || "latest";
+    }
+    if (!payload?.ok || !Array.isArray(payload.topics)) throw new HttpError(409, "Não há uma ronda válida disponível para análise.");
+    const topicId = intelligentCarouselRoute[1];
+    const topic = payload.topics.find((item) => item?.id === topicId);
+    if (!topic) throw new HttpError(404, "Assunto não encontrado nesta ronda.");
+    const cacheKey = intelligentCarouselCacheKey(runId, topic);
+    if (!body?.force) {
+      const cached = await getIntelligentCarousel(db, cacheKey);
+      if (cached) return json({ ok: true, cached: true, data: cached });
+    }
+    const lock = await acquireLock(db, `intelligent-${cacheKey}`, 90 * 1000);
+    if (!lock) throw new HttpError(409, "A leitura inteligente deste assunto já está em andamento.");
+    try {
+      const data = await buildIntelligentCarousel(topic, {
+        ai: articleAnalysisAi(env),
+        model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+      });
+      const storedData = { ...data, cacheKey, runId, topicId, topicTitle: topic.title };
+      await saveIntelligentCarousel(db, { cacheKey, runId, topicId, payload: storedData, ttlHours: 48 });
+      return json({ ok: true, cached: false, data: storedData });
+    } catch (error) {
+      throw new HttpError(503, "Não foi possível concluir a leitura inteligente.", error instanceof Error ? error.message : String(error));
+    } finally {
+      await releaseLock(db, lock);
+    }
   }
 
   if (url.pathname === "/api/round" && request.method === "POST") {

@@ -34,6 +34,16 @@ const SCHEMA_STATEMENTS = [
     updated_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS idx_translation_cache_updated ON translation_cache(updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS intelligent_carousels (
+    cache_key TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_run_topic ON intelligent_carousels(run_id, topic_id)",
+  "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at)",
 ];
 
 export async function ensureSchema(db) {
@@ -151,6 +161,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     db.prepare("DELETE FROM runs WHERE completed_at < ?").bind(retentionCutoff),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(Date.now() - 5 * 60 * 1000),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
+    db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(new Date().toISOString()),
   ]);
   return { id, status, completedAt };
 }
@@ -260,6 +271,42 @@ export async function getRunPayload(db, id) {
     error: row.error,
     payload,
   };
+}
+
+
+export async function getIntelligentCarousel(db, cacheKey) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT payload_json, expires_at FROM intelligent_carousels WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  if (!row?.payload_json || Date.parse(row.expires_at) <= Date.now()) return null;
+  try {
+    const payload = JSON.parse(row.payload_json);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveIntelligentCarousel(db, { cacheKey, runId, topicId, payload, ttlHours = 48 }) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlHours) || 48) * 60 * 60 * 1000).toISOString();
+  await db
+    .prepare(`
+      INSERT INTO intelligent_carousels (cache_key, run_id, topic_id, payload_json, updated_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET
+        run_id = excluded.run_id,
+        topic_id = excluded.topic_id,
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at,
+        expires_at = excluded.expires_at
+    `)
+    .bind(cacheKey, runId, topicId, JSON.stringify(payload), updatedAt, expiresAt)
+    .run();
+  return { updatedAt, expiresAt };
 }
 
 export async function databaseHealth(db) {

@@ -1,11 +1,11 @@
 {
   "name": "ronda-editorial-cloudflare",
-  "version": "1.9.3",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build:ui": "node scripts/build-ui.mjs",
-    "build": "npm run build:ui && esbuild src/index.js --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/cloudflare-worker-unico.js",
+    "build": "npm run build:ui && node scripts/simple-bundle.mjs",
     "test": "npm run build:ui && node --test test/*.test.js",
     "smoke": "npm run build && node scripts/smoke-worker.mjs",
     "dev": "npm run build:ui && wrangler dev --local",
