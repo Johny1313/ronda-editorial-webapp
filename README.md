@@ -2,11 +2,11 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.1.0:** a Leitura Inteligente volta a abrir até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando ela é indicada pelo portal. O processamento acontece em uma tarefa assíncrona acompanhada por polling, sem manter a janela presa a uma única requisição. Quando um portal bloqueia a leitura, o sistema usa automaticamente o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
+**Versão 2.1.1:** a Leitura Inteligente abre até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando indicada. O processamento pesado foi movido para uma Cloudflare Queue, evitando a interrupção causada pelo limite de tarefas HTTP em segundo plano. O painel acompanha o progresso pelo D1; quando um portal bloqueia a leitura, o sistema usa o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
 
 ## Versão GitHub recomendada
 
-Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consulte primeiro `PUBLICAR-COM-GITHUB.txt`. O banco D1 usa provisionamento automático no primeiro deploy e o Cron Trigger já está definido no `wrangler.jsonc`.
+Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consulte primeiro `PUBLICAR-COM-GITHUB.txt`. Antes do deploy, crie uma Queue chamada `ronda-editorial-intelligent-jobs`. O D1, o Workers AI, o produtor e o consumidor da Queue e o Cron Trigger são declarados no `wrangler.jsonc`.
 
 ## O que funciona
 
@@ -31,7 +31,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Quando a página indica uma versão AMP e a leitura principal é insuficiente, o Worker tenta a versão AMP.
 - Cada portal possui tempo limite independente. Falhas 403/429/503, paywall, HTML insuficiente ou timeout não derrubam o roteiro.
 - Em caso de bloqueio, a análise usa automaticamente o texto, resumo ou título que o feed já forneceu durante a ronda.
-- O processamento é gravado no D1 como tarefa com estados `queued`, `running`, `succeeded` e `failed`; tarefas sem atualização são liberadas para nova tentativa.
+- O processamento é gravado no D1 e enviado à Cloudflare Queue como tarefa com estados `queued`, `running`, `succeeded` e `failed`; o consumidor possui tempo suficiente para leitura de portais e análise da IA.
 - O painel acompanha o progresso, reutiliza uma tarefa já em execução e oferece **Tentar novamente** quando necessário.
 - Cada item preserva até 2.400 caracteres do conteúdo recebido na ronda, mantendo uma base de contingência segura.
 - O painel informa quantas matérias foram lidas diretamente, quantas usaram fallback e a qualidade do material.
@@ -62,35 +62,9 @@ O código e a infraestrutura são verificáveis, mas fontes externas podem mudar
 
 O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para estruturar o roteiro. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA exceder o tempo limite, retornar JSON inválido ou falhar, o sistema conclui a tarefa com um roteiro de contingência. Para desativar temporariamente a leitura direta e trabalhar apenas com os feeds, defina `ARTICLE_LIVE_READING=0`.
 
-## Alternativa sem GitHub — editor do Worker
+## Alternativa sem GitHub
 
-Não use o Direct Upload do Pages. Como alternativa ao GitHub, crie primeiro um Worker Hello World, abra **Edit code** e substitua o código pelo conteúdo de `dist/cloudflare-worker-unico.js`.
-
-1. Acesse **Workers & Pages** no Cloudflare.
-2. Crie um Worker chamado `ronda-editorial-webapp`.
-3. Abra o editor do Worker e substitua o código pelo conteúdo de `dist/cloudflare-worker-unico.js`.
-4. Salve e publique.
-5. Acesse **Storage & Databases → D1 SQL Database**.
-6. Crie o banco `ronda-editorial-db`.
-7. Volte ao Worker e abra **Settings → Bindings**.
-8. Adicione um binding D1:
-   - Nome da variável: `DB`
-   - Banco: `ronda-editorial-db`
-9. Ainda em **Settings → Bindings**, adicione um binding **Workers AI**:
-   - Nome da variável: `AI`
-10. Em **Settings → Triggers → Cron Triggers**, adicione:
-
-   ```text
-   */5 * * * *
-   ```
-
-11. Recomendado: em **Settings → Variables and Secrets**, adicione um Secret:
-    - Nome: `MANUAL_ROUND_TOKEN`
-    - Valor: uma chave escolhida por você
-12. Abra novamente o endereço público do Worker.
-13. Se configurou uma chave, abra **Ajustes** no painel e informe a mesma chave.
-
-O Worker cria as tabelas automaticamente. Não é necessário executar `schema.sql` pelo painel.
+Para esta versão, use GitHub + Workers Builds. O código depende do produtor e do consumidor de Queue declarados no `wrangler.jsonc`; colar somente o bundle em **Edit code** não é o fluxo recomendado para configurar toda a infraestrutura.
 
 ## Verificação obrigatória depois da publicação
 
@@ -104,7 +78,7 @@ https://SEU-WORKER.workers.dev/api/health
 Resultados esperados:
 
 - `/api/self-test`: `"ok": true`, dois itens, um assunto agrupado e `"readWriteDelete": true`. O teste também confirma escrita, leitura e exclusão no D1.
-- `/api/health`: `"ready": true`, `"database": "connected"`, `"translation":{"ready":true}` e `"intelligentReading":{"ready":true}`.
+- `/api/health`: `"ready": true`, `"database": "connected"`, `"translation":{"ready":true}`, `"queueReady":true` e `"executionMode":"cloudflare-queue"`.
 
 Depois, clique em **Executar ronda**. Alguns feeds podem aparecer como `falhou`, mas a ronda será válida quando pelo menos um portal fornecer conteúdo recente. O indicador ficará verde após uma coleta concluída.
 
@@ -115,6 +89,7 @@ Para desenvolvedores com Node.js 20 ou superior:
 ```bash
 npm install
 npx wrangler login
+npx wrangler queues create ronda-editorial-intelligent-jobs
 npm test
 npm run deploy
 npx wrangler secret put MANUAL_ROUND_TOKEN

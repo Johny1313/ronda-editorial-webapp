@@ -1,88 +1,70 @@
-RONDA EDITORIAL — GITHUB + CLOUDFLARE WORKERS
-==============================================
+RONDA EDITORIAL v2.1.1 — ATUALIZAÇÃO PELO GITHUB
+=================================================
 
-Esta é a versão indicada para quem não quer instalar Node.js e não quer colar
-o código manualmente no editor do Cloudflare.
+Esta versão corrige a interrupção após 30–45 segundos usando Cloudflare Queues.
+O computador não precisa permanecer ligado e não é necessário instalar Node.js.
 
-IMPORTANTE
-----------
+ETAPA 1 — CRIAR A FILA UMA ÚNICA VEZ
+------------------------------------
 
-- Não use Direct Upload, Drag and drop ou Cloudflare Pages.
-- O GitHub deve ser conectado a um CLOUDFLARE WORKER.
-- Extraia este ZIP antes de enviar os arquivos ao GitHub.
+1. No Cloudflare, abra Storage & Databases > Queues.
+2. Clique em Create queue.
+3. Use exatamente este nome:
 
-PARTE 1 — CRIAR O REPOSITÓRIO NO GITHUB
-----------------------------------------
+   ronda-editorial-intelligent-jobs
 
-1. Entre em https://github.com/ e clique em New repository.
-2. Nome sugerido: ronda-editorial-webapp
-3. O repositório pode ser público ou privado.
-4. Clique em Create repository.
-5. Na página do repositório, clique em uploading an existing file.
-6. Extraia este pacote no Windows.
-7. Arraste TODO o conteúdo da pasta extraída para o GitHub. Os arquivos
-   package.json, package-lock.json e wrangler.jsonc devem ficar na raiz.
-8. No campo de mensagem, escreva "Versão inicial" e clique em Commit changes.
+4. Confirme a criação.
 
-PARTE 2 — CONECTAR O GITHUB AO CLOUDFLARE
-------------------------------------------
+ETAPA 2 — ATUALIZAR O REPOSITÓRIO
+---------------------------------
 
-9. No Cloudflare, abra Workers & Pages > Create application.
-10. Em Import a repository, clique em Get started.
-11. Autorize o GitHub e selecione o repositório ronda-editorial-webapp.
-12. Use estas configurações:
+5. Extraia este ZIP.
+6. No GitHub, abra Johny1313/ronda-editorial-webapp.
+7. Substitua os arquivos e pastas atuais pelo conteúdo desta versão.
+8. O arquivo package-lock.json deve permanecer ausente.
+9. Confirme o commit diretamente na branch main.
 
-      Production branch: main
-      Root directory: deixe vazio
-      Build command: npm run build:ui
-      Deploy command: npx wrangler deploy
+ETAPA 3 — CONFIGURAÇÃO DO BUILD
+-------------------------------
 
-13. Clique em Save and Deploy.
+No Worker > Settings > Build, mantenha:
 
-O wrangler.jsonc já define:
+   Build command: npm run build
+   Deploy command: npx wrangler deploy
+   Version command: npx wrangler versions upload
+   Root directory: /
+
+O commit na main inicia o build automaticamente.
+
+ETAPA 4 — O QUE O WRANGLER CONFIGURA
+------------------------------------
+
+O wrangler.jsonc contém:
 
 - Worker: ronda-editorial-webapp
-- Banco D1 com binding DB e provisionamento automático
-- Workers AI com binding AI para traduzir as fontes Mundo e estruturar o roteiro das matérias
+- D1 no binding DB
+- Workers AI no binding AI
+- Produtor da fila no binding INTELLIGENT_JOBS_QUEUE
+- Consumidor da fila ronda-editorial-intelligent-jobs
+- Uma tarefa por lote, início em até um segundo e até três tentativas
 - Ronda automática a cada cinco minutos
 - Observabilidade ativada
 
-PARTE 3 — PROTEGER A RONDA MANUAL (RECOMENDADO)
-------------------------------------------------
+ETAPA 5 — VALIDAR
+-----------------
 
-14. No Worker publicado, abra Settings > Variables and Secrets.
-15. Adicione um Secret:
+Abra:
 
-      Nome: MANUAL_ROUND_TOKEN
-      Valor: escolha uma chave longa e privada
+https://ronda-editorial-webapp.johnymoraes13.workers.dev/api/health
 
-16. Abra o painel da Ronda Editorial, entre em Ajustes e informe a mesma chave.
+Confirme:
 
-PARTE 4 — TESTAR
-----------------
+   "version": "2.1.1"
+   "queueReady": true
+   "executionMode": "cloudflare-queue"
 
-Abra, substituindo SEU-WORKER pelo endereço publicado:
+Depois atualize a página com Ctrl + F5 e faça uma nova leitura inteligente.
 
-https://SEU-WORKER.workers.dev/api/self-test
-https://SEU-WORKER.workers.dev/api/health
-
-Resultados esperados:
-
-- self-test: "ok":true e "readWriteDelete":true
-- health: "ready":true, "database":"connected", "translation":{"ready":true} e "intelligentReading":{"ready":true}
-
-Depois abra a página principal, clique em Executar ronda e use “Ler matérias e gerar carrossel” em um assunto. A primeira leitura aparece como uma tarefa com progresso; as seguintes usam o cache de 48 horas. Se um portal bloquear a matéria, o feed é usado automaticamente.
-
-ATUALIZAÇÕES FUTURAS
---------------------
-
-Quando uma nova versão for enviada ao branch main do GitHub, o Cloudflare fará
-o build e o deploy automaticamente. Não será necessário usar o uploader.
-
-SE QUISER CONECTAR UM WORKER JÁ EXISTENTE
------------------------------------------
-
-O nome no Cloudflare precisa ser igual ao campo "name" do wrangler.jsonc.
-Esta versão usa "ronda-editorial-webapp". A maneira mais simples é importar o
-repositório como um novo Worker. Se quiser reutilizar outro nome, altere o campo
-"name" no wrangler.jsonc antes do primeiro deploy.
+Não é necessário executar novamente o schema.sql se a tabela intelligent_jobs
+já existe. As tarefas antigas com status failed podem permanecer no banco; elas
+não impedem novas leituras.

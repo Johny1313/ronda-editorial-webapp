@@ -1,55 +1,17 @@
-RONDA EDITORIAL 24H — PUBLICAÇÃO NO CLOUDFLARE
-================================================
+RONDA EDITORIAL v2.1.1 — PUBLICAÇÃO SEM NODE NO COMPUTADOR
+==========================================================
 
-Você não precisa instalar Node.js nem manter o computador ligado.
+Use GitHub + Cloudflare Workers Builds. Esse fluxo não exige Node.js instalado
+no computador e configura corretamente o consumidor da Cloudflare Queue.
 
-1. Entre em https://dash.cloudflare.com/ e abra Workers & Pages.
-2. Crie um Worker com o nome ronda-editorial-webapp.
-3. No editor do Worker, apague o exemplo existente.
-4. Abra o arquivo dist/cloudflare-worker-unico.js deste pacote, copie todo o
-   conteúdo, cole no editor e publique.
-5. No Cloudflare, abra Storage & Databases > D1 SQL Database e crie o banco
-   ronda-editorial-db.
-6. Volte ao Worker, abra Settings > Bindings e adicione um D1 binding:
-      Variable name: DB
-      D1 database: ronda-editorial-db
-7. Ainda em Settings > Bindings, adicione um Workers AI binding:
-      Variable name: AI
-8. Em Settings > Triggers > Cron Triggers, adicione:
-      */5 * * * *
-9. Recomendado: em Settings > Variables and Secrets, crie um Secret:
-      Nome: MANUAL_ROUND_TOKEN
-      Valor: escolha uma chave longa e privada
-10. Abra o endereço público do Worker. Se criou a chave, entre em Ajustes no
-   painel e informe a mesma chave.
-11. Confira os diagnósticos:
-      https://SEU-WORKER.workers.dev/api/self-test
-      https://SEU-WORKER.workers.dev/api/health
+1. Crie a Queue ronda-editorial-intelligent-jobs no painel Cloudflare.
+2. Extraia o ZIP e envie todos os arquivos ao repositório GitHub.
+3. Mantenha o Worker conectado à branch main.
+4. Build command: npm run build
+5. Deploy command: npx wrangler deploy
+6. Aguarde o build verde.
+7. Valide /api/health e confirme queueReady:true.
 
-O primeiro endereço deve mostrar "ok":true e "readWriteDelete":true.
-O segundo deve mostrar "ready":true, "database":"connected",
-"translation":{"ready":true} e "intelligentReading":{"ready":true}.
-
-Depois clique em Executar ronda. A execução também ocorrerá automaticamente
-a cada cinco minutos, inclusive com o navegador e o computador desligados.
-
-IMPORTANTE
-----------
-
-- Os portais são a base da ronda. O Bluesky é apenas um complemento social.
-- Notícias das fontes Mundo são traduzidas para português pelo Workers AI.
-  Se uma tradução falhar, a notícia é omitida em vez de aparecer em outro idioma.
-- No botão de roteiro, a Leitura Inteligente abre até cinco matérias em paralelo,
-  remove menus e anúncios, responde às perguntas editoriais e cria sete slides.
-- A tarefa continua no Worker e o painel acompanha o progresso. Uma leitura já
-  iniciada é reutilizada; tarefas interrompidas podem ser reiniciadas.
-- O resultado fica salvo no D1 por 48 horas. Portais com paywall ou bloqueio
-  usam automaticamente o texto ou resumo do feed, mantendo os links originais
-  para apuração manual.
-- Uma fonte isolada pode falhar sem derrubar a ronda; o painel mostra o estado
-  de cada uma e o Worker usa rotas alternativas.
-- Fontes externas podem mudar ou bloquear seus feeds no futuro. O autoteste
-  confirma a aplicação e o banco; o painel de fontes identifica mudanças
-  externas que precisem de manutenção.
-
-Mais detalhes técnicos estão no README.md.
+Não use apenas o botão Edit code para esta versão. Colar somente o bundle pode
+publicar o código, mas não é o fluxo recomendado para configurar automaticamente
+o produtor e o consumidor da Queue definidos no wrangler.jsonc.

@@ -1,0 +1,23 @@
+CRIAR A FILA NO CLOUDFLARE — PASSO ÚNICO
+
+Nome obrigatório da fila:
+ronda-editorial-intelligent-jobs
+
+PELO PAINEL
+1. Cloudflare > Storage & Databases > Queues.
+2. Clique em Create queue.
+3. Nome: ronda-editorial-intelligent-jobs
+4. Confirme a criação.
+5. Volte ao Worker e publique a versão 2.1.1 pelo GitHub.
+
+PELO WRANGLER, QUANDO DISPONÍVEL
+npx wrangler queues create ronda-editorial-intelligent-jobs
+
+VALIDAÇÃO
+Abra:
+https://SEU-WORKER.workers.dev/api/health
+
+Deve aparecer:
+"version": "2.1.1"
+"queueReady": true
+"executionMode": "cloudflare-queue"
