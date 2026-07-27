@@ -9,12 +9,21 @@ const MIN_ARTICLE_WORDS = 80;
 const ARTICLE_FETCH_TIMEOUT_MS = 5_500;
 const AMP_FETCH_TIMEOUT_MS = 3_000;
 const ARTICLE_TOTAL_TIMEOUT_MS = 10_000;
+const ARTICLE_PROGRESS_HEARTBEAT_MS = 1_100;
 const READING_PROGRESS_START = 8;
 const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 14_000;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "facts-v2-evidence-v1";
+const CAROUSEL_PROMPT_VERSION = "facts-v3-direct-url-heartbeat";
+
+const AGGREGATOR_HOSTS = new Set([
+  "news.google.com",
+  "google.com",
+  "www.google.com",
+  "bing.com",
+  "www.bing.com",
+]);
 
 const NOISE_PATTERN = /(ad-|ads|advert|anuncio|banner|breadcrumb|cookie|coment|comments|footer|header|menu|nav|newsletter|paywall|popup|promo|publicidade|recommend|related|share|sidebar|social|subscribe|widget)/i;
 const NOISE_SENTENCE = /(assine|aceite os cookies|continuar lendo|conteúdo patrocinado|leia também|mais lidas|publicidade|receba nossa newsletter|siga-nos|todos os direitos reservados)/i;
@@ -80,6 +89,28 @@ function editorialClip(value, limit) {
 
 function canonicalHostname(value) {
   try { return new URL(String(value || "")).hostname.toLocaleLowerCase("pt-BR").replace(/^www\./, ""); } catch { return ""; }
+}
+
+function hostMatches(left, right) {
+  const a = canonicalHostname(`https://${String(left || "").replace(/^https?:\/\//i, "")}`);
+  const b = canonicalHostname(`https://${String(right || "").replace(/^https?:\/\//i, "")}`);
+  return Boolean(a && b && (a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`)));
+}
+
+function isAggregatorHostname(hostname) {
+  const host = String(hostname || "").toLowerCase().replace(/^www\./, "");
+  if (!host) return false;
+  if (AGGREGATOR_HOSTS.has(host)) return true;
+  return host.endsWith(".google.com") || host.endsWith(".googleusercontent.com") || host.endsWith(".bing.com");
+}
+
+function publisherUrlSignals(item) {
+  const urlHostname = canonicalHostname(item?.url);
+  const declaredHostname = canonicalHostname(item?.publisherHomepageUrl || item?.declaredSourceUrl || item?.sourceUrl);
+  const aggregator = isAggregatorHostname(urlHostname);
+  const matchesDeclaredPublisher = declaredHostname ? hostMatches(urlHostname, declaredHostname) : !aggregator;
+  const directPublisher = Boolean(urlHostname && !aggregator && matchesDeclaredPublisher);
+  return { urlHostname, declaredHostname, aggregator, matchesDeclaredPublisher, directPublisher };
 }
 
 function safeJsonParse(value) {
@@ -284,7 +315,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.4.0; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.4.2; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -389,16 +420,19 @@ function singlePortalItem(topic, sourceStats = null) {
     const freshnessScore = Math.max(0, 20 - Math.min(20, ageHours * 1.25));
     const relevanceScore = Math.round(tokenCoverage(topic?.title || "", `${item?.title || ""} ${item?.description || ""}`) * 25);
     const hostname = canonicalHostname(item?.url);
+    const urlSignals = publisherUrlSignals(item);
     const stats = sourceStatFor(sourceStats, hostname);
     const attempts = Number(stats?.attempts) || 0;
     const successes = Number(stats?.successes) || 0;
     const historicalRate = attempts ? successes / attempts : 0.5;
     const reliabilityScore = attempts >= 3 ? Math.round(historicalRate * 35) : 17;
     const contentScore = Math.min(42, collected.wordCount / 4);
-    const score = levelScore + contentScore + freshnessScore + relevanceScore + reliabilityScore + (hasUrl ? 25 : 0);
+    const directPublisherScore = urlSignals.directPublisher ? 40 : urlSignals.aggregator ? 0 : 12;
+    const score = levelScore + contentScore + freshnessScore + relevanceScore + reliabilityScore + directPublisherScore + (hasUrl ? 25 : 0);
     candidates.push({
       item,
       hasUrl,
+      directPublisher: urlSignals.directPublisher,
       score,
       hostname,
       reasons: {
@@ -409,12 +443,16 @@ function singlePortalItem(topic, sourceStats = null) {
         reliabilityScore,
         historicalAttempts: attempts,
         historicalSuccessRate: attempts ? Number(historicalRate.toFixed(2)) : null,
+        directPublisherUrl: urlSignals.directPublisher,
+        aggregatorUrl: urlSignals.aggregator,
+        declaredPublisherDomain: urlSignals.declaredHostname || null,
       },
       publishedAt: Number.isFinite(publishedAt) ? publishedAt : 0,
     });
   }
   const readableCandidates = candidates.filter((candidate) => candidate.hasUrl);
-  const pool = readableCandidates.length ? readableCandidates : candidates;
+  const directPublisherCandidates = readableCandidates.filter((candidate) => candidate.directPublisher && candidate.reasons.contentLevel !== "title");
+  const pool = directPublisherCandidates.length ? directPublisherCandidates : readableCandidates.length ? readableCandidates : candidates;
   pool.sort((left, right) => right.score - left.score || right.publishedAt - left.publishedAt);
   const selected = pool[0];
   return selected
@@ -465,6 +503,9 @@ function collectedRecord(item) {
     extractionMethod: collected.extractionMethod,
     content: collected.content,
     error: null,
+    selectedArticleId: item?.id || null,
+    originalUrl: /^https?:\/\//i.test(String(item?.url || "")) ? item.url : null,
+    fallbackScope: "same-article",
   };
 }
 
@@ -496,13 +537,25 @@ async function articleRecordWithFallback(item, fetcher, { timeoutMs = ARTICLE_TO
           liveAttempted: false,
           liveReadError: null,
           error: null,
+          selectedArticleId: item?.id || cached.selectedArticleId || null,
+          originalUrl: item?.url || cached.originalUrl || cached.url || null,
+          fallbackScope: "same-article",
         };
       }
     } catch {}
   }
   const live = await readArticle(item, fetcher, { timeoutMs });
   if (live.ok && live.content) {
-    const record = { ...live, fallbackWordCount: fallback.wordCount, liveReadError: null, liveAttempted: true, cacheHit: false };
+    const record = {
+      ...live,
+      selectedArticleId: item?.id || null,
+      originalUrl: item?.url || live.url || null,
+      fallbackScope: "same-article",
+      fallbackWordCount: fallback.wordCount,
+      liveReadError: null,
+      liveAttempted: true,
+      cacheHit: false,
+    };
     if (readCache?.set) {
       try { await readCache.set(cacheKey, record); } catch {}
     }
@@ -532,6 +585,29 @@ async function withTimeout(promise, timeoutMs, message) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function withProgressHeartbeat(promise, callback, { intervalMs = ARTICLE_PROGRESS_HEARTBEAT_MS } = {}) {
+  if (typeof callback !== "function") return promise;
+  const wrapped = Promise.resolve(promise).then(
+    (value) => ({ done: true, value }),
+    (error) => ({ done: true, failed: true, error }),
+  );
+  const steps = [26, 34, 42, 50, 56];
+  for (const progress of steps) {
+    const state = await Promise.race([
+      wrapped,
+      new Promise((resolve) => setTimeout(() => resolve({ done: false }), Math.max(5, Number(intervalMs) || ARTICLE_PROGRESS_HEARTBEAT_MS))),
+    ]);
+    if (state.done) {
+      if (state.failed) throw state.error;
+      return state.value;
+    }
+    await reportProgress(callback, progress, "reading", "A matéria continua em leitura; mantendo a tarefa ativa.");
+  }
+  const state = await wrapped;
+  if (state.failed) throw state.error;
+  return state.value;
 }
 
 function readingQuality(records) {
@@ -1001,6 +1077,7 @@ export async function buildIntelligentCarousel(topic, {
   liveReading = true,
   onProgress = null,
   articleTimeoutMs = ARTICLE_TOTAL_TIMEOUT_MS,
+  progressHeartbeatMs = ARTICLE_PROGRESS_HEARTBEAT_MS,
   sourceStats = null,
   readCache = null,
 } = {}) {
@@ -1013,22 +1090,27 @@ export async function buildIntelligentCarousel(topic, {
   await reportProgress(onProgress, 18, "reading", `Abrindo a matéria escolhida em ${compact(selectedSourceName, 70)}.`);
   let selectedRecord;
   if (liveReading) {
-    const sameSourceFallback = {
+    const sameArticleFallback = {
       ...collectedRecord(selectedItem),
       readMode: "feed-timeout",
       liveReadError: "Tempo limite da leitura direta; usado o conteúdo disponível no feed da mesma matéria",
       error: "Tempo limite da leitura direta; usado o conteúdo disponível no feed da mesma matéria",
       liveAttempted: true,
       cacheHit: false,
+      fallbackScope: "same-article",
     };
     try {
-      selectedRecord = await withTimeout(
-        articleRecordWithFallback(selectedItem, fetcher, { timeoutMs: articleTimeoutMs, readCache }),
-        Math.max(1_950, Number(articleTimeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS) + 750,
-        "Tempo limite da matéria selecionada excedido",
+      selectedRecord = await withProgressHeartbeat(
+        withTimeout(
+          articleRecordWithFallback(selectedItem, fetcher, { timeoutMs: articleTimeoutMs, readCache }),
+          Math.max(1_950, Number(articleTimeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS) + 750,
+          "Tempo limite da matéria selecionada excedido",
+        ),
+        onProgress,
+        { intervalMs: progressHeartbeatMs },
       );
     } catch {
-      selectedRecord = sameSourceFallback;
+      selectedRecord = sameArticleFallback;
     }
   } else {
     selectedRecord = {
@@ -1044,6 +1126,7 @@ export async function buildIntelligentCarousel(topic, {
     hostname: selection.hostname,
     candidatesEvaluated: selection.candidatesEvaluated,
     reasons: selection.reasons,
+    directPublisherUrl: Boolean(selection.reasons?.directPublisherUrl),
   };
   const collected = selectedRecord?.content ? [selectedRecord] : [];
   if (!collected.length) throw new Error("A matéria selecionada não possui conteúdo suficiente para gerar o roteiro.");
@@ -1104,12 +1187,21 @@ export async function buildIntelligentCarousel(topic, {
   };
 
   await reportProgress(onProgress, 92, "finalizing", "Salvando o roteiro e encerrando o ciclo desta sugestão.");
-  const verificationLinks = (topic?.items || []).filter((item) => /^https?:\/\//i.test(String(item?.url || ""))).map((item) => ({
-    title: compact(item.title || "Notícia sem título", 180),
-    sourceName: item.sourceName || item.collectorName || "Fonte não informada",
-    publishedAt: item.publishedAt || null,
-    url: item.url,
-  })).filter((item, index, list) => list.findIndex((other) => other.url === item.url) === index);
+  const selectedResolvedUrl = /^https?:\/\//i.test(String(selectedRecord?.extractionUrl || ""))
+    && !isAggregatorHostname(canonicalHostname(selectedRecord.extractionUrl))
+    ? selectedRecord.extractionUrl
+    : selectedRecord?.url;
+  const verificationLinks = (topic?.items || []).filter((item) => /^https?:\/\//i.test(String(item?.url || ""))).map((item) => {
+    const selected = item === selectedItem || (selectedItem?.id && item?.id === selectedItem.id) || item?.url === selectedItem?.url;
+    const url = selected && /^https?:\/\//i.test(String(selectedResolvedUrl || "")) ? selectedResolvedUrl : item.url;
+    return {
+      title: compact(item.title || "Notícia sem título", 180),
+      sourceName: item.sourceName || item.collectorName || "Fonte não informada",
+      publishedAt: item.publishedAt || null,
+      url,
+      ...(url !== item.url ? { originalUrl: item.url } : {}),
+    };
+  }).filter((item, index, list) => list.findIndex((other) => other.url === item.url) === index);
 
   const liveSuccessful = collected.filter((item) => /^full-article/.test(item.readMode)).length;
   const fallbackSources = collected.filter((item) => !/^full-article/.test(item.readMode)).length;

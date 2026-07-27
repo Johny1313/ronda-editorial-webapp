@@ -1,0 +1,40 @@
+RONDA EDITORIAL v2.4.1 — COLETA RESILIENTE DOS PORTAIS
+
+CORREÇÕES PRINCIPAIS
+
+1. Fallbacks agregados por domínio
+- Portais gerais do Brasil compartilham uma consulta de contingência.
+- Portais do Mundo compartilham outra consulta de contingência.
+- Os portais de entretenimento e curiosidades usam grupos menores.
+- Isso reduz consultas repetidas e evita esgotar o limite seguro do Worker.
+
+2. Separação correta das fontes agregadas
+- O parser agora lê o atributo URL da tag <source> do Google Notícias.
+- A identificação usa o domínio declarado, além do nome textual da fonte.
+- Notícias de LeoDias, Quem, Caras, Área VIP, Mega Curioso e demais portais não são misturadas.
+
+3. Correção de consultas por site
+- Caminhos como uol.com.br/splash deixam de ser usados diretamente no operador site:.
+- As consultas usam o hostname válido e termos editoriais quando a seção divide o mesmo domínio.
+
+4. Cache da última coleta válida
+- Se uma fonte falhar temporariamente, somente notícias ainda dentro da janela de 24 horas podem ser reutilizadas.
+- O status é marcado como cache, sem esconder que a rota direta falhou.
+- Itens antigos não são reaproveitados.
+
+5. Diagnóstico no painel
+- dir: feed ou rota direta.
+- fb: fallback agregado.
+- cache: última coleta válida ainda recente.
+- falhou: nenhuma rota e nenhum cache recente disponíveis.
+
+VALIDAÇÃO
+- 32 testes automatizados aprovados.
+- Bundle reconstruído.
+- Sintaxe do Worker validada.
+- O smoke test com Miniflare depende da instalação das dependências de desenvolvimento.
+
+PUBLICAÇÃO
+- Envie o conteúdo do ZIP para a raiz do GitHub.
+- Não envie package-lock.json.
+- Não é necessário alterar o D1 ou recriar a Queue.

@@ -37,7 +37,7 @@ import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.4.0";
+const VERSION = "2.4.2";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -389,13 +389,15 @@ async function performRound(env, triggerType, options = {}) {
     if (!options.runStarted) await startRun(db, { id: runId, triggerType, startedAt });
     let payload;
     try {
-      const [customSources, monitoringTerms] = await Promise.all([
+      const [customSources, monitoringTerms, previousRound] = await Promise.all([
         listCustomSources(db, { activeOnly: true }),
         listMonitoringTerms(db, { activeOnly: true }),
+        getLatestRound(db).catch(() => null),
       ]);
       payload = await collectRound({
         feeds: [...FEEDS, ...customSources.map(customSourceFeed)],
         monitoringTerms,
+        previousRound,
       });
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("O coletor não retornou um resultado válido.");
@@ -513,6 +515,14 @@ async function handleApi(request, env, url, ctx) {
         catalogPortals: FEEDS.length,
         catalogBrazil: FEEDS.filter((feed) => feed.region === "Brasil").length,
         catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
+      },
+      portalCollection: {
+        strategy: "official-feed-shared-google-fallback-cache",
+        sharedFallbackQueries: true,
+        sourceDomainMatching: true,
+        lastKnownGoodCache: true,
+        cacheWindowHours: 24,
+        statusModes: ["direct", "fallback", "cache", "failed"],
       },
       editorialClassification: {
         specializedCategories: [

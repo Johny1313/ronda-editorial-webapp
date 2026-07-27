@@ -96,7 +96,7 @@ function itemWithinPeriod(item) {
 
 function sourceMarkup(item, primary = false) {
   const platform = item.platform || (item.kind === "portal" ? "Portal" : "Rede");
-  return `<div class="${primary ? "primary" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
+  return `<div class="${primary ? "primary-source" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
 }
 
 function sourceInitials(name) {
@@ -107,13 +107,22 @@ function sourceRegion(source) {
   return source?.region || (source?.name === "Bluesky" ? "Rede" : "Brasil");
 }
 
+function sourceRouteLabel(source, compact = false) {
+  if (source?.cached || source?.route === "cache") return compact ? "cache" : "cache recente";
+  if (source?.fallback || source?.route === "fallback") return compact ? "fb" : "fallback";
+  if (source?.ok && Number(source?.count) > 0) return compact ? "dir" : "coleta direta";
+  return "";
+}
+
 function portalCardMarkup(source) {
   const available = source.ok && Number(source.count) > 0;
   const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
+  const route = sourceRouteLabel(source);
   const detail = available
-    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo recolhido" : "conteúdos recolhidos"}${source.fallback ? " · rota alternativa" : ""}`
+    ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo recolhido" : "conteúdos recolhidos"}${route ? ` · ${route}` : ""}`
     : source.ok ? "Nenhuma notícia recente" : "Fonte indisponível nesta ronda";
-  return `<button class="portal-card ${source.ok ? "ok" : "error"}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : "Sem coleta"}</span></button>`;
+  const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
+  return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : "Sem coleta"}</span></button>`;
 }
 
 function renderPortalCards() {
@@ -151,9 +160,11 @@ function renderSourceHealth(message = "", warning = false) {
     return `<span class="health-region">${escapeHtml(region)}</span>${regionalSources.map((source) => {
       const available = source.ok && Number(source.count) > 0;
       const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
-      const title = source.error || (available ? `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${source.fallback ? " por rota alternativa" : ""}` : `Nenhum conteúdo recente de ${source.name}`);
-      const status = available ? `${source.count}${source.fallback ? " alt." : ""}` : source.ok ? "0" : "falhou";
-      return `<button class="health-chip ${source.ok ? "ok" : "error"}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(title)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${escapeHtml(status)}</button>`;
+      const route = sourceRouteLabel(source);
+      const title = source.error || (available ? `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${route ? ` por ${route}` : ""}${source.warning ? `. Aviso: ${source.warning}` : ""}` : `Nenhum conteúdo recente de ${source.name}`);
+      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "0" : "falhou";
+      const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
+      return `<button class="health-chip ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(title)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${escapeHtml(status)}</button>`;
     }).join("")}`;
   }).join("")}`;
 }
@@ -799,7 +810,13 @@ function renderIntelligentCarousel(topic, carousel) {
 
   document.getElementById("carouselSlides").innerHTML = (state.activeCarousel.slides || []).map(slideEditorMarkup).join("");
   const verificationLinks = Array.isArray(carousel.verificationLinks) ? carousel.verificationLinks : topicVerificationLinks(topic);
-  const readingSources = new Map((reading.sources || []).map((item) => [safeUrl(item.url), item]));
+  const readingSources = new Map();
+  for (const item of reading.sources || []) {
+    const urls = [item?.url, item?.originalUrl, item?.extractionUrl]
+      .filter((url) => /^https?:\/\//i.test(String(url || "")))
+      .map(safeUrl);
+    urls.forEach((url) => readingSources.set(url, item));
+  }
   document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Matéria utilizada e links adicionais</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
     const source = readingSources.get(safeUrl(link.url));
     const direct = /^full-article/.test(source?.readMode || "");

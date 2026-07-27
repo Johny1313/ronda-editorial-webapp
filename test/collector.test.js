@@ -143,3 +143,52 @@ test("mantém notícias de termos fora dos itens e assuntos da ronda", async () 
   assert.ok(result.items.every((item) => item.kind !== "monitoring"));
   assert.ok(result.topics.every((topic) => topic.items.every((item) => item.kind !== "monitoring")));
 });
+
+test("recupera a última coleta válida quando a fonte falha temporariamente", async () => {
+  const feed = { id: "cache", name: "Portal Cache", region: "Brasil", canonicalSource: true, directUrl: "https://cache.test/rss", urls: ["https://cache.test/rss"], limit: 10 };
+  const previousRound = {
+    items: [{
+      id: "rss-cache-anterior",
+      title: "Notícia ainda válida da coleta anterior",
+      description: "Resumo anterior",
+      content: "Resumo anterior",
+      sourceName: "Portal Cache",
+      collectorName: "Portal Cache",
+      region: "Brasil",
+      platform: "Portal",
+      kind: "portal",
+      publishedAt: "2026-07-22T11:40:00Z",
+      url: "https://cache.test/noticia",
+    }],
+  };
+  const result = await collectRound({
+    fetcher: async (url) => String(url).startsWith("https://public.api.bsky.app/") ? Response.json({ posts: [] }) : new Response("erro", { status: 503 }),
+    now,
+    feeds: [feed],
+    previousRound,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.sources[0].ok, true);
+  assert.equal(result.sources[0].cached, true);
+  assert.equal(result.sources[0].route, "cache");
+  assert.equal(result.sources[0].count, 1);
+  assert.equal(result.items[0].collectionRoute, "cache");
+});
+
+test("feed oficial não exige tag source para ser reconhecido", async () => {
+  const feed = {
+    id: "direto",
+    name: "Portal Direto",
+    region: "Brasil",
+    canonicalSource: true,
+    directUrl: "https://direto.test/rss",
+    sourceAliases: ["Portal Direto"],
+    sourceDomains: ["direto.test"],
+    urls: ["https://direto.test/rss"],
+  };
+  const xml = `<rss><channel><item><title>Notícia do feed oficial</title><link>https://direto.test/noticia</link><pubDate>Wed, 22 Jul 2026 11:55:00 GMT</pubDate></item></channel></rss>`;
+  const result = await collectFeed(feed, new Date("2026-07-21T12:00:00Z"), async () => new Response(xml, { headers: { "Content-Type": "application/rss+xml" } }));
+  assert.equal(result.status.ok, true);
+  assert.equal(result.status.route, "direct");
+  assert.equal(result.items.length, 1);
+});

@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.4.0:** adiciona 20 portais de celebridades, realities, curiosidades, ciência pop e conteúdo viral, elevando o catálogo para 50 portais. A classificação editorial ganhou categorias especializadas e regras de precedência: morte, falecimento e obituário não são classificados como entretenimento; crimes e mortes violentas são direcionados para Segurança e Justiça. A Leitura Inteligente mantém a regra de uma matéria por sugestão e libera o próximo ciclo ao terminar.
+**Versão 2.4.2:** corrige a apuração e a leitura inteligente. O link **Abrir para apuração** voltou a ficar visível nos cards sem conflito com os botões primários; a seleção prioriza URLs diretas do portal quando existe conteúdo utilizável; a leitura atualiza o progresso além de 18% enquanto aguarda o portal; e qualquer timeout ou bloqueio usa somente o conteúdo do feed da mesma matéria selecionada, sem trocar silenciosamente de fonte. Quando o redirecionamento revela a URL final do publisher, ela é usada no painel de apuração e o link original permanece registrado.
 
 ## Versão GitHub recomendada
 
@@ -13,6 +13,9 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Ronda automática mesmo com o navegador fechado.
 - Aba **Sites** para cadastrar, pausar, reativar e remover até oito fontes próprias.
 - URLs comuns usam busca por domínio no Google Notícias; URLs RSS/Atom são consultadas diretamente com fallback.
+- As rotas agregadas são compartilhadas entre portais para permanecer dentro do limite seguro de consultas externas do Worker.
+- Se uma fonte falhar temporariamente, a ronda pode reutilizar somente itens da última coleta válida que ainda estejam dentro das 24 horas, marcados como `cache`.
+- O painel usa os estados `dir` (direto), `fb` (fallback), `cache` e `falhou`.
 - Aba **Termos** para cadastrar até seis nomes, marcas ou assuntos de acompanhamento exclusivo.
 - Notícias encontradas por termos são armazenadas em `dedicatedMonitoring` e nunca entram nos itens ou assuntos da Ronda principal.
 - Termos pausados ou removidos deixam de ser buscados e seus resultados ficam ocultos.
@@ -40,6 +43,9 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Extração do conteúdo principal por JSON-LD, `<article>`, `<main>` e blocos editoriais; menus, anúncios, widgets e textos repetidos são removidos.
 - Quando a página indica uma versão AMP e a leitura principal é insuficiente, o Worker tenta a versão AMP.
 - A única matéria selecionada possui tempo limite independente. Falhas 403/429/503, paywall, HTML insuficiente ou timeout não derrubam o roteiro.
+- Durante uma leitura demorada, a tarefa grava avanços intermediários entre 18% e 60%, evitando a impressão de processamento travado.
+- URLs diretas do publisher com conteúdo utilizável têm prioridade sobre links de agregadores; quando um redirecionamento chega à matéria original, o link final é preferido na apuração.
+- O fallback é estritamente da mesma matéria selecionada: nenhum outro portal é aberto ou usado para completar o roteiro.
 - Em caso de bloqueio, a análise usa automaticamente o texto, resumo ou título que o feed já forneceu durante a ronda.
 - O processamento é gravado no D1 e enviado à Cloudflare Queue como tarefa com estados `queued`, `running`, `succeeded` e `failed`; o consumidor possui tempo suficiente para leitura de portais e análise da IA.
 - O painel acompanha o progresso, reutiliza uma tarefa já em execução e oferece **Tentar novamente** quando necessário.

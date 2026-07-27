@@ -87,6 +87,23 @@ function linkValue(block) {
   return /^https?:\/\//i.test(guid) ? guid : "";
 }
 
+function sourceMetadata(block) {
+  const match = /<(?:[a-z0-9_-]+:)?source\b([^>]*)>([\s\S]*?)<\/(?:[a-z0-9_-]+:)?source\s*>/i.exec(block);
+  if (!match) return { name: "", url: "" };
+  return {
+    name: plainText(match[2]),
+    url: attributeValue(match[1], "url") || attributeValue(match[1], "href"),
+  };
+}
+
+function normalizedHostname(value = "") {
+  try {
+    return new URL(String(value)).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
 export function stableHash(value = "") {
   let first = 0x811c9dc5;
   let second = 0x9e3779b9;
@@ -113,14 +130,23 @@ function normalizedSourceLabel(value = "") {
     .trim();
 }
 
-function sourceMatchesFeed(declaredSource, feed) {
+function sourceMatchesFeed(declaredSource, declaredSourceUrl, feed) {
   const aliases = Array.isArray(feed?.sourceAliases) ? feed.sourceAliases : [];
-  if (!aliases.length) return true;
+  const domains = Array.isArray(feed?.sourceDomains) ? feed.sourceDomains : [];
+  if (!aliases.length && !domains.length) return true;
+
   const source = normalizedSourceLabel(declaredSource);
-  if (!source) return false;
-  return aliases.some((alias) => {
+  const aliasMatch = source && aliases.some((alias) => {
     const normalizedAlias = normalizedSourceLabel(alias);
     return normalizedAlias && (source === normalizedAlias || source.includes(normalizedAlias) || normalizedAlias.includes(source));
+  });
+  if (aliasMatch) return true;
+
+  const hostname = normalizedHostname(declaredSourceUrl);
+  if (!hostname) return false;
+  return domains.some((domain) => {
+    const normalizedDomain = normalizedHostname(`https://${String(domain || "").replace(/^https?:\/\//i, "")}`);
+    return normalizedDomain && (hostname === normalizedDomain || hostname.endsWith(`.${normalizedDomain}`) || normalizedDomain.endsWith(`.${hostname}`));
   });
 }
 
@@ -144,8 +170,9 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
   for (const block of blocks) {
     if (result.length >= limit) break;
     const title = tagValue(block, ["title"]);
-    const declaredSource = tagValue(block, ["source"]);
-    if (!sourceMatchesFeed(declaredSource, feed)) continue;
+    const declaredSourceMetadata = sourceMetadata(block);
+    const declaredSource = declaredSourceMetadata.name;
+    if (!sourceMatchesFeed(declaredSource, declaredSourceMetadata.url, feed)) continue;
     const feedDescription = tagValue(block, ["description", "summary"]);
     const feedContent = tagValue(block, ["encoded", "content"]);
     const collectedContent = feedContent || feedDescription;
@@ -157,6 +184,12 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
     if (!Number.isFinite(timestamp) || timestamp < cutoffTime || timestamp > now || seen.has(url)) continue;
     seen.add(url);
 
+    const articleHostname = normalizedHostname(url);
+    const publisherHomepageUrl = /^https?:\/\//i.test(String(declaredSourceMetadata.url || "")) ? declaredSourceMetadata.url : null;
+    const publisherDomain = normalizedHostname(publisherHomepageUrl);
+    const aggregatorUrl = articleHostname === "news.google.com" || articleHostname.endsWith(".google.com") || articleHostname.endsWith(".googleusercontent.com");
+    const directPublisherUrl = Boolean(articleHostname && !aggregatorUrl && (!publisherDomain || articleHostname === publisherDomain || articleHostname.endsWith(`.${publisherDomain}`) || publisherDomain.endsWith(`.${articleHostname}`)));
+
     result.push({
       id: `rss-${feed.id}-${stableHash(url)}`,
       title,
@@ -166,6 +199,11 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
       contentWordCount: storedContent.split(/\s+/).filter(Boolean).length,
       sourceName: feed.canonicalSource ? feed.name : declaredSource || feed.name,
       collectorName: feed.name,
+      publisherHomepageUrl,
+      publisherDomain: publisherDomain || null,
+      articleDomain: articleHostname || null,
+      directPublisherUrl,
+      aggregatorUrl,
       region: feed.region || null,
       editorialHints: Array.isArray(feed.editorialHints) ? [...feed.editorialHints] : [],
       platform: "Portal",

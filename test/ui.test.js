@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("link de apuração não compartilha a classe dos botões primários", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /primary-source/);
+  assert.doesNotMatch(app, /primary \? "primary" : "source"/);
+  assert.match(css, /\.primary-source,\.source\{/);
+  assert.doesNotMatch(css, /\.primary,\.source\{/);
+  assert.match(app, /Abrir para apuração/);
+});

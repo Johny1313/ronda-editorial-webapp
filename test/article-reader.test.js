@@ -219,3 +219,93 @@ test("reutiliza o texto extraído sem abrir novamente o portal", async () => {
   assert.equal(result.reading.liveSuccessful, 1);
   assert.equal(result.cycle.nextCycleAllowed, true);
 });
+
+test("prioriza URL direta do portal em vez de link agregador", async () => {
+  const topic = {
+    id: "topic-url-direta",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [
+      {
+        id: "agregada",
+        kind: "portal",
+        title: "Plano de mobilidade urbana avança",
+        content: `${longParagraph} ${longParagraph}`,
+        contentSource: "feed-content",
+        sourceName: "Portal Agregado",
+        publisherHomepageUrl: "https://portal-agregado.test",
+        publishedAt: "2026-07-24T10:02:00Z",
+        url: "https://news.google.com/rss/articles/agregada",
+      },
+      {
+        id: "direta",
+        kind: "portal",
+        title: "Plano de mobilidade urbana avança",
+        description: longParagraph,
+        sourceName: "Portal Direto",
+        publisherHomepageUrl: "https://portal-direto.test",
+        publishedAt: "2026-07-24T10:00:00Z",
+        url: "https://portal-direto.test/materia",
+      },
+    ],
+  };
+  const fetched = [];
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async (url) => {
+      fetched.push(String(url));
+      return new Response(articleHtml("Plano de mobilidade urbana avança"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    },
+  });
+  assert.deepEqual(fetched, ["https://portal-direto.test/materia"]);
+  assert.equal(result.reading.selectedSource.sourceName, "Portal Direto");
+  assert.equal(result.reading.selectedSource.selection.directPublisherUrl, true);
+  assert.equal(result.reading.selectedSource.selection.reasons.aggregatorUrl, false);
+});
+
+test("mantém progresso ativo e usa fallback somente da mesma matéria", async () => {
+  const topic = {
+    id: "topic-heartbeat",
+    title: "Plano de mobilidade urbana",
+    editoria: "Política",
+    items: [
+      {
+        id: "materia-unica",
+        kind: "portal",
+        title: "Plano de mobilidade urbana",
+        content: `${longParagraph} ${longParagraph}`,
+        contentSource: "feed-content",
+        sourceName: "Portal A",
+        publishedAt: "2026-07-24T10:00:00Z",
+        url: "https://portal-a.test/materia-unica",
+      },
+      {
+        id: "outra-materia",
+        kind: "portal",
+        title: "Outro portal repercute o assunto",
+        content: `${longParagraph} ${longParagraph}`,
+        contentSource: "feed-content",
+        sourceName: "Portal B",
+        publishedAt: "2026-07-24T09:59:00Z",
+        url: "https://portal-b.test/outra-materia",
+      },
+    ],
+  };
+  const fetched = [];
+  const progress = [];
+  const result = await buildIntelligentCarousel(topic, {
+    progressHeartbeatMs: 8,
+    articleTimeoutMs: 250,
+    onProgress: async (event) => progress.push(event),
+    fetcher: async (url) => {
+      fetched.push(String(url));
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      throw new Error("portal bloqueou a leitura");
+    },
+  });
+  assert.deepEqual(fetched, ["https://portal-a.test/materia-unica"]);
+  assert.equal(result.reading.selectedSource.selectedArticleId, "materia-unica");
+  assert.equal(result.reading.selectedSource.fallbackScope, "same-article");
+  assert.equal(result.reading.selectedSource.readMode, "feed-fallback");
+  assert.ok(progress.some((event) => event.progress > 18 && event.progress < 60));
+  assert.ok(progress.some((event) => event.progress === 60));
+});

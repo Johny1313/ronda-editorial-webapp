@@ -53,3 +53,21 @@ test("preserva conteúdo amplo entregue pelo feed", () => {
   assert.ok(items[0].contentWordCount > 100);
   assert.match(items[0].content, /próximos passos/);
 });
+
+test("separa portais agregados pelo domínio declarado no Google News", () => {
+  const xml = `<rss><channel>
+    <item><title>Artista anuncia novidade</title><link>https://news.google.com/rss/articles/a</link><pubDate>Wed, 22 Jul 2026 11:30:00 GMT</pubDate><source url="https://portalleodias.com">Nome editorial variável</source></item>
+    <item><title>Atriz comenta carreira</title><link>https://news.google.com/rss/articles/b</link><pubDate>Wed, 22 Jul 2026 11:20:00 GMT</pubDate><source url="https://revistaquem.globo.com">Outro nome</source></item>
+  </channel></rss>`;
+  const cutoff = new Date("2026-07-21T12:00:00Z");
+  const leo = parseFeed(xml, { id: "leo", name: "LeoDias", canonicalSource: true, sourceDomains: ["portalleodias.com"] }, cutoff);
+  const quem = parseFeed(xml, { id: "quem", name: "Quem", canonicalSource: true, sourceDomains: ["revistaquem.globo.com"] }, cutoff);
+  assert.equal(leo.length, 1);
+  assert.equal(leo[0].sourceName, "LeoDias");
+  assert.equal(leo[0].publisherHomepageUrl, "https://portalleodias.com");
+  assert.equal(leo[0].publisherDomain, "portalleodias.com");
+  assert.equal(leo[0].aggregatorUrl, true);
+  assert.equal(leo[0].directPublisherUrl, false);
+  assert.equal(quem.length, 1);
+  assert.equal(quem[0].sourceName, "Quem");
+});

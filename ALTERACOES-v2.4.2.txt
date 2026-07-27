@@ -1,0 +1,42 @@
+RONDA EDITORIAL v2.4.2 — CORREÇÕES DE APURAÇÃO E LEITURA
+
+CORREÇÕES PRINCIPAIS
+
+1. Link “Abrir para apuração” novamente visível
+- O card principal da notícia não usa mais a classe genérica .primary.
+- A classe foi separada para impedir conflito com o estilo dos botões verdes.
+- O link permanece disponível no card principal, conteúdos relacionados, histórico e modal do carrossel.
+
+2. Prioridade para URL direta do portal
+- A coleta conserva o domínio declarado pelo publisher nos feeds agregados.
+- A seleção da matéria identifica links de agregadores e URLs editoriais diretas.
+- Havendo conteúdo utilizável em URL direta, ela recebe prioridade sobre Google Notícias e outros agregadores.
+- Quando a leitura resolve um redirecionamento até a página original, a URL final do publisher é usada na área de apuração e a URL recebida pela ronda fica registrada como original.
+
+3. Progresso não fica parado em 18%
+- A leitura grava avanços intermediários em 26%, 34%, 42%, 50% e 56% enquanto aguarda o portal.
+- O painel continua atualizando a tarefa até concluir a leitura ou aplicar o fallback.
+- O ciclo termina em sucesso ou falha e sempre libera uma nova tentativa.
+
+4. Fallback restrito à mesma matéria
+- Continua sendo lida exatamente uma matéria por sugestão.
+- Em timeout, bloqueio, paywall ou HTML insuficiente, o roteiro usa somente o texto/resumo do feed da própria matéria escolhida.
+- Nenhum segundo portal é aberto para completar a informação.
+- O resultado registra selectedArticleId, originalUrl e fallbackScope: same-article para auditoria.
+
+5. Cache e apuração compatíveis
+- O texto principal continua armazenado por 12 horas.
+- URLs original e resolvida são reconhecidas como a mesma leitura no modal.
+- O roteiro copiado mantém os links de apuração.
+
+VALIDAÇÃO
+- Testes adicionados para prioridade de URL direta.
+- Teste de heartbeat acima de 18%.
+- Teste de fallback da mesma matéria.
+- Teste de regressão visual da classe do link de apuração.
+- Bundle reconstruído e sintaxe validada. O smoke test completo exige as dependências de desenvolvimento instaladas.
+
+PUBLICAÇÃO
+- Substitua os arquivos da versão anterior pelo conteúdo deste ZIP.
+- Não é necessário alterar o schema do D1.
+- Mantenha o binding da Queue INTELLIGENT_JOBS_QUEUE para processamento assíncrono estável.
