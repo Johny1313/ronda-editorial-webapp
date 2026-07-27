@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.2 — correção do estado da ronda e resposta mais rápida
+
+- Estado `queued` antes da Queue e `running` somente no consumidor.
+- `completed_at` não recebe mais horário falso na abertura.
+- Heartbeat e expiração automática de rondas sem progresso.
+- Snapshots antigos filtrados pelo catálogo atual de 39 portais.
+- Tradução inicial limitada a 18 títulos novos, com timeout menor.
+- Painel diferencia ronda na fila, em andamento, expirada e falha.
+- Migração `0003_round_state_machine.sql`.
+
+
 ## 2.5.1 — remoção dos canais de curiosidades
 
 - Remoção de Fatos Desconhecidos, Mega Curioso, Incrível.club, Mistérios do Mundo, Canaltech Curiosidades, Superinteressante, Revista Galileu, Segredos do Mundo e Awebic.

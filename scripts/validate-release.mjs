@@ -26,6 +26,9 @@ assert.match(wranglerText, /ROUND_JOBS_QUEUE/);
 assert.match(wranglerText, /dead_letter_queue/);
 assert.match(index, /\/api\/status/);
 assert.match(index, /\/api\/sources\/diagnostics/);
+assert.match(index, /activeRunStatus/);
+assert.match(index, /expireStaleRuns/);
+assert.match(index, /status: "queued"/);
 assert.match(app, /If-None-Match/);
 assert.match(app, /document\.hidden \? 5 \* 60_000 : 60_000/);
 assert.match(collector, /runPool\(due, 5/);
@@ -43,6 +46,7 @@ for (const required of [
   ".github/workflows/ci.yml",
   "migrations/0001_v2_5_0.sql",
   "migrations/0002_remove_curiosity_sources.sql",
+  "migrations/0003_round_state_machine.sql",
   "public/_headers",
 ]) {
   await access(new URL(required, root));

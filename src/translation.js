@@ -3,7 +3,7 @@ import { getCachedTranslations, saveCachedTranslations } from "./database.js";
 import { plainText, stableHash } from "./parser.js";
 
 export const TRANSLATION_MODEL = "@cf/meta/m2m100-1.2b";
-export const MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND = 48;
+export const MAX_NEW_TITLE_TRANSLATIONS_PER_ROUND = 18;
 export const TRANSLATION_CONCURRENCY = 3;
 const SPANISH_SOURCES = new Set(["El País", "Infobae"]);
 const PORTUGUESE_WORDS = /\b(que|para|com|uma|das|dos|não|mais|sobre|após|entre|governo|notícia|brasil|mundo|novo|nova|segundo|diz)\b/i;
@@ -27,7 +27,7 @@ export function isLikelyPortuguese(value) {
   return /[ãõçáéíóúâêôà]/i.test(text) || PORTUGUESE_WORDS.test(text);
 }
 
-async function withTimeout(promise, milliseconds = 15_000) {
+async function withTimeout(promise, milliseconds = 8_000) {
   let timeout;
   try {
     return await Promise.race([

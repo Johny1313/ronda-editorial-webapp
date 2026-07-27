@@ -456,8 +456,9 @@ async function waitForRun(runId) {
       const payload = await api(`/api/runs/${encodeURIComponent(runId)}`);
       const run = payload?.run;
       if (run?.status === "success") return run;
-      if (run?.status === "failed") throw new Error(run.error || "A coleta não encontrou conteúdo válido.");
-      setStatus("", "Ronda em andamento", `Coletando fontes… ${Math.min(99, 5 + attempt * 3)}%`);
+      if (["failed", "expired"].includes(run?.status)) throw new Error(run.error || "A ronda foi encerrada antes da conclusão.");
+      const queued = run?.status === "queued";
+      setStatus("", queued ? "Ronda na fila" : "Ronda em andamento", queued ? "Aguardando o consumidor da Cloudflare" : `Coletando fontes… ${Math.min(99, 5 + attempt * 3)}%`);
     } catch (error) {
       if (error.status === 404) continue;
       throw error;
@@ -553,7 +554,12 @@ async function showHistory() {
   try {
     const payload = await api("/api/history?limit=50");
     const runs = payload?.runs || [];
-    holder.innerHTML = runs.length ? runs.map((run) => `<button class="history-row" data-history-run="${escapeHtml(run.id)}" type="button" ${run.status === "running" ? "disabled" : ""}><span class="history-date"><strong>${escapeHtml(formatDate(run.completed_at))}</strong><small>${run.trigger_type === "scheduled" ? "Automática" : "Manual"}</small></span><span class="history-status ${run.status}">${run.status === "success" ? "Concluída" : run.status === "running" ? "Em andamento" : "Falhou"}</span><span>${Number(run.items_count) || 0} conteúdos</span><span>${Number(run.topics_count) || 0} assuntos</span><span class="history-open"><strong>${Number(run.sources_count) || 0} fontes</strong><small>${run.status === "running" ? "Aguarde" : "Ver notícias →"}</small></span></button>`).join("") : '<div class="loading-row">Nenhuma ronda armazenada.</div>';
+    holder.innerHTML = runs.length ? runs.map((run) => {
+      const active = ["queued", "running"].includes(run.status);
+      const label = run.status === "success" ? "Concluída" : run.status === "queued" ? "Na fila" : run.status === "running" ? "Em andamento" : run.status === "expired" ? "Expirada" : "Falhou";
+      const date = run.completed_at || run.started_at || run.queued_at;
+      return `<button class="history-row" data-history-run="${escapeHtml(run.id)}" type="button" ${active ? "disabled" : ""}><span class="history-date"><strong>${escapeHtml(formatDate(date))}</strong><small>${run.trigger_type === "scheduled" ? "Automática" : "Manual"}</small></span><span class="history-status ${run.status}">${label}</span><span>${Number(run.items_count) || 0} conteúdos</span><span>${Number(run.topics_count) || 0} assuntos</span><span class="history-open"><strong>${Number(run.sources_count) || 0} fontes</strong><small>${active ? "Aguarde" : run.status === "success" ? "Ver notícias →" : "Ver diagnóstico"}</small></span></button>`;
+    }).join("") : '<div class="loading-row">Nenhuma ronda armazenada.</div>';
   } catch (error) {
     holder.innerHTML = `<div class="loading-row">${escapeHtml(error.message)}</div>`;
   }
@@ -917,8 +923,10 @@ async function pollStatus({ force = false } = {}) {
       const status = response.payload;
       state.serverRunning = Boolean(status?.running);
       if (status?.running) {
-        const started = status.activeRunStartedAt ? relativeTime(status.activeRunStartedAt) : "agora";
-        setStatus("", "Ronda em andamento", `Processamento seguro na fila · iniciado ${started}`);
+        const queued = status.activeRunStatus === "queued";
+        const reference = queued ? status.activeRunQueuedAt : status.activeRunStartedAt;
+        const started = reference ? relativeTime(reference) : "agora";
+        setStatus("", queued ? "Ronda na fila" : "Ronda em andamento", queued ? `Aguardando consumidor · enviada ${started}` : `Coletando fontes · iniciado ${started}`);
       } else if (status?.lastRunId && status.lastRunId !== state.lastRunId) {
         await loadLatest({ quiet: true });
         const completedAt = status.lastSuccessAt || state.data?.collectedAt;

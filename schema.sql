@@ -2,8 +2,10 @@ CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
   trigger_type TEXT NOT NULL,
   status TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  completed_at TEXT NOT NULL,
+  queued_at TEXT NOT NULL,
+  started_at TEXT,
+  heartbeat_at TEXT,
+  completed_at TEXT,
   items_count INTEGER NOT NULL DEFAULT 0,
   topics_count INTEGER NOT NULL DEFAULT 0,
   sources_count INTEGER NOT NULL DEFAULT 0,
@@ -13,6 +15,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_completed ON runs(completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_status_completed ON runs(status, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status_activity ON runs(status, heartbeat_at DESC, queued_at DESC);
 CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, token TEXT NOT NULL, expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS translation_cache (
@@ -96,5 +99,5 @@ DROP INDEX IF EXISTS idx_intelligent_carousels_run_topic;
 DROP INDEX IF EXISTS idx_intelligent_jobs_job_id;
 DROP INDEX IF EXISTS idx_article_source_stats_updated;
 INSERT INTO app_state (key, value, updated_at)
-VALUES ('schema_version', '2.5.1', CURRENT_TIMESTAMP)
+VALUES ('schema_version', '2.5.2', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;

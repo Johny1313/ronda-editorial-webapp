@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.5.1
+## Versão 2.5.2
 
-A versão 2.5.1 mantém as otimizações da série 2.5 e remove integralmente os canais dedicados a curiosidades do catálogo de coleta.
+A versão 2.5.2 corrige o ciclo da Queue, expira rondas presas e mantém o catálogo fixo de 39 portais sem canais dedicados a curiosidades.
 
 Principais mudanças:
 
@@ -19,6 +19,16 @@ Principais mudanças:
 - migração D1 versionada e limpeza periódica, sem manutenção pesada a cada ronda;
 - retries classificados e Dead Letter Queue para rondas e leitura inteligente;
 - build validado, Worker minificado e preview para branches não produtivas.
+
+
+### Correção do processamento de rondas
+
+- o botão e o Cron registram a ronda como `queued`;
+- o estado muda para `running` somente quando o consumidor inicia;
+- heartbeat é renovado entre coleta, persistência e tradução;
+- jobs sem progresso expiram em até 10 minutos;
+- snapshots antigos são filtrados pelo catálogo atual antes de chegar ao painel;
+- a primeira etapa de tradução foi limitada a 18 títulos novos por ronda.
 
 ### Fontes removidas na 2.5.1
 
@@ -130,13 +140,13 @@ Branches diferentes de `main` geram preview sem promover automaticamente a vers�
 
 ## Migração do D1
 
-A aplicação possui as migrações `0001_v2_5_0.sql` e `0002_remove_curiosity_sources.sql`. O deploy do Worker não executa migrations automaticamente. Para aplicar todas as migrações pendentes pelo terminal:
+A aplicação possui migrações versionadas até `0003_round_state_machine.sql`. O deploy do Worker não executa migrations automaticamente. Para aplicar todas as migrações pendentes pelo terminal:
 
 ```bash
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 ```
 
-O Worker mantém uma proteção de compatibilidade que cria as estruturas ausentes na primeira execução. A migração explícita continua recomendada porque registra a versão, remove índices antigos não utilizados e apaga do estado operacional os canais retirados do catálogo.
+O Worker mantém uma proteção de compatibilidade que cria as estruturas ausentes na primeira execução. A migração explícita continua recomendada porque registra a versão, consolida os estados `queued`, `running` e `expired`, remove índices antigos não utilizados e apaga do estado operacional os canais retirados do catálogo.
 
 ## Desenvolvimento e validação
 

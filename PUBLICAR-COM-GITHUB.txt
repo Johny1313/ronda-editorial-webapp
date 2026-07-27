@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.5.1 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.5.2 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
@@ -17,7 +17,7 @@ não devem permanecer. O histórico agora está consolidado em CHANGELOG.md.
 ----------------------------
 No GitHub, crie uma branch, por exemplo:
 
-  ajuste-v2.5.1
+  ajuste-v2.5.2
 
 Envie os arquivos para essa branch. Não envie diretamente para main na primeira
 tentativa.
@@ -33,7 +33,7 @@ Cloudflare > Worker > Settings > Builds:
     npx --yes wrangler@4.113.0 versions upload
   Root directory: /
 
-A branch ajuste-v2.5.1 deve gerar uma versão de preview sem substituir a versão
+A branch ajuste-v2.5.2 deve gerar uma versão de preview sem substituir a versão
 ativa em produção.
 
 4. RECURSOS CLOUDFLARE
@@ -67,7 +67,7 @@ Na URL fornecida pelo Cloudflare, abra:
 
 Confirme:
 
-  versão 2.5.1
+  versão 2.5.2
   ready: true
   roundQueueReady: true
   intelligentQueueReady: true
@@ -83,7 +83,7 @@ para staging.
 Após o merge em main, faça o teste funcional completo:
 
 1. Clique em Executar ronda.
-2. Confirme que o pedido retorna rapidamente e fica com status running.
+2. Confirme que o pedido retorna rapidamente com status queued e muda para running somente quando o consumidor iniciar.
 3. Aguarde a conclusão pela própria interface.
 4. Abra uma leitura inteligente e valide os sete slides em português.
 5. Confira se os chips diferenciam cache, sem novas, 403, timeout e rota
@@ -96,11 +96,11 @@ vez em um ambiente com acesso à conta Cloudflare:
 
   npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
-A migração cria source_state e remove índices antigos que não eram usados.
+As migrações criam source_state, removem canais antigos e consolidam a máquina de estados da ronda.
 
 7. PROMOVER PARA PRODUÇÃO
 -------------------------
-Somente depois de validar o preview, abra um Pull Request de ajuste-v2.5.1 para
+Somente depois de validar o preview, abra um Pull Request de ajuste-v2.5.2 para
 main e faça o merge.
 
 O commit em main executará o deploy de produção.
@@ -120,3 +120,13 @@ No Cloudflare, verifique:
 
 Não use o botão Upload files para atualizações futuras. Use branches e Pull
 Requests, pois o upload manual não remove arquivos antigos de forma confiável.
+
+
+MIGRAÇÃO OBRIGATÓRIA DA 2.5.2
+
+Depois do deploy, aplique:
+
+  npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+
+A migração 0003_round_state_machine.sql corrige os estados queued/running/expired.
+O Worker possui compatibilidade automática, mas a migração mantém o schema de produção consolidado.

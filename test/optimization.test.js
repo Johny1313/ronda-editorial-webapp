@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { collectFeed, collectRound, runPool } from "../src/collector.js";
+import { withEditorias } from "../src/index.js";
 
 const NOW = new Date("2026-07-27T12:00:00Z");
 const CUTOFF = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
@@ -119,7 +120,58 @@ test("publicação usa assets estáticos, fila de rondas e polling condicional",
   assert.match(app, /If-None-Match/);
   assert.doesNotMatch(app, /setInterval\(/);
   assert.doesNotMatch(index, /ui\.generated/);
-  assert.match(index, /freshRunningRun/);
+  assert.match(index, /freshActiveRun/);
+  assert.match(index, /activeRunStatus/);
+  assert.match(index, /expireStaleRuns/);
+  assert.match(index, /status: "queued"/);
   assert.match(index, /scheduled_round_skipped/);
   assert.match(index, /reused: true/);
+});
+
+test("estado da ronda usa fila, início real, heartbeat e expiração", async () => {
+  const [database, index, migration, app] = await Promise.all([
+    readFile(new URL("../src/database.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0003_round_state_machine.sql", import.meta.url), "utf8"),
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(database, /export async function queueRun/);
+  assert.match(database, /export async function markRunStarted/);
+  assert.match(database, /export async function touchRun/);
+  assert.match(database, /export async function expireStaleRuns/);
+  assert.match(database, /status = 'expired'/);
+  assert.match(index, /await markRunStarted\(db/);
+  assert.match(index, /activeRunStatus/);
+  assert.match(index, /fixed-39-no-curiosity-v1/);
+  assert.match(migration, /queued_at TEXT NOT NULL/);
+  assert.match(migration, /heartbeat_at TEXT/);
+  assert.match(app, /Ronda na fila/);
+  assert.match(app, /\["failed", "expired"\]/);
+});
+
+
+test("snapshot antigo remove canais fora do catálogo atual", () => {
+  const oldPayload = {
+    ok: true,
+    schemaVersion: 4,
+    collectedAt: "2026-07-27T12:00:00Z",
+    translation: { targetLanguage: "pt-BR", portugueseOnly: true },
+    sources: [
+      { id: "g1", name: "G1", region: "Brasil", count: 1, ok: true },
+      { id: "fatos-desconhecidos", name: "Fatos Desconhecidos", region: "Brasil", count: 1, ok: true },
+    ],
+    items: [
+      { ...item("https://g1.globo.com/noticia"), id: "g1-1", sourceName: "G1", collectorName: "G1" },
+      { ...item("https://fatos.test/noticia"), id: "fd-1", sourceName: "Fatos Desconhecidos", collectorName: "Fatos Desconhecidos" },
+    ],
+    topics: [],
+    totals: { items: 2, topics: 0, sources: 2, socialItems: 0 },
+  };
+  const filtered = withEditorias(oldPayload);
+  assert.equal(filtered.sources.length, 1);
+  assert.equal(filtered.sources[0].name, "G1");
+  assert.equal(filtered.items.length, 1);
+  assert.equal(filtered.items[0].collectorName, "G1");
+  assert.equal(filtered.catalog.portals, 39);
+  assert.equal(filtered.schemaVersion, 5);
 });

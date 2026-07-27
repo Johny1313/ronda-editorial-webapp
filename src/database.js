@@ -1,14 +1,16 @@
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.5.1";
+export const DATABASE_SCHEMA_VERSION = "2.5.2";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     trigger_type TEXT NOT NULL,
     status TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    completed_at TEXT NOT NULL,
+    queued_at TEXT NOT NULL,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    completed_at TEXT,
     items_count INTEGER NOT NULL DEFAULT 0,
     topics_count INTEGER NOT NULL DEFAULT 0,
     sources_count INTEGER NOT NULL DEFAULT 0,
@@ -121,12 +123,30 @@ async function currentSchemaVersion(db) {
   }
 }
 
+async function ensureRunStateColumns(db) {
+  const result = await db.prepare("PRAGMA table_info(runs)").all();
+  const columns = new Set((result?.results || []).map((row) => String(row?.name || "")));
+  if (!columns.has("queued_at")) await db.prepare("ALTER TABLE runs ADD COLUMN queued_at TEXT").run();
+  if (!columns.has("heartbeat_at")) await db.prepare("ALTER TABLE runs ADD COLUMN heartbeat_at TEXT").run();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    UPDATE runs
+    SET queued_at = COALESCE(NULLIF(queued_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, ''), ?),
+        heartbeat_at = COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), NULLIF(queued_at, ''), ?)
+    WHERE queued_at IS NULL OR queued_at = '' OR heartbeat_at IS NULL OR heartbeat_at = ''
+  `).bind(now, now).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_runs_status_activity ON runs(status, heartbeat_at DESC, queued_at DESC)").run();
+}
+
 export async function ensureSchema(db) {
   if (!db) throw new Error("Binding D1 'DB' não configurado.");
   if (initializedBindings.has(db)) return;
   const version = await currentSchemaVersion(db);
   if (version !== DATABASE_SCHEMA_VERSION) {
     for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
+  }
+  await ensureRunStateColumns(db);
+  if (version !== DATABASE_SCHEMA_VERSION) {
     const now = new Date().toISOString();
     await db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', ?, ?)
@@ -239,19 +259,78 @@ export async function deleteMonitoringTerm(db, id) {
   return monitoringTermRow(current);
 }
 
-export async function startRun(db, { id, triggerType, startedAt }) {
+export async function queueRun(db, { id, triggerType, queuedAt = new Date().toISOString() }) {
   await ensureSchema(db);
-  await db
-    .prepare(`
-      INSERT INTO runs (
-        id, trigger_type, status, started_at, completed_at,
-        items_count, topics_count, sources_count, social_items_count,
-        error, payload_json
-      ) VALUES (?, ?, 'running', ?, ?, 0, 0, 0, 0, NULL, NULL)
-    `)
-    .bind(id, triggerType, startedAt, startedAt)
+  await db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, 'queued', ?, '', ?, '', 0, 0, 0, 0, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = 'queued',
+      queued_at = excluded.queued_at,
+      started_at = '',
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = '',
+      error = NULL
+  `).bind(id, triggerType, queuedAt, queuedAt).run();
+  return { id, status: "queued", queuedAt };
+}
+
+export async function markRunStarted(db, { id, triggerType, queuedAt, startedAt = new Date().toISOString() }) {
+  await ensureSchema(db);
+  const safeQueuedAt = queuedAt || startedAt;
+  await db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, 'running', ?, ?, ?, '', 0, 0, 0, 0, NULL, NULL)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = 'running',
+      queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
+      started_at = excluded.started_at,
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = '',
+      error = NULL
+  `).bind(id, triggerType, safeQueuedAt, startedAt, startedAt).run();
+  return { id, status: "running", queuedAt: safeQueuedAt, startedAt };
+}
+
+export async function touchRun(db, id, heartbeatAt = new Date().toISOString()) {
+  await ensureSchema(db);
+  await db.prepare("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running'")
+    .bind(heartbeatAt, id)
     .run();
-  return { id, status: "running", startedAt };
+  return heartbeatAt;
+}
+
+export async function expireStaleRuns(db, { queuedTimeoutMs = 2 * 60 * 1000, runningTimeoutMs = 10 * 60 * 1000 } = {}) {
+  await ensureSchema(db);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const queuedCutoff = new Date(nowMs - Math.max(30_000, Number(queuedTimeoutMs) || 120_000)).toISOString();
+  const runningCutoff = new Date(nowMs - Math.max(60_000, Number(runningTimeoutMs) || 600_000)).toISOString();
+  const results = await db.batch([
+    db.prepare(`
+      UPDATE runs
+      SET status = 'expired', completed_at = ?, heartbeat_at = ?, error = 'Ronda expirada antes de iniciar no consumidor.'
+      WHERE status = 'queued'
+        AND COALESCE(NULLIF(queued_at, ''), NULLIF(started_at, ''), NULLIF(completed_at, '')) < ?
+    `).bind(now, now, queuedCutoff),
+    db.prepare(`
+      UPDATE runs
+      SET status = 'expired', completed_at = ?, heartbeat_at = ?, error = 'Ronda expirada por ausência de progresso.'
+      WHERE status = 'running'
+        AND COALESCE(NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), NULLIF(queued_at, '')) < ?
+    `).bind(now, now, runningCutoff),
+  ]);
+  return (results || []).reduce((sum, result) => sum + Number(result?.meta?.changes || 0), 0);
+}
+
+export async function startRun(db, { id, triggerType, startedAt }) {
+  return markRunStarted(db, { id, triggerType, queuedAt: startedAt, startedAt });
 }
 
 export async function saveRun(db, { id, triggerType, startedAt, payload }) {
@@ -275,14 +354,15 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     db
       .prepare(`
         INSERT INTO runs (
-          id, trigger_type, status, started_at, completed_at,
-          items_count, topics_count, sources_count, social_items_count,
-          error, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+          items_count, topics_count, sources_count, social_items_count, error, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           trigger_type = excluded.trigger_type,
           status = excluded.status,
+          queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
           started_at = excluded.started_at,
+          heartbeat_at = excluded.heartbeat_at,
           completed_at = excluded.completed_at,
           items_count = excluded.items_count,
           topics_count = excluded.topics_count,
@@ -296,6 +376,8 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
         triggerType,
         status,
         startedAt,
+        startedAt,
+        completedAt,
         completedAt,
         Number(totals.items) || 0,
         Number(totals.topics) || 0,
@@ -364,9 +446,12 @@ export async function getRunHistory(db, limit = 30) {
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 30));
   const result = await db
     .prepare(`
-      SELECT id, trigger_type, status, started_at, completed_at,
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
              items_count, topics_count, sources_count, social_items_count, error
-      FROM runs ORDER BY completed_at DESC LIMIT ?
+      FROM runs
+      ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+      LIMIT ?
     `)
     .bind(safeLimit)
     .all();
@@ -377,7 +462,8 @@ export async function getRunStatus(db, id) {
   await ensureSchema(db);
   const row = await db
     .prepare(`
-      SELECT id, trigger_type, status, started_at, completed_at,
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
              items_count, topics_count, sources_count, social_items_count, error
       FROM runs WHERE id = ? LIMIT 1
     `)
@@ -390,7 +476,8 @@ export async function getRunPayload(db, id) {
   await ensureSchema(db);
   const row = await db
     .prepare(`
-      SELECT id, trigger_type, status, started_at, completed_at, error, payload_json
+      SELECT id, trigger_type, status, queued_at,
+             NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at, error, payload_json
       FROM runs WHERE id = ? LIMIT 1
     `)
     .bind(id)
@@ -408,8 +495,9 @@ export async function getRunPayload(db, id) {
     id: row.id,
     triggerType: row.trigger_type,
     status: row.status,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
+    queuedAt: row.queued_at || null,
+    startedAt: row.started_at || null,
+    completedAt: row.completed_at || null,
     error: row.error,
     payload,
   };
@@ -788,11 +876,13 @@ export async function listSourceDiagnostics(db) {
 export async function getLatestRunSummary(db, { successOnly = false } = {}) {
   await ensureSchema(db);
   const row = await db.prepare(`
-    SELECT id, trigger_type, status, started_at, completed_at,
+    SELECT id, trigger_type, status, queued_at,
+           NULLIF(started_at, '') AS started_at, NULLIF(heartbeat_at, '') AS heartbeat_at,
+           NULLIF(completed_at, '') AS completed_at,
            items_count, topics_count, sources_count, social_items_count, error
     FROM runs
     ${successOnly ? "WHERE status = 'success'" : ""}
-    ORDER BY completed_at DESC
+    ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
     LIMIT 1
   `).first();
   if (!row) return null;
@@ -800,8 +890,10 @@ export async function getLatestRunSummary(db, { successOnly = false } = {}) {
     id: row.id,
     triggerType: row.trigger_type,
     status: row.status,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
+    queuedAt: row.queued_at || null,
+    startedAt: row.started_at || null,
+    heartbeatAt: row.heartbeat_at || null,
+    completedAt: row.completed_at || null,
     items: Number(row.items_count) || 0,
     topics: Number(row.topics_count) || 0,
     sources: Number(row.sources_count) || 0,
@@ -820,7 +912,7 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
   const retentionCutoff = new Date(nowMs - 48 * 60 * 60 * 1000).toISOString();
   const translationCutoff = new Date(nowMs - 30 * 24 * 60 * 60 * 1000).toISOString();
   await db.batch([
-    db.prepare("DELETE FROM runs WHERE completed_at < ?").bind(retentionCutoff),
+    db.prepare("DELETE FROM runs WHERE status IN ('success', 'failed', 'expired') AND NULLIF(completed_at, '') < ?").bind(retentionCutoff),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),

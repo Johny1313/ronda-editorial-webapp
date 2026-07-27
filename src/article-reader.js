@@ -315,7 +315,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.5.1; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.5.2; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

@@ -9,6 +9,7 @@ import {
   databaseSelfTest,
   deleteMonitoringTerm,
   ensureSchema,
+  expireStaleRuns,
   getArticleReadCache,
   getArticleSourceStats,
   getIntelligentCarousel,
@@ -30,14 +31,16 @@ import {
   saveIntelligentCarousel,
   saveRun,
   saveSourceStates,
+  queueRun,
+  markRunStarted,
+  touchRun,
   setMonitoringTermActive,
-  startRun,
   updateIntelligentJob,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 
-const VERSION = "2.5.1";
+const VERSION = "2.5.2";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -77,10 +80,14 @@ function structuredLog(event, fields = {}) {
   console.log(JSON.stringify({ event, version: VERSION, at: new Date().toISOString(), ...fields }));
 }
 
-function freshRunningRun(run, maxAgeMs = 12 * 60 * 1000) {
-  if (run?.status !== "running") return null;
-  const startedMs = Date.parse(run.startedAt || run.completedAt || "");
-  return Number.isFinite(startedMs) && Date.now() - startedMs <= maxAgeMs ? run : null;
+function freshActiveRun(run, { queuedMaxAgeMs = 2 * 60 * 1000, runningMaxAgeMs = 10 * 60 * 1000 } = {}) {
+  if (!run || !["queued", "running"].includes(run.status)) return null;
+  const reference = run.status === "queued"
+    ? run.queuedAt
+    : run.heartbeatAt || run.startedAt || run.queuedAt;
+  const referenceMs = Date.parse(reference || "");
+  const maximum = run.status === "queued" ? queuedMaxAgeMs : runningMaxAgeMs;
+  return Number.isFinite(referenceMs) && Date.now() - referenceMs <= maximum ? run : null;
 }
 
 
@@ -111,29 +118,60 @@ function requireDatabase(env) {
   return env.DB;
 }
 
+const CURRENT_PORTAL_IDS = new Set(FEEDS.map((feed) => feed.id));
+const CURRENT_PORTAL_NAMES = new Set(FEEDS.map((feed) => feed.name));
+const CATALOG_VERSION = "fixed-39-no-curiosity-v1";
+
+function currentCatalogSource(source) {
+  if (!source || typeof source !== "object") return false;
+  if (source.region === "Rede" || source.id === "bluesky" || source.name === "Bluesky") return true;
+  return CURRENT_PORTAL_IDS.has(source.id) || CURRENT_PORTAL_NAMES.has(source.name);
+}
+
+function currentCatalogItem(item) {
+  if (!item || typeof item !== "object") return false;
+  if (item.region === "Rede" || item.kind === "social") return true;
+  return CURRENT_PORTAL_NAMES.has(item.collectorName) || CURRENT_PORTAL_NAMES.has(item.sourceName);
+}
+
 function withEditorias(payload) {
-  if (!payload || typeof payload !== "object" || !Array.isArray(payload.topics)) return payload;
-  if (Number(payload.schemaVersion) >= 4) return payload;
-  const safePayload = payload.translation?.targetLanguage === "pt-BR" && payload.translation?.portugueseOnly
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.items)) return payload;
+  const translatedPayload = payload.translation?.targetLanguage === "pt-BR" && payload.translation?.portugueseOnly
     ? payload
     : portugueseOnlyFallback(payload);
+  const items = translatedPayload.items.filter(currentCatalogItem);
+  const sources = Array.isArray(translatedPayload.sources)
+    ? translatedPayload.sources.filter(currentCatalogSource)
+    : [];
+  const catalogChanged = items.length !== translatedPayload.items.length
+    || sources.length !== (translatedPayload.sources || []).length
+    || translatedPayload.catalog?.version !== CATALOG_VERSION;
+  if (!catalogChanged && Number(translatedPayload.schemaVersion) >= 5) return translatedPayload;
+
+  const collectedAt = new Date(translatedPayload.collectedAt || translatedPayload.storedAt || Date.now());
+  const topics = buildTopics(items, collectedAt, 40).map((topic) => {
+    const recalculatedEditoria = classifyEditoria(topic?.items || []);
+    return topic.editoria === recalculatedEditoria
+      ? topic
+      : { ...topic, editoria: recalculatedEditoria, carousel: buildCarouselBrief({ ...topic, editoria: recalculatedEditoria }) };
+  });
+  const sourceCount = new Set(items.map((item) => item.sourceName).filter(Boolean)).size;
+  const socialItems = items.filter((item) => item.kind === "social").length;
   return {
-    ...safePayload,
-    topics: safePayload.topics.map((topic) => {
-      const recalculatedEditoria = classifyEditoria(topic?.items || []);
-      const editoriaChanged = topic?.editoria !== recalculatedEditoria;
-      const enriched = { ...topic, editoria: recalculatedEditoria };
-      const expectedUrls = new Set((enriched?.items || [])
-        .map((item) => String(item?.url || "").trim())
-        .filter((url) => /^https?:\/\//i.test(url)));
-      const carouselUrls = new Set((enriched?.carousel?.verificationLinks || [])
-        .map((item) => String(item?.url || "").trim())
-        .filter((url) => /^https?:\/\//i.test(url)));
-      const carouselHasEveryLink = expectedUrls.size > 0 && [...expectedUrls].every((url) => carouselUrls.has(url));
-      return enriched?.carousel?.slides?.length && carouselHasEveryLink && !editoriaChanged
-        ? enriched
-        : { ...enriched, carousel: buildCarouselBrief(enriched) };
-    }),
+    ...translatedPayload,
+    schemaVersion: 5,
+    catalog: { version: CATALOG_VERSION, portals: FEEDS.length },
+    sources,
+    items,
+    topics,
+    totals: {
+      ...(translatedPayload.totals || {}),
+      items: items.length,
+      topics: topics.length,
+      sources: sourceCount,
+      socialItems,
+      dedicatedItems: Number(translatedPayload.dedicatedMonitoring?.items?.length) || 0,
+    },
   };
 }
 
@@ -414,12 +452,15 @@ async function processIntelligentQueueBatch(batch, env) {
 async function processRoundQueueMessage(message, env, body = {}) {
   const runId = String(body.runId || "").trim();
   const triggerType = body.triggerType === "manual" ? "manual" : "scheduled";
-  const startedAt = String(body.startedAt || new Date().toISOString());
+  const queuedAt = String(body.queuedAt || body.startedAt || new Date().toISOString());
+  const startedAt = new Date().toISOString();
   if (!runId) {
     message?.ack?.();
     return;
   }
   try {
+    const db = requireDatabase(env);
+    await markRunStarted(db, { id: runId, triggerType, queuedAt, startedAt });
     await performRound(env, triggerType, { runId, startedAt, runStarted: true, deferFailureSave: true });
     structuredLog("round_queue_completed", { runId, triggerType });
     message?.ack?.();
@@ -434,6 +475,8 @@ async function processRoundQueueMessage(message, env, body = {}) {
       detail: error instanceof Error ? error.message : String(error),
     });
     if (retryable && attempts < 3 && message?.retry) {
+      const retryQueuedAt = new Date().toISOString();
+      await queueRun(requireDatabase(env), { id: runId, triggerType, queuedAt: retryQueuedAt }).catch(() => null);
       message.retry({ delaySeconds: 20 * attempts });
       return;
     }
@@ -476,7 +519,8 @@ async function performRound(env, triggerType, options = {}) {
   const startedAt = options.startedAt || new Date().toISOString();
   structuredLog("round_started", { runId, triggerType });
   try {
-    if (!options.runStarted) await startRun(db, { id: runId, triggerType, startedAt });
+    if (!options.runStarted) await markRunStarted(db, { id: runId, triggerType, queuedAt: startedAt, startedAt });
+    else await touchRun(db, runId, startedAt).catch(() => null);
     let payload;
     try {
       const [monitoringTerms, previousRound, sourceStates] = await Promise.all([
@@ -494,6 +538,7 @@ async function performRound(env, triggerType, options = {}) {
         throw new Error("O coletor não retornou um resultado válido.");
       }
 
+      await touchRun(db, runId).catch(() => null);
       const sourceStateUpdates = Array.isArray(payload.sourceStateUpdates) ? payload.sourceStateUpdates : [];
       delete payload.sourceStateUpdates;
       if (sourceStateUpdates.length) {
@@ -509,6 +554,7 @@ async function performRound(env, triggerType, options = {}) {
         execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue" : "cloudflare-trigger",
         catalogFixed: true,
       };
+      await touchRun(db, runId).catch(() => null);
       try {
         payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
       } catch (error) {
@@ -516,11 +562,12 @@ async function performRound(env, triggerType, options = {}) {
         payload = portugueseOnlyFallback(payload);
       }
       payload = withEditorias(payload);
-      payload.schemaVersion = 4;
+      payload.schemaVersion = 5;
+      payload.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
     } catch (error) {
       payload = {
         ok: false,
-        schemaVersion: 4,
+        schemaVersion: 5,
         collectedAt: new Date().toISOString(),
         windowHours: 24,
         durationMs: Date.now() - Date.parse(startedAt),
@@ -598,18 +645,22 @@ async function handleApi(request, env, url, ctx) {
 
   if (url.pathname === "/api/status" && request.method === "GET") {
     const db = requireDatabase(env);
+    await expireStaleRuns(db).catch(() => null);
     const [latest, latestSuccess] = await Promise.all([
       getLatestRunSummary(db),
       getLatestRunSummary(db, { successOnly: true }),
     ]);
-    const running = latest?.status === "running";
+    const activeRun = freshActiveRun(latest);
+    const running = Boolean(activeRun);
     const payload = {
       ok: true,
       ready: true,
       version: VERSION,
       running,
-      activeRunId: running ? latest.id : null,
-      activeRunStartedAt: running ? latest.startedAt : null,
+      activeRunId: activeRun?.id || null,
+      activeRunStatus: activeRun?.status || null,
+      activeRunQueuedAt: activeRun?.queuedAt || null,
+      activeRunStartedAt: activeRun?.startedAt || null,
       lastRunId: latestSuccess?.id || null,
       lastSuccessAt: latestSuccess?.completedAt || null,
       items: latestSuccess?.items || 0,
@@ -624,6 +675,7 @@ async function handleApi(request, env, url, ctx) {
 
   if (url.pathname === "/api/health" && request.method === "GET") {
     const db = requireDatabase(env);
+    await expireStaleRuns(db).catch(() => null);
     const dbOk = await databaseHealth(db);
     const [latest, monitoringTerms] = await Promise.all([
       getLatestRunSummary(db, { successOnly: true }),
@@ -900,27 +952,28 @@ async function handleApi(request, env, url, ctx) {
       throw new HttpError(401, "Chave de operação inválida.");
     }
     const db = requireDatabase(env);
-    const activeRun = freshRunningRun(await getLatestRunSummary(db).catch(() => null));
+    await expireStaleRuns(db).catch(() => null);
+    const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
     if (activeRun) {
-      return json({ ok: true, queued: true, reused: true, runId: activeRun.id, status: "running" }, 202);
+      return json({ ok: true, queued: true, reused: true, runId: activeRun.id, status: activeRun.status }, 202);
     }
     const throttle = await acquireLock(db, "manual-throttle", 60 * 1000);
     if (!throttle) throw new HttpError(429, "Aguarde um minuto antes de executar outra ronda manual.");
     const runId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    await startRun(db, { id: runId, triggerType: "manual", startedAt });
+    const queuedAt = new Date().toISOString();
+    await queueRun(db, { id: runId, triggerType: "manual", queuedAt });
 
     if (env.ROUND_JOBS_QUEUE?.send) {
       try {
-        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "manual", startedAt });
+        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "manual", queuedAt });
         structuredLog("round_enqueued", { runId, triggerType: "manual" });
-        return json({ ok: true, queued: true, runId, status: "running" }, 202);
+        return json({ ok: true, queued: true, runId, status: "queued" }, 202);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         await saveRun(db, {
           id: runId,
           triggerType: "manual",
-          startedAt,
+          startedAt: queuedAt,
           payload: {
             ok: false,
             collectedAt: new Date().toISOString(),
@@ -936,6 +989,8 @@ async function handleApi(request, env, url, ctx) {
       }
     }
 
+    const startedAt = new Date().toISOString();
+    await markRunStarted(db, { id: runId, triggerType: "manual", queuedAt, startedAt });
     const data = await performRound(env, "manual", { runId, startedAt, runStarted: true });
     return json({ ok: true, queued: false, runId, status: "success", data });
   }
@@ -953,7 +1008,7 @@ async function handleRequest(request, env, ctx) {
   return json({ ok: false, error: "Página não encontrada." }, 404);
 }
 
-export { handleRequest, performRound, processIntelligentCarouselJob, processIntelligentQueueBatch, processQueueBatch, selfTest };
+export { handleRequest, performRound, processIntelligentCarouselJob, processIntelligentQueueBatch, processQueueBatch, selfTest, withEditorias };
 
 export default {
   async fetch(request, env, ctx) {
@@ -976,18 +1031,22 @@ export default {
     const startedAt = new Date().toISOString();
     const task = (async () => {
       const db = requireDatabase(env);
-      const activeRun = freshRunningRun(await getLatestRunSummary(db).catch(() => null));
+      await expireStaleRuns(db).catch(() => null);
+      const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
       if (activeRun) {
         structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt });
         return;
       }
-      await startRun(db, { id: runId, triggerType: "scheduled", startedAt });
+      const queuedAt = startedAt;
+      await queueRun(db, { id: runId, triggerType: "scheduled", queuedAt });
       if (env.ROUND_JOBS_QUEUE?.send) {
-        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", startedAt });
+        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt });
         structuredLog("round_enqueued", { runId, triggerType: "scheduled" });
         return;
       }
-      await performRound(env, "scheduled", { runId, startedAt, runStarted: true });
+      const consumerStartedAt = new Date().toISOString();
+      await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt: consumerStartedAt });
+      await performRound(env, "scheduled", { runId, startedAt: consumerStartedAt, runStarted: true });
     })().catch((error) => {
       structuredLog("scheduled_round_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
     });
