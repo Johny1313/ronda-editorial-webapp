@@ -1,29 +1,43 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
-import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
-import { collectRound } from "./collector.js";
+import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
+import { collectRound, customSourceFeed, FEEDS } from "./collector.js";
 import {
   acquireLock,
+  createCustomSource,
   createIntelligentJob,
+  createMonitoringTerm,
   databaseHealth,
   databaseSelfTest,
+  deleteCustomSource,
+  deleteMonitoringTerm,
   ensureSchema,
+  getArticleReadCache,
+  getArticleSourceStats,
   getIntelligentCarousel,
   getIntelligentJob,
   getLatestRound,
   getRunHistory,
   getRunPayload,
   getRunStatus,
+  listCustomSources,
+  listMonitoringTerms,
+  MAX_CUSTOM_SOURCES,
+  MAX_MONITORING_TERMS,
+  recordArticleSourceAttempt,
   releaseLock,
+  saveArticleReadCache,
   saveIntelligentCarousel,
   saveRun,
+  setCustomSourceActive,
+  setMonitoringTermActive,
   startRun,
   updateIntelligentJob,
 } from "./database.js";
-import { parseFeed } from "./parser.js";
+import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.1.2";
+const VERSION = "2.4.0";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -66,6 +80,31 @@ function secureEqual(left, right) {
   return difference === 0;
 }
 
+function requireOperationAuth(request, env) {
+  if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
+    throw new HttpError(401, "Chave de operação inválida.");
+  }
+}
+
+function validatedCustomSource(body) {
+  const name = plainText(body?.name).slice(0, 80);
+  if (name.length < 2) throw new HttpError(400, "Informe um nome com pelo menos dois caracteres.");
+  let url;
+  try {
+    url = validateArticleUrl(body?.url);
+  } catch {
+    throw new HttpError(400, "Informe uma URL pública válida, começando com http:// ou https://.");
+  }
+  const region = body?.region === "Mundo" ? "Mundo" : "Brasil";
+  return { name, url, region };
+}
+
+function validatedMonitoringTerm(body) {
+  const term = plainText(body?.term).replace(/\s+/g, " ").trim().slice(0, 80);
+  if (term.length < 2) throw new HttpError(400, "Informe um termo com pelo menos dois caracteres.");
+  return term;
+}
+
 function requireDatabase(env) {
   if (!env.DB) throw new HttpError(503, "Banco D1 não configurado.", "Crie um banco D1 e adicione ao Worker um binding chamado DB.");
   return env.DB;
@@ -79,9 +118,9 @@ function withEditorias(payload) {
   return {
     ...safePayload,
     topics: safePayload.topics.map((topic) => {
-      const enriched = topic?.editoria
-        ? topic
-        : { ...topic, editoria: classifyEditoria(topic?.items || []) };
+      const recalculatedEditoria = classifyEditoria(topic?.items || []);
+      const editoriaChanged = topic?.editoria !== recalculatedEditoria;
+      const enriched = { ...topic, editoria: recalculatedEditoria };
       const expectedUrls = new Set((enriched?.items || [])
         .map((item) => String(item?.url || "").trim())
         .filter((url) => /^https?:\/\//i.test(url)));
@@ -89,7 +128,7 @@ function withEditorias(payload) {
         .map((item) => String(item?.url || "").trim())
         .filter((url) => /^https?:\/\//i.test(url)));
       const carouselHasEveryLink = expectedUrls.size > 0 && [...expectedUrls].every((url) => carouselUrls.has(url));
-      return enriched?.carousel?.slides?.length && carouselHasEveryLink
+      return enriched?.carousel?.slides?.length && carouselHasEveryLink && !editoriaChanged
         ? enriched
         : { ...enriched, carousel: buildCarouselBrief(enriched) };
     }),
@@ -114,9 +153,9 @@ function articleAnalysisAi(env) {
             whatHappened: "O Congresso aprovou um plano nacional de mobilidade urbana.",
             who: "Congresso Nacional e órgãos públicos responsáveis pela mobilidade.",
             where: "Brasil.",
-            when: "Na data informada pelas matérias da ronda.",
+            when: "Na data informada pela matéria selecionada.",
             impact: "A medida pode orientar investimentos e mudanças na mobilidade urbana.",
-            repercussion: "O tema também apareceu em publicações sociais monitoradas pela ronda.",
+            repercussion: "Profissionais do setor e administrações locais pedem clareza sobre os próximos passos.",
           },
           entities: {
             people: [],
@@ -126,14 +165,26 @@ function articleAnalysisAi(env) {
             themes: ["mobilidade urbana", "política pública"],
             keywords: ["mobilidade", "Congresso", "investimentos"],
           },
+          facts: [
+            {
+              claim: "O Congresso aprovou um novo plano nacional de mobilidade urbana.",
+              evidence: "O Congresso aprovou um novo plano nacional de mobilidade urbana",
+              confidence: "high",
+            },
+            {
+              claim: "A implantação deverá ocorrer em etapas.",
+              evidence: "A implantação deverá ocorrer em etapas",
+              confidence: "high",
+            },
+          ],
           slides: [
-            { number: 1, role: "Título principal", title: "Congresso aprova plano de mobilidade urbana", body: "A proposta avança e passa a orientar novas medidas no país." },
-            { number: 2, role: "Contexto", title: "Por que o tema importa", body: "A mobilidade urbana afeta deslocamentos, transporte público e planejamento das cidades." },
-            { number: 3, role: "Informação principal", title: "O que foi aprovado", body: "O Congresso aprovou um novo plano nacional para o setor." },
-            { number: 4, role: "Detalhamento", title: "O que as matérias mostram", body: "Os textos relacionam a medida a investimentos e projetos de infraestrutura." },
-            { number: 5, role: "Consequência", title: "Impacto esperado", body: "A decisão pode influenciar prioridades e recursos destinados às cidades." },
-            { number: 6, role: "Conclusão", title: "Próximos passos", body: "A aplicação prática dependerá dos desdobramentos e das regras complementares." },
-            { number: 7, role: "CTA", title: "Acompanhe a pauta", body: "Consulte as fontes originais e acompanhe as próximas atualizações." },
+            { number: 1, role: "Título principal", title: "Congresso aprova plano de mobilidade", body: "A proposta define novas diretrizes para o setor.", evidenceIds: ["fact-1"] },
+            { number: 2, role: "Contexto", title: "O que orienta o plano", body: "O texto trata de transporte público, ciclovias, acessibilidade e segurança viária.", evidenceIds: ["fact-1"] },
+            { number: 3, role: "Informação principal", title: "A medida foi aprovada", body: "O Congresso aprovou o novo plano nacional de mobilidade urbana.", evidenceIds: ["fact-1"] },
+            { number: 4, role: "Detalhamento", title: "Aplicação em etapas", body: "A implantação deverá ocorrer em etapas e ainda depende de detalhamento técnico.", evidenceIds: ["fact-2"] },
+            { number: 5, role: "Consequência", title: "Recursos podem mudar", body: "A medida pode influenciar a distribuição de recursos e a escolha de obras.", evidenceIds: ["fact-1"] },
+            { number: 6, role: "Conclusão", title: "Próximos passos", body: "Prazos, financiamento e regras complementares ainda precisam ser detalhados.", evidenceIds: ["fact-2"] },
+            { number: 7, role: "CTA", title: "Acompanhe a pauta", body: "Consulte a matéria original e acompanhe as próximas atualizações.", evidenceIds: ["fact-2"] },
           ],
         },
       }),
@@ -144,6 +195,7 @@ function articleAnalysisAi(env) {
 
 
 function publicIntelligentJob(job) {
+  const terminal = ["succeeded", "failed"].includes(job.status);
   return {
     jobId: job.jobId,
     status: job.status,
@@ -154,24 +206,43 @@ function publicIntelligentJob(job) {
     updatedAt: job.updatedAt,
     expiresAt: job.expiresAt,
     stale: Boolean(job.stale),
+    terminal,
+    released: terminal,
+    nextCycleAllowed: terminal,
   };
 }
 
 async function processIntelligentCarouselJob(env, job, topic) {
   const db = requireDatabase(env);
-  const started = await updateIntelligentJob(db, {
-    jobId: job.jobId,
-    status: "running",
-    progress: 4,
-    message: "Preparando a leitura das fontes.",
-  });
-  if (!started) return null;
+  const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 4 * 60 * 1000);
+  if (!jobLock) return null;
   try {
+    const started = await updateIntelligentJob(db, {
+      jobId: job.jobId,
+      status: "running",
+      progress: 4,
+      message: "Selecionando uma única matéria para esta sugestão.",
+    });
+    if (!started) throw new Error("A tarefa de leitura não foi encontrada para iniciar o ciclo.");
+    let sourceStats = {};
+    try {
+      sourceStats = await getArticleSourceStats(
+        db,
+        (topic?.items || []).map((item) => item?.url).filter(Boolean),
+      );
+    } catch (error) {
+      console.error("Histórico de leitura indisponível; seleção seguirá sem esse sinal", error);
+    }
     const data = await buildIntelligentCarousel(topic, {
       ai: articleAnalysisAi(env),
       model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       fetcher: fetch,
       liveReading: env.ARTICLE_LIVE_READING !== "0",
+      sourceStats,
+      readCache: {
+        get: (cacheKey) => getArticleReadCache(db, cacheKey),
+        set: (cacheKey, payload) => saveArticleReadCache(db, cacheKey, payload, 12),
+      },
       onProgress: async ({ progress, message }) => {
         await updateIntelligentJob(db, {
           jobId: job.jobId,
@@ -181,12 +252,34 @@ async function processIntelligentCarouselJob(env, job, topic) {
         });
       },
     });
+    const selectedSource = data?.reading?.selectedSource;
+    if (selectedSource?.liveAttempted) {
+      try {
+        await recordArticleSourceAttempt(db, {
+          url: selectedSource.url,
+          success: selectedSource.readMode === "full-article",
+          wordCount: selectedSource.wordCount,
+        });
+      } catch (error) {
+        console.error("Não foi possível atualizar a estatística do portal", error);
+      }
+    }
+    const releasedAt = new Date().toISOString();
     const storedData = {
       ...data,
       cacheKey: job.cacheKey,
       runId: job.runId,
       topicId: job.topicId,
       topicTitle: topic.title,
+      cycle: {
+        ...(data.cycle || {}),
+        status: "completed",
+        terminal: true,
+        released: true,
+        releasedAt,
+        nextCycleAllowed: true,
+        jobId: job.jobId,
+      },
     };
     await saveIntelligentCarousel(db, {
       cacheKey: job.cacheKey,
@@ -195,25 +288,31 @@ async function processIntelligentCarouselJob(env, job, topic) {
       payload: storedData,
       ttlHours: 48,
     });
-    await updateIntelligentJob(db, {
+    const completed = await updateIntelligentJob(db, {
       jobId: job.jobId,
       status: "succeeded",
       progress: 100,
-      message: "Roteiro concluído.",
+      message: "Roteiro concluído. Ciclo encerrado e sistema disponível para a próxima sugestão.",
       payload: storedData,
     });
+    if (completed?.status !== "succeeded") throw new Error("Não foi possível registrar o encerramento do ciclo.");
     return storedData;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    await updateIntelligentJob(db, {
+    const failed = await updateIntelligentJob(db, {
       jobId: job.jobId,
       status: "failed",
       progress: 100,
-      message: "A leitura foi interrompida.",
+      message: "Ciclo encerrado após falha. Sistema liberado para uma nova leitura.",
       error: detail,
     });
+    if (failed?.status !== "failed") throw error;
     console.error("Leitura inteligente falhou", detail);
     return null;
+  } finally {
+    try { await releaseLock(db, jobLock); } catch (error) {
+      console.error("Não foi possível remover o lock terminal da leitura", error);
+    }
   }
 }
 
@@ -250,7 +349,7 @@ async function processIntelligentQueueBatch(batch, env) {
     try {
       const db = requireDatabase(env);
       const job = await getIntelligentJob(db, jobId);
-      if (!job || (job.status === "succeeded" && job.payload)) {
+      if (!job || ["succeeded", "failed"].includes(job.status)) {
         message?.ack?.();
         continue;
       }
@@ -260,16 +359,19 @@ async function processIntelligentQueueBatch(batch, env) {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error("Consumidor da fila de leitura inteligente falhou", detail);
+      let terminalRecorded = false;
       try {
-        await updateIntelligentJob(requireDatabase(env), {
+        const failed = await updateIntelligentJob(requireDatabase(env), {
           jobId,
           status: "failed",
           progress: 100,
-          message: "A leitura foi interrompida no consumidor da fila.",
+          message: "Ciclo encerrado no consumidor. Sistema liberado para uma nova leitura.",
           error: detail,
         });
+        terminalRecorded = failed?.status === "failed";
       } catch {}
-      if (Number(message?.attempts || 1) < 3 && message?.retry) message.retry({ delaySeconds: 5 });
+      if (terminalRecorded) message?.ack?.();
+      else if (Number(message?.attempts || 1) < 3 && message?.retry) message.retry({ delaySeconds: 5 });
       else message?.ack?.();
     }
   }
@@ -287,10 +389,28 @@ async function performRound(env, triggerType, options = {}) {
     if (!options.runStarted) await startRun(db, { id: runId, triggerType, startedAt });
     let payload;
     try {
-      payload = await collectRound();
+      const [customSources, monitoringTerms] = await Promise.all([
+        listCustomSources(db, { activeOnly: true }),
+        listMonitoringTerms(db, { activeOnly: true }),
+      ]);
+      payload = await collectRound({
+        feeds: [...FEEDS, ...customSources.map(customSourceFeed)],
+        monitoringTerms,
+      });
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("O coletor não retornou um resultado válido.");
       }
+      payload.configuration = {
+        customSources: customSources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          region: source.region,
+          url: source.url,
+        })),
+        monitoringTerms: monitoringTerms.map((term) => ({ id: term.id, term: term.term })),
+        browserRequired: false,
+        execution: "cloudflare-cron",
+      };
       try {
         payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
       } catch (error) {
@@ -306,9 +426,16 @@ async function performRound(env, triggerType, options = {}) {
         error: "A coleta foi interrompida por um erro interno.",
         detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
         sources: [],
-        totals: { items: 0, topics: 0, sources: 0, socialItems: 0 },
+        totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
         items: [],
         topics: [],
+        dedicatedMonitoring: {
+          enabled: false,
+          terms: [],
+          items: [],
+          statuses: [],
+          totals: { terms: 0, items: 0, sources: 0 },
+        },
       };
     }
     await saveRun(db, { id: runId, triggerType, startedAt, payload });
@@ -358,6 +485,10 @@ async function handleApi(request, env, url, ctx) {
     const db = requireDatabase(env);
     const dbOk = await databaseHealth(db);
     const latest = await getLatestRound(db);
+    const [customSources, monitoringTerms] = await Promise.all([
+      listCustomSources(db, { activeOnly: true }),
+      listMonitoringTerms(db, { activeOnly: true }),
+    ]);
     const lastSuccessAt = latest?.collectedAt ?? null;
     const ageMs = lastSuccessAt ? Date.now() - Date.parse(lastSuccessAt) : Number.POSITIVE_INFINITY;
     return json({
@@ -371,6 +502,31 @@ async function handleApi(request, env, url, ctx) {
       lastSuccessAt,
       lastRunId: latest?.runId ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
+      backgroundMonitoring: {
+        active: true,
+        browserRequired: false,
+        execution: "cloudflare-cron",
+        scheduleMinutes: 5,
+        customSources: customSources.length,
+        monitoringTerms: monitoringTerms.length,
+        dedicatedResults: Number(latest?.dedicatedMonitoring?.items?.length) || 0,
+        catalogPortals: FEEDS.length,
+        catalogBrazil: FEEDS.filter((feed) => feed.region === "Brasil").length,
+        catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
+      },
+      editorialClassification: {
+        specializedCategories: [
+          "Fofoca e Celebridades",
+          "Reality Shows",
+          "Curiosidades e Ciência Pop",
+          "Conteúdo Viral e Redes Sociais",
+          "Luto e Obituário",
+          "Segurança e Justiça",
+        ],
+        deathOutsideEntertainment: true,
+        violentDeathCategory: "Segurança e Justiça",
+        obituaryCategory: "Luto e Obituário",
+      },
       translation: {
         ready: Boolean(translationAi(env)?.run),
         targetLanguage: "pt-BR",
@@ -379,17 +535,113 @@ async function handleApi(request, env, url, ctx) {
       intelligentReading: {
         ready: true,
         aiReady: Boolean(articleAnalysisAi(env)?.run),
-        mode: "live-article-with-feed-fallback",
+        mode: "single-article-with-feed-fallback",
         asynchronousJobs: true,
         queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
         executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
-        articleLimit: 5,
-        multiSourceProgress: true,
+        articleLimit: 1,
+        readingStrategy: "single-best-source-with-history",
+        cycleMode: "one-article-one-script",
+        cycleFinalization: "terminal-and-released",
+        nextCycleAfterTerminal: true,
+        factPipeline: "evidence-map-then-carousel",
+        editorialQualityGate: true,
+        articleReadCacheHours: 12,
         perSourceTimeoutSeconds: 10,
-        readingConcurrency: 3,
+        readingConcurrency: 1,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
     });
+  }
+
+  if (url.pathname === "/api/custom-sources" && request.method === "GET") {
+    const sources = await listCustomSources(requireDatabase(env));
+    return json({
+      ok: true,
+      sources,
+      limits: {
+        maximumActive: MAX_CUSTOM_SOURCES,
+        active: sources.filter((source) => source.active).length,
+      },
+    });
+  }
+
+  if (url.pathname === "/api/custom-sources" && request.method === "POST") {
+    requireOperationAuth(request, env);
+    const body = await request.json().catch(() => ({}));
+    const input = validatedCustomSource(body);
+    try {
+      const source = await createCustomSource(requireDatabase(env), input);
+      return json({ ok: true, source }, 201);
+    } catch (error) {
+      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível cadastrar o site.");
+    }
+  }
+
+  const customSourceRoute = /^\/api\/custom-sources\/([a-z0-9-]{8,80})$/i.exec(url.pathname);
+  if (customSourceRoute && request.method === "PATCH") {
+    requireOperationAuth(request, env);
+    const body = await request.json().catch(() => ({}));
+    if (typeof body?.active !== "boolean") throw new HttpError(400, "Informe se o site deve ficar ativo.");
+    try {
+      const source = await setCustomSourceActive(requireDatabase(env), customSourceRoute[1], body.active);
+      if (!source) throw new HttpError(404, "Site cadastrado não encontrado.");
+      return json({ ok: true, source });
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível atualizar o site.");
+    }
+  }
+  if (customSourceRoute && request.method === "DELETE") {
+    requireOperationAuth(request, env);
+    const source = await deleteCustomSource(requireDatabase(env), customSourceRoute[1]);
+    if (!source) throw new HttpError(404, "Site cadastrado não encontrado.");
+    return json({ ok: true, deleted: source });
+  }
+
+  if (url.pathname === "/api/monitoring-terms" && request.method === "GET") {
+    const terms = await listMonitoringTerms(requireDatabase(env));
+    return json({
+      ok: true,
+      terms,
+      limits: {
+        maximumActive: MAX_MONITORING_TERMS,
+        active: terms.filter((term) => term.active).length,
+      },
+    });
+  }
+
+  if (url.pathname === "/api/monitoring-terms" && request.method === "POST") {
+    requireOperationAuth(request, env);
+    const body = await request.json().catch(() => ({}));
+    const termValue = validatedMonitoringTerm(body);
+    try {
+      const term = await createMonitoringTerm(requireDatabase(env), termValue);
+      return json({ ok: true, term }, 201);
+    } catch (error) {
+      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível cadastrar o termo.");
+    }
+  }
+
+  const monitoringTermRoute = /^\/api\/monitoring-terms\/([a-z0-9-]{8,80})$/i.exec(url.pathname);
+  if (monitoringTermRoute && request.method === "PATCH") {
+    requireOperationAuth(request, env);
+    const body = await request.json().catch(() => ({}));
+    if (typeof body?.active !== "boolean") throw new HttpError(400, "Informe se o termo deve ficar ativo.");
+    try {
+      const term = await setMonitoringTermActive(requireDatabase(env), monitoringTermRoute[1], body.active);
+      if (!term) throw new HttpError(404, "Termo de monitoramento não encontrado.");
+      return json({ ok: true, term });
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível atualizar o termo.");
+    }
+  }
+  if (monitoringTermRoute && request.method === "DELETE") {
+    requireOperationAuth(request, env);
+    const term = await deleteMonitoringTerm(requireDatabase(env), monitoringTermRoute[1]);
+    if (!term) throw new HttpError(404, "Termo de monitoramento não encontrado.");
+    return json({ ok: true, deleted: term });
   }
 
   if (url.pathname === "/api/latest" && request.method === "GET") {
@@ -475,7 +727,12 @@ async function handleApi(request, env, url, ctx) {
       if (cached) return json({ ok: true, cached: true, status: "succeeded", data: cached });
     }
 
-    const queued = await createIntelligentJob(db, { cacheKey, runId, topicId });
+    const queued = await createIntelligentJob(db, {
+      cacheKey,
+      runId,
+      topicId,
+      replaceCompleted: Boolean(body?.force),
+    });
     if (queued.job.status === "succeeded" && queued.job.payload) {
       return json({ ok: true, cached: true, status: "succeeded", data: queued.job.payload });
     }

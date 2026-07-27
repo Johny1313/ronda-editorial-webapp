@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.1.2:** a Leitura Inteligente abre até cinco matérias do assunto, extrai o conteúdo principal por HTML/JSON-LD e tenta a versão AMP quando indicada. O processamento pesado foi movido para uma Cloudflare Queue, evitando a interrupção causada pelo limite de tarefas HTTP em segundo plano. O painel acompanha o progresso pelo D1; quando um portal bloqueia a leitura, o sistema usa o texto, resumo ou título armazenado pelo feed. A IA possui tempo limite e sempre há um roteiro de contingência com sete slides.
+**Versão 2.4.0:** adiciona 20 portais de celebridades, realities, curiosidades, ciência pop e conteúdo viral, elevando o catálogo para 50 portais. A classificação editorial ganhou categorias especializadas e regras de precedência: morte, falecimento e obituário não são classificados como entretenimento; crimes e mortes violentas são direcionados para Segurança e Justiça. A Leitura Inteligente mantém a regra de uma matéria por sugestão e libera o próximo ciclo ao terminar.
 
 ## Versão GitHub recomendada
 
@@ -11,11 +11,19 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 ## O que funciona
 
 - Ronda automática mesmo com o navegador fechado.
+- Aba **Sites** para cadastrar, pausar, reativar e remover até oito fontes próprias.
+- URLs comuns usam busca por domínio no Google Notícias; URLs RSS/Atom são consultadas diretamente com fallback.
+- Aba **Termos** para cadastrar até seis nomes, marcas ou assuntos de acompanhamento exclusivo.
+- Notícias encontradas por termos são armazenadas em `dedicatedMonitoring` e nunca entram nos itens ou assuntos da Ronda principal.
+- Termos pausados ou removidos deixam de ser buscados e seus resultados ficam ocultos.
+- Sites e termos ficam persistidos no D1 e são usados tanto em rondas manuais quanto automáticas.
 - Ronda manual pelo painel.
 - Ronda manual iniciada em segundo plano, com acompanhamento de progresso no painel.
 - Interface e Worker usam a mesma versão sem cache antigo; respostas antigas e novas são tratadas sem quebrar o painel.
-- 30 portais identificados individualmente, divididos em Brasil e Mundo.
-- Brasil: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, Canaltech, TecMundo, O Liberal, Metrópoles e Campo Grande News.
+- 50 portais identificados individualmente, divididos em Brasil e Mundo.
+- Brasil — notícias gerais: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, Canaltech, TecMundo, O Liberal, Metrópoles e Campo Grande News.
+- Brasil — celebridades e televisão: UOL Splash, LeoDias, Quem, Caras Brasil, Contigo!, TV Foco, Purepeople Brasil, Observatório dos Famosos, Área VIP e NaTelinha.
+- Brasil — curiosidades e ciência pop: Fatos Desconhecidos, Mega Curioso, Hypeness, Incrível.club, Mistérios do Mundo, Canaltech Curiosidades, Superinteressante, Revista Galileu, Segredos do Mundo e Awebic.
 - Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
 - Títulos, descrições e o conteúdo usado pelo roteiro das fontes do Mundo permanecem em português antes do agrupamento e do armazenamento no histórico.
 - Cache de traduções no D1: conteúdos repetidos não consomem uma nova tradução a cada ronda.
@@ -23,27 +31,35 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker.
 - Bluesky como complemento social; uma falha do Bluesky não interrompe os portais.
 - Agrupamento de títulos semelhantes em assuntos.
-- Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Economia, Mundo, Tecnologia e Saúde.
-- Filtro clicável por editoria e identificação visível em cada assunto.
+- Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Fofoca e Celebridades, Reality Shows, Curiosidades e Ciência Pop, Conteúdo Viral e Redes Sociais, Luto e Obituário, Segurança e Justiça, Economia, Mundo, Tecnologia e Saúde.
+- Filtro clicável por editoria e identificação visível em cada assunto. Regras de precedência impedem que morte, falecimento, homicídio ou acidente fatal sejam enviados para entretenimento.
 - Prévia editorial de carrossel em sete slides na coleta.
-- Botão **Gerar roteiro de carrossel** abre simultaneamente até cinco matérias de fontes distintas.
+- Botão **Gerar roteiro de carrossel** seleciona uma única matéria entre as fontes do assunto.
+- Seleção orientada por qualidade, relevância, atualidade e taxa histórica de sucesso do portal.
+- Cache do texto principal por 12 horas: uma regeneração não precisa abrir novamente a mesma matéria.
 - Extração do conteúdo principal por JSON-LD, `<article>`, `<main>` e blocos editoriais; menus, anúncios, widgets e textos repetidos são removidos.
 - Quando a página indica uma versão AMP e a leitura principal é insuficiente, o Worker tenta a versão AMP.
-- Cada portal possui tempo limite independente. Falhas 403/429/503, paywall, HTML insuficiente ou timeout não derrubam o roteiro.
+- A única matéria selecionada possui tempo limite independente. Falhas 403/429/503, paywall, HTML insuficiente ou timeout não derrubam o roteiro.
 - Em caso de bloqueio, a análise usa automaticamente o texto, resumo ou título que o feed já forneceu durante a ronda.
 - O processamento é gravado no D1 e enviado à Cloudflare Queue como tarefa com estados `queued`, `running`, `succeeded` e `failed`; o consumidor possui tempo suficiente para leitura de portais e análise da IA.
 - O painel acompanha o progresso, reutiliza uma tarefa já em execução e oferece **Tentar novamente** quando necessário.
+- Ao terminar, o job assume obrigatoriamente `succeeded` ou `failed`, remove seu lock e informa `released: true` e `nextCycleAllowed: true`.
+- **Tentar novamente** cria um job novo após um ciclo concluído, sem reaproveitar o identificador terminal anterior.
 - Cada item preserva até 2.400 caracteres do conteúdo recebido na ronda, mantendo uma base de contingência segura.
-- O painel informa quantas matérias foram lidas diretamente, quantas usaram fallback e a qualidade do material.
+- O painel informa qual matéria foi selecionada, se houve fallback e a qualidade do material.
 - Respostas estruturadas para: o que aconteceu, quem está envolvido, onde, quando, impacto e repercussão.
+- Mapa de fatos com trecho de evidência e nível de confiança antes da redação dos slides.
 - Extração de personagens, empresas, locais, datas, temas e palavras-chave.
-- Carrossel Instagram com exatamente sete slides: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA; cada slide possui título e subtítulo.
+- Carrossel Instagram com exatamente sete slides: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA; títulos possuem até 68 caracteres e subtítulos até 190.
+- Validação automática de números sem suporte, evidências inválidas e slides repetidos.
+- Conteúdo baseado somente em título é bloqueado; a cópia só é liberada para leitura ampla e roteiro validado.
+- Títulos e subtítulos podem ser editados no painel com contador de caracteres.
 - Resultado armazenado no D1 por 48 horas para evitar reprocessar o mesmo assunto.
 - Carrosséis gerados exclusivamente em português e identificados como `pt-BR`.
 - Aviso obrigatório de revisão editorial e links das matérias originais para conferência.
 - Toda notícia captada conserva obrigatoriamente sua URL original de apuração.
 - Cards, conteúdos relacionados e histórico exibem um botão individual **Abrir para apuração**.
-- O carrossel mostra todos os links das notícias usadas; o roteiro copiado também inclui título, portal e URL de cada apuração.
+- O carrossel identifica a única matéria utilizada e mantém os demais links do assunto apenas para apuração manual; o roteiro copiado inclui título, portal e URL de cada link.
 - Cards com título, data, fontes, links para apuração e recomendação editorial.
 - Tela Fontes agrupada em Brasil, Mundo e complemento social, com o estado de cada portal e filtro clicável por veículo.
 - Chips superiores clicáveis: cada portal filtra imediatamente somente o conteúdo recolhido dele; fontes sem coleta ficam desativadas.
@@ -60,7 +76,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 
 O código e a infraestrutura são verificáveis, mas fontes externas podem mudar endereços ou bloquear consultas. Por isso a coleta aceita falhas parciais, registra a situação de cada fonte e utiliza fallbacks. Sem APIs oficiais ou comerciais, esta versão não monitora integralmente Instagram, TikTok ou X.
 
-O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para estruturar o roteiro. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. Se a IA exceder o tempo limite, retornar JSON inválido ou falhar, o sistema conclui a tarefa com um roteiro de contingência. Para desativar temporariamente a leitura direta e trabalhar apenas com os feeds, defina `ARTICLE_LIVE_READING=0`.
+O binding `AI` definido no `wrangler.jsonc` é usado tanto para traduzir fontes internacionais quanto para estruturar o roteiro. A tradução usa `@cf/meta/m2m100-1.2b`; a leitura inteligente usa por padrão `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, podendo ser alterada pela variável `ARTICLE_ANALYSIS_MODEL`. A geração ocorre em duas fases: apuração estruturada e redação baseada no mapa de fatos validado. Se a IA exceder o tempo limite, retornar JSON inválido ou falhar, o sistema conclui a tarefa com um roteiro de contingência quando houver conteúdo suficiente. Para desativar temporariamente a leitura direta e trabalhar apenas com os feeds, defina `ARTICLE_LIVE_READING=0`.
 
 ## Alternativa sem GitHub
 
@@ -106,7 +122,7 @@ npm run smoke
 npm run dev
 ```
 
-`npm run smoke` executa o Worker compilado no emulador oficial, simula portais e Bluesky, grava a ronda no D1 e confirma dashboard, tarefa assíncrona, leitura direta das matérias, fallback, sete slides, cache, histórico e saúde.
+`npm run smoke` executa o Worker compilado no emulador oficial, cadastra um site e o termo “Vini Jr”, simula portais, Google Notícias e Bluesky, confirma o isolamento dos resultados dedicados, testa a tarefa assíncrona, a leitura direta, sete slides, cache, histórico e saúde.
 
 Rotas principais:
 
@@ -117,6 +133,10 @@ Rotas principais:
 | `/api/self-test` | GET | Parser, agrupamento, card e leitura/escrita D1 |
 | `/api/latest` | GET | Última ronda válida |
 | `/api/history` | GET | Histórico das últimas 48 horas |
+| `/api/custom-sources` | GET/POST | Lista ou cadastra sites persistentes |
+| `/api/custom-sources/:id` | PATCH/DELETE | Ativa, pausa ou remove um site |
+| `/api/monitoring-terms` | GET/POST | Lista ou cadastra termos dedicados |
+| `/api/monitoring-terms/:id` | PATCH/DELETE | Ativa, pausa ou remove um termo |
 | `/api/runs/:id` | GET | Acompanha uma ronda manual em andamento |
 | `/api/runs/:id/data` | GET | Recupera as notícias armazenadas em uma ronda histórica |
 | `/api/round` | POST | Executa uma ronda manual |

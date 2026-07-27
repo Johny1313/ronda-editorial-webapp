@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.1.1 — ATUALIZAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.4.0 — ATUALIZAÇÃO PELO GITHUB
 =================================================
 
 Esta versão corrige a interrupção após 30–45 segundos usando Cloudflare Queues.
@@ -59,7 +59,7 @@ https://ronda-editorial-webapp.johnymoraes13.workers.dev/api/health
 
 Confirme:
 
-   "version": "2.1.1"
+   "version": "2.4.0"
    "queueReady": true
    "executionMode": "cloudflare-queue"
 

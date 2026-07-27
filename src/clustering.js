@@ -44,13 +44,38 @@ export function tokenSimilarity(left, right) {
 }
 
 const EDITORIA_RULES = Object.freeze([
+  ["Reality Shows", ["reality", "bbb", "big brother", "a fazenda", "paredao", "eliminado", "eliminada", "eliminacao", "prova do lider", "prova do anjo", "confinamento", "casa mais vigiada", "participante", "brother", "sister"]],
+  ["Fofoca e Celebridades", ["famoso", "famosa", "famosos", "celebridade", "influenciador", "influenciadora", "influencer", "namoro", "casamento", "separacao", "termino", "affair", "traicao", "romance", "polêmica", "polemica", "bastidores", "vida pessoal", "ex marido", "ex mulher", "ex namorado", "ex namorada", "gravidez", "noivado"]],
+  ["Curiosidades e Ciência Pop", ["curiosidade", "curioso", "curiosa", "descoberta", "cientista", "cientistas", "estudo", "pesquisa", "arqueologia", "arqueologico", "espaco", "universo", "planeta", "animal", "animais", "natureza", "fenomeno", "misterio", "historia", "prehistoria", "fossil", "dinossauro", "ciencia", "cientifico"]],
+  ["Conteúdo Viral e Redes Sociais", ["viral", "redes sociais", "rede social", "tiktok", "instagram", "twitter", "x antigo twitter", "meme", "video", "internautas", "repercute", "repercutiu", "bombou", "trend", "desafio", "postagem", "publicacao", "compartilhado", "milhoes de visualizacoes"]],
+  ["Segurança e Justiça", ["crime", "policia", "delegacia", "investigacao", "prisao", "preso", "presa", "assassinato", "assassinado", "assassinada", "homicidio", "feminicidio", "tiroteio", "baleado", "baleada", "sequestro", "violencia", "justica", "tribunal", "ministerio publico", "acidente fatal", "corpo encontrado"]],
   ["Esportes", ["futebol", "jogo", "partida", "campeonato", "brasileirao", "copa", "clube", "time", "jogador", "jogadora", "gol", "tecnico", "selecao", "formula 1", "f1", "basquete", "volei", "tenis", "olimpiada", "esporte"]],
   ["Política", ["presidente", "congresso", "senado", "camara", "deputado", "senador", "ministro", "governo", "eleicao", "eleitoral", "stf", "supremo", "partido", "prefeito", "governador", "planalto", "projeto de lei", "votacao", "politica"]],
-  ["Entretenimento", ["filme", "serie", "novela", "musica", "cantor", "cantora", "atriz", "ator", "show", "festival", "televisao", "cinema", "streaming", "celebridade", "bbb", "reality", "oscar", "entretenimento"]],
   ["Economia", ["economia", "inflacao", "dolar", "bolsa", "juros", "banco", "mercado", "empresa", "emprego", "desemprego", "pib", "imposto", "investimento", "financeiro", "combustivel", "petroleo"]],
   ["Mundo", ["estados unidos", "eua", "trump", "guerra", "ucrania", "russia", "israel", "gaza", "china", "europa", "onu", "internacional", "exterior"]],
-  ["Tecnologia", ["tecnologia", "inteligencia artificial", "ia", "internet", "aplicativo", "software", "celular", "smartphone", "google", "microsoft", "apple", "meta", "rede social", "digital"]],
+  ["Tecnologia", ["tecnologia", "inteligencia artificial", "ia", "internet", "aplicativo", "software", "celular", "smartphone", "google", "microsoft", "apple", "meta", "digital"]],
   ["Saúde", ["saude", "doenca", "vacina", "hospital", "medico", "medicina", "virus", "covid", "medicamento", "tratamento", "epidemia", "paciente"]],
+  ["Entretenimento", ["filme", "serie", "novela", "musica", "cantor", "cantora", "atriz", "ator", "show", "festival", "televisao", "cinema", "streaming", "oscar", "programa de tv", "entretenimento"]],
+]);
+
+const DEATH_TERMS = Object.freeze([
+  "morreu", "morre", "morto", "morta", "morte", "faleceu", "falecimento", "obito", "luto", "velorio", "funeral",
+]);
+
+const VIOLENT_DEATH_TERMS = Object.freeze([
+  "assassinado", "assassinada", "assassinato", "homicidio", "feminicidio", "morto a tiros", "morta a tiros", "baleado", "baleada", "corpo encontrado", "encontrado morto", "encontrada morta", "acidente fatal",
+]);
+
+const FIGURATIVE_DEATH_PHRASES = Object.freeze([
+  "morre de rir", "morreu de rir", "morre de amores", "morreu de amores", "morre de ciumes", "morreu de ciumes",
+]);
+
+const FICTION_CONTEXT_TERMS = Object.freeze([
+  "personagem", "capitulo", "episodio", "novela", "serie", "filme", "ficcao", "trama", "roteiro",
+]);
+
+const REAL_PERSON_TERMS = Object.freeze([
+  "ator", "atriz", "cantor", "cantora", "apresentador", "apresentadora", "jornalista", "influenciador", "influenciadora", "empresario", "empresaria", "jogador", "jogadora",
 ]);
 
 function keywordMatch(text, keyword) {
@@ -58,12 +83,42 @@ function keywordMatch(text, keyword) {
   return new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(text);
 }
 
+function countKeywordMatches(text, keywords = []) {
+  return keywords.reduce((total, keyword) => total + (keywordMatch(text, keyword) ? 1 : 0), 0);
+}
+
+function hasKeyword(text, keywords = []) {
+  return keywords.some((keyword) => keywordMatch(text, keyword));
+}
+
+function editorialHintScore(items, editoria) {
+  return items.reduce((score, item) => {
+    const hints = Array.isArray(item?.editorialHints) ? item.editorialHints : [];
+    const index = hints.indexOf(editoria);
+    if (index < 0) return score;
+    return score + (index === 0 ? 3 : 1);
+  }, 0);
+}
+
+function isRealDeathStory(text) {
+  if (!hasKeyword(text, DEATH_TERMS)) return false;
+  if (FIGURATIVE_DEATH_PHRASES.some((phrase) => text.includes(phrase))) return false;
+  const fictional = hasKeyword(text, FICTION_CONTEXT_TERMS);
+  const realPerson = hasKeyword(text, REAL_PERSON_TERMS);
+  return !fictional || realPerson;
+}
+
 export function classifyEditoria(items = []) {
-  const text = normalizeText(items.map((item) => `${item?.title || ""} ${item?.description || ""}`).join(" "));
+  const safeItems = Array.isArray(items) ? items : [];
+  const text = normalizeText(safeItems.map((item) => `${item?.title || ""} ${item?.description || ""}`).join(" "));
+
+  if (hasKeyword(text, VIOLENT_DEATH_TERMS)) return "Segurança e Justiça";
+  if (isRealDeathStory(text)) return "Luto e Obituário";
+
   let selected = "Notícias";
   let selectedScore = 0;
   for (const [editoria, keywords] of EDITORIA_RULES) {
-    const score = keywords.reduce((total, keyword) => total + (keywordMatch(text, keyword) ? 1 : 0), 0);
+    const score = countKeywordMatches(text, keywords) + editorialHintScore(safeItems, editoria);
     if (score > selectedScore) {
       selected = editoria;
       selectedScore = score;
@@ -83,8 +138,9 @@ function shorten(value, limit = 260) {
 function carouselTone(editoria, priority) {
   if (priority === "Pautar agora") return "Urgente, direto e factual";
   if (["Política", "Economia", "Mundo"].includes(editoria)) return "Informativo e analítico";
-  if (["Saúde", "Tecnologia"].includes(editoria)) return "Explicativo e cauteloso";
-  if (["Esportes", "Entretenimento"].includes(editoria)) return "Dinâmico e acessível";
+  if (["Saúde", "Tecnologia", "Curiosidades e Ciência Pop"].includes(editoria)) return "Explicativo e cauteloso";
+  if (["Luto e Obituário", "Segurança e Justiça"].includes(editoria)) return "Sóbrio, factual e respeitoso";
+  if (["Esportes", "Entretenimento", "Fofoca e Celebridades", "Reality Shows", "Conteúdo Viral e Redes Sociais"].includes(editoria)) return "Dinâmico e acessível";
   return "Informativo e objetivo";
 }
 
@@ -92,7 +148,9 @@ function carouselModel(topic, normalizedText) {
   if (topic.priority === "Pautar agora") return "Instagram · Plantão em 7 slides";
   if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Instagram · Serviço em 7 slides";
   if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Instagram · Explicativo em 7 slides";
-  if (["Esportes", "Entretenimento"].includes(topic.editoria)) return "Instagram · Destaques em 7 slides";
+  if (["Luto e Obituário", "Segurança e Justiça"].includes(topic.editoria)) return "Instagram · Contexto factual em 7 slides";
+  if (["Esportes", "Entretenimento", "Fofoca e Celebridades", "Reality Shows", "Conteúdo Viral e Redes Sociais"].includes(topic.editoria)) return "Instagram · Destaques em 7 slides";
+  if (topic.editoria === "Curiosidades e Ciência Pop") return "Instagram · Curiosidade explicada em 7 slides";
   return "Instagram · 7 slides";
 }
 

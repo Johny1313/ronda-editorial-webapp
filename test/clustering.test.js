@@ -45,5 +45,12 @@ test("classifica assuntos nas editorias principais", () => {
   assert.equal(classifyEditoria([{ title: "Senado vota projeto do governo", description: "Congresso analisa proposta" }]), "Política");
   assert.equal(classifyEditoria([{ title: "Seleção vence jogo da Copa", description: "Jogador marcou dois gols" }]), "Esportes");
   assert.equal(classifyEditoria([{ title: "Atriz estreia nova série no streaming", description: "Produção chega ao cinema" }]), "Entretenimento");
+  assert.equal(classifyEditoria([{ title: "Participante é eliminado do BBB após paredão", description: "Reality teve votação do público", editorialHints: ["Reality Shows"] }]), "Reality Shows");
+  assert.equal(classifyEditoria([{ title: "Influenciadora confirma novo namoro", description: "Celebridade falou sobre a vida pessoal", editorialHints: ["Fofoca e Celebridades"] }]), "Fofoca e Celebridades");
+  assert.equal(classifyEditoria([{ title: "Cientistas descobrem fóssil de espécie desconhecida", description: "Pesquisa explica o achado", editorialHints: ["Curiosidades e Ciência Pop"] }]), "Curiosidades e Ciência Pop");
+  assert.equal(classifyEditoria([{ title: "Vídeo viral repercute nas redes sociais", description: "Internautas compartilharam o meme", editorialHints: ["Conteúdo Viral e Redes Sociais"] }]), "Conteúdo Viral e Redes Sociais");
+  assert.equal(classifyEditoria([{ title: "Cantor morreu aos 82 anos", description: "Família confirmou o falecimento" }]), "Luto e Obituário");
+  assert.equal(classifyEditoria([{ title: "Atriz é encontrada morta e polícia investiga", description: "Caso é tratado como homicídio" }]), "Segurança e Justiça");
+  assert.equal(classifyEditoria([{ title: "Personagem morre no último capítulo da novela", description: "Cena encerra a trama" }]), "Entretenimento");
   assert.equal(classifyEditoria([{ title: "Chuva muda trânsito na capital", description: "Avenida foi interditada" }]), "Notícias");
 });

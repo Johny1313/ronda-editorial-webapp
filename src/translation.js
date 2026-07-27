@@ -173,7 +173,13 @@ export async function translateRoundPayload(payload, { ai, db } = {}) {
   return {
     ...payload,
     sources,
-    totals: { items: finalItems.length, topics: topics.length, sources: sourceCount, socialItems },
+    totals: {
+      items: finalItems.length,
+      topics: topics.length,
+      sources: sourceCount,
+      socialItems,
+      dedicatedItems: Number(payload.dedicatedMonitoring?.items?.length) || 0,
+    },
     items: finalItems,
     topics,
     translation: {
@@ -199,7 +205,13 @@ export function portugueseOnlyFallback(payload) {
   return {
     ...payload,
     sources: recalculateSources(payload.sources, items, omittedWorldItems),
-    totals: { items: items.length, topics: topics.length, sources: sourceCount, socialItems },
+    totals: {
+      items: items.length,
+      topics: topics.length,
+      sources: sourceCount,
+      socialItems,
+      dedicatedItems: Number(payload.dedicatedMonitoring?.items?.length) || 0,
+    },
     items,
     topics,
     translation: {

@@ -104,6 +104,26 @@ function isoDate(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
+function normalizedSourceLabel(value = "") {
+  return plainText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function sourceMatchesFeed(declaredSource, feed) {
+  const aliases = Array.isArray(feed?.sourceAliases) ? feed.sourceAliases : [];
+  if (!aliases.length) return true;
+  const source = normalizedSourceLabel(declaredSource);
+  if (!source) return false;
+  return aliases.some((alias) => {
+    const normalizedAlias = normalizedSourceLabel(alias);
+    return normalizedAlias && (source === normalizedAlias || source.includes(normalizedAlias) || normalizedAlias.includes(source));
+  });
+}
+
 export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000), limit = 40) {
   const xml = String(xmlText ?? "").slice(0, 3_000_000);
   const cutoffTime = cutoff instanceof Date ? cutoff.getTime() : Date.parse(cutoff);
@@ -113,9 +133,10 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
   const entryExpression = /<entry\b[^>]*>([\s\S]*?)<\/entry\s*>/gi;
   let match;
 
-  while ((match = itemExpression.exec(xml)) && blocks.length < limit * 2) blocks.push(match[1]);
+  const scanLimit = Math.min(500, Math.max(limit * 2, Number(feed?.scanLimit) || 0));
+  while ((match = itemExpression.exec(xml)) && blocks.length < scanLimit) blocks.push(match[1]);
   if (!blocks.length) {
-    while ((match = entryExpression.exec(xml)) && blocks.length < limit * 2) blocks.push(match[1]);
+    while ((match = entryExpression.exec(xml)) && blocks.length < scanLimit) blocks.push(match[1]);
   }
 
   const result = [];
@@ -123,6 +144,8 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
   for (const block of blocks) {
     if (result.length >= limit) break;
     const title = tagValue(block, ["title"]);
+    const declaredSource = tagValue(block, ["source"]);
+    if (!sourceMatchesFeed(declaredSource, feed)) continue;
     const feedDescription = tagValue(block, ["description", "summary"]);
     const feedContent = tagValue(block, ["encoded", "content"]);
     const collectedContent = feedContent || feedDescription;
@@ -134,7 +157,6 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
     if (!Number.isFinite(timestamp) || timestamp < cutoffTime || timestamp > now || seen.has(url)) continue;
     seen.add(url);
 
-    const declaredSource = tagValue(block, ["source"]);
     result.push({
       id: `rss-${feed.id}-${stableHash(url)}`,
       title,
@@ -145,6 +167,7 @@ export function parseFeed(xmlText, feed, cutoff = new Date(Date.now() - 24 * 60 
       sourceName: feed.canonicalSource ? feed.name : declaredSource || feed.name,
       collectorName: feed.name,
       region: feed.region || null,
+      editorialHints: Array.isArray(feed.editorialHints) ? [...feed.editorialHints] : [],
       platform: "Portal",
       kind: "portal",
       publishedAt,

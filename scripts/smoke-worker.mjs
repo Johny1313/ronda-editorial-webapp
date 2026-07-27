@@ -1,10 +1,58 @@
 import { Miniflare } from "miniflare";
+import { fileURLToPath } from "node:url";
 
 const publishedAt = new Date().toUTCString();
 const createdAt = new Date().toISOString();
 
 async function mockExternalSource(request) {
   const url = new URL(request.url);
+  if (url.hostname === "news.google.com") {
+    const query = decodeURIComponent(url.searchParams.get("q") || "");
+    if (query.includes('"Vini Jr"')) {
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>
+          <item><title>Vini Jr marca e decide partida internacional</title><link>https://noticias.test/vini-jr/partida</link><pubDate>${publishedAt}</pubDate><description>Atacante brasileiro foi destaque no jogo.</description><source>Portal Esportivo</source></item>
+        </channel></rss>`,
+        { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } },
+      );
+    }
+    if (query.includes("site:portal-local.test")) {
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>
+          <item><title>Portal local acompanha investimentos em mobilidade</title><link>https://noticias.test/portal-local/mobilidade</link><pubDate>${publishedAt}</pubDate><description>Site cadastrado publicou uma atualização local.</description></item>
+        </channel></rss>`,
+        { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } },
+      );
+    }
+    if (["portalleodias.com", "uol.com.br/splash", "fatosdesconhecidos.com.br", "canaltech.com.br/curiosidades"].some((site) => query.includes(site))) {
+      const portals = [
+        ["UOL", "uol-splash", "Famosa comenta os bastidores de novo reality"],
+        ["LeoDias", "leo-dias", "Influenciadora confirma novo relacionamento"],
+        ["Quem", "quem", "Atriz fala sobre casamento e carreira"],
+        ["CARAS Brasil", "caras-brasil", "Celebridade revela novidade da vida pessoal"],
+        ["Contigo!", "contigo", "Artista comenta polêmica nas redes"],
+        ["TV Foco", "tv-foco", "Programa de televisão anuncia nova temporada"],
+        ["Purepeople", "purepeople", "Famosos prestigiam evento em São Paulo"],
+        ["Observatório dos Famosos", "observatorio", "Cantora responde rumores sobre namoro"],
+        ["Área VIP", "area-vip", "Participante é eliminado de reality show"],
+        ["NaTelinha", "natelinha", "Reality prepara nova prova do líder"],
+        ["Fatos Desconhecidos", "fatos", "Vídeo curioso viraliza nas redes sociais"],
+        ["Mega Curioso", "mega-curioso", "Descoberta arqueológica surpreende cientistas"],
+        ["Hypeness", "hypeness", "Projeto criativo ganha repercussão na internet"],
+        ["Incrível.club", "incrivel", "Lista de curiosidades é compartilhada por internautas"],
+        ["Mistérios do Mundo", "misterios", "Fenômeno raro intriga pesquisadores"],
+        ["Canaltech", "canaltech-curiosidades", "Curiosidade científica explica fenômeno digital"],
+        ["Superinteressante", "super", "Estudo revela novo dado sobre o universo"],
+        ["Galileu", "galileu", "Pesquisa detalha descoberta de nova espécie"],
+        ["Segredos do Mundo", "segredos", "Mistério histórico ganha nova explicação"],
+        ["Awebic", "awebic", "História inspiradora repercute nas redes sociais"],
+      ];
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>${portals.map(([source, slug, title]) => `<item><title>${title}</title><link>https://noticias.test/${slug}/materia</link><pubDate>${publishedAt}</pubDate><description>Conteúdo de teste do portal ${source}.</description><source>${source}</source></item>`).join("")}</channel></rss>`,
+        { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } },
+      );
+    }
+  }
   if (url.hostname === "noticias.test") {
     const articleText = "O Congresso aprovou um novo plano nacional de mobilidade urbana para orientar investimentos em transporte público, ciclovias, acessibilidade e segurança viária. A proposta estabelece diretrizes para a integração entre governos, definição de prioridades e acompanhamento dos projetos. A implantação deverá ocorrer em etapas e ainda depende de detalhamento técnico, prazos, fontes de financiamento e regras complementares. Especialistas ouvidos pelos portais afirmam que a medida pode influenciar a distribuição de recursos e a escolha das obras realizadas nas cidades. O tema ganhou repercussão entre profissionais do setor e representantes de administrações locais, que pedem clareza sobre os próximos passos.";
     return new Response(`<!doctype html><html><head><meta property="og:title" content="Plano nacional de mobilidade urbana"><script type="application/ld+json">${JSON.stringify({ "@type": "NewsArticle", headline: "Plano nacional de mobilidade urbana", datePublished: createdAt, author: { name: "Redação" }, articleBody: `${articleText} ${articleText}` })}</script></head><body><nav>Menu</nav><div class="publicidade">Anúncio</div><article><p>${articleText}</p></article></body></html>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -39,10 +87,19 @@ async function mockExternalSource(request) {
 
 const mf = new Miniflare({
   modules: true,
-  scriptPath: new URL("../dist/cloudflare-worker-unico.js", import.meta.url).pathname,
+  scriptPath: fileURLToPath(new URL("../dist/cloudflare-worker-unico.js", import.meta.url)),
   compatibilityDate: "2026-07-22",
   bindings: { ENVIRONMENT: "test", TRANSLATION_TEST_MODE: "1", ARTICLE_ANALYSIS_TEST_MODE: "1" },
   d1Databases: { DB: `ronda-smoke-${crypto.randomUUID()}` },
+  queueProducers: { INTELLIGENT_JOBS_QUEUE: "ronda-editorial-intelligent-jobs" },
+  queueConsumers: {
+    "ronda-editorial-intelligent-jobs": {
+      maxBatchSize: 1,
+      maxBatchTimeout: 1,
+      maxRetries: 3,
+      retryDelay: 1,
+    },
+  },
   outboundService: mockExternalSource,
 });
 
@@ -61,13 +118,16 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=2.1.0") && html.includes("/styles.css?v=2.1.0"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=2.4.0") && html.includes("/styles.css?v=2.4.0"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
+  assert(html.includes('data-editoria="Fofoca e Celebridades"') && html.includes('data-editoria="Reality Shows"') && html.includes('data-editoria="Curiosidades e Ciência Pop"') && html.includes('data-editoria="Luto e Obituário"'), "Novas editorias especializadas não foram incorporadas ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
   assert(html.includes('id="carouselSources"'), "Lista de links para apuração não foi incorporada ao carrossel.");
-  assert(html.includes('id="carouselReading"') && html.includes('id="carouselAnalysis"') && html.includes('id="carouselEntities"'), "Leitura inteligente não foi incorporada ao modal.");
+  assert(html.includes('id="carouselReading"') && html.includes('id="carouselEvidence"') && html.includes('id="carouselAnalysis"') && html.includes('id="carouselEntities"'), "Leitura inteligente e evidências não foram incorporadas ao modal.");
   assert(!html.includes('id="carouselImages"'), "A área de sugestões de imagens ainda está presente no carrossel.");
   assert(html.includes('id="sourcesView"') && html.includes('id="sourcePortalGrid"'), "Tela de Fontes não foi incorporada ao Worker.");
+  assert(html.includes('id="customSourcesView"') && html.includes('id="customSourceForm"') && html.includes('id="navCustomSources"'), "Cadastro de sites não foi incorporado ao Worker.");
+  assert(html.includes('id="monitoringView"') && html.includes('id="monitoringTermForm"') && html.includes('id="dedicatedNewsList"') && html.includes('id="navMonitoring"'), "Monitoramento dedicado não foi incorporado ao Worker.");
   assert(html.includes('id="regionFilter"'), "Filtro Brasil/Mundo não foi incorporado ao Worker.");
   assert(html.includes('id="historyDetail"') && html.includes('id="historyBack"'), "Detalhes clicáveis do histórico não foram incorporados ao Worker.");
   assert(home.headers.get("content-security-policy"), "CSP ausente no dashboard.");
@@ -75,6 +135,35 @@ try {
 
   const selfTest = await getJson("/api/self-test");
   assert(selfTest.body.ok && selfTest.body.database?.readWriteDelete, "Autoteste lógico/D1 falhou.");
+
+  const customSourceCreated = await getJson("/api/custom-sources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Portal Local", url: "https://portal-local.test/", region: "Brasil" }),
+  });
+  assert(customSourceCreated.response.status === 201 && customSourceCreated.body.source?.active, "Site personalizado não foi cadastrado.");
+  await getJson(`/api/custom-sources/${customSourceCreated.body.source.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: false }),
+  });
+  const customSourceReactivated = await getJson(`/api/custom-sources/${customSourceCreated.body.source.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: true }),
+  });
+  assert(customSourceReactivated.body.source?.active, "Site personalizado não foi reativado.");
+  const configuredSources = await getJson("/api/custom-sources");
+  assert(configuredSources.body.sources?.length === 1 && configuredSources.body.limits?.maximumActive === 8, "Lista de sites personalizados inconsistente.");
+
+  const monitoringTermCreated = await getJson("/api/monitoring-terms", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ term: "Vini Jr" }),
+  });
+  assert(monitoringTermCreated.response.status === 201 && monitoringTermCreated.body.term?.active, "Termo dedicado não foi cadastrado.");
+  const configuredTerms = await getJson("/api/monitoring-terms");
+  assert(configuredTerms.body.terms?.length === 1 && configuredTerms.body.limits?.maximumActive === 6, "Lista de termos dedicados inconsistente.");
 
   const round = await getJson("/api/round", { method: "POST" });
   assert(round.response.status === 202 && round.body.runId, "Ronda simulada não foi iniciada em segundo plano.");
@@ -94,13 +183,18 @@ try {
   assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
   assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
   assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
-  assert(roundData.sources.length === 31, "O catálogo não contém os 30 portais e o complemento Bluesky.");
-  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 17, "Catálogo Brasil incompleto.");
+  assert(roundData.sources.length === 52, "O catálogo não contém os 50 portais, o site cadastrado e o complemento Bluesky.");
+  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 38, "Catálogo Brasil e sites cadastrados incompletos.");
   assert(roundData.sources.filter((source) => source.region === "Mundo").length === 13, "Catálogo Mundo incompleto.");
+  assert(roundData.sources.some((source) => source.name === "Portal Local" && source.ok), "O site cadastrado não foi incorporado à ronda.");
   assert(roundData.translation?.targetLanguage === "pt-BR" && roundData.translation?.portugueseOnly, "A ronda não garantiu saída em português.");
   assert(roundData.translation?.translatedWorldItems > 0 && roundData.translation?.generatedFields > 0, "A tradução internacional não foi executada.");
   assert(roundData.items.filter((item) => item.region === "Mundo").every((item) => item.targetLanguage === "pt-BR"), "Há conteúdo internacional sem tradução.");
   assert(roundData.items.every((item) => /^https?:\/\//i.test(item.url)), "Há notícia captada sem link válido para apuração.");
+  assert(roundData.dedicatedMonitoring?.items?.length === 1 && roundData.dedicatedMonitoring.items[0].monitoringTerm === "Vini Jr", "A busca dedicada não retornou o termo cadastrado.");
+  assert(roundData.dedicatedMonitoring.items[0].title.includes("Vini Jr"), "A notícia dedicada esperada não foi armazenada.");
+  assert(roundData.items.every((item) => item.kind !== "monitoring" && !item.monitoringTermId), "Notícia dedicada vazou para a aba Ronda.");
+  assert(roundData.topics.every((topic) => (topic.items || []).every((item) => item.kind !== "monitoring")), "Notícia dedicada vazou para os assuntos da Ronda.");
   assert(roundData.topics.every((topic) => topic.editoria), "Os assuntos não receberam editorias.");
   assert(roundData.topics.every((topic) => topic.carousel?.slides?.length === 7), "As prévias de carrossel em sete slides não foram geradas.");
   assert(roundData.topics.every((topic) => topic.carousel?.voiceTone && topic.carousel?.postModel), "Tom de voz ou modelo de post ausente.");
@@ -132,14 +226,33 @@ try {
   }
   assert(intelligentData?.slides?.length === 7, "A leitura inteligente não gerou sete slides.");
   assert(intelligentData?.analysisMode === "ai", "A leitura inteligente não usou o Workers AI simulado.");
-  assert(intelligentData?.reading?.successful >= 1 && intelligentData?.reading?.liveSuccessful >= 1 && intelligentData?.reading?.totalWords > 20 && intelligentData?.reading?.basis === "live-article-with-feed-fallback", "A leitura direta das matérias não foi utilizada.");
+  assert(intelligentData?.reading?.successful >= 1 && intelligentData?.reading?.liveSuccessful >= 1 && intelligentData?.reading?.totalWords > 20 && intelligentData?.reading?.basis === "single-live-article-with-feed-fallback", "A leitura direta da matéria selecionada não foi utilizada.");
   assert(intelligentData?.questions?.whatHappened && intelligentData?.entities?.themes?.length, "Interpretação ou dados estruturados ausentes.");
+  assert(intelligentData?.facts?.length && intelligentData?.validation?.passed, "Mapa de fatos ou validação editorial ausente.");
+  assert(intelligentData?.cycle?.terminal && intelligentData?.cycle?.released && intelligentData?.cycle?.nextCycleAllowed, "O ciclo concluído não liberou o sistema.");
   const intelligentCached = await getJson(`/api/topics/${topicForReading.id}/intelligent-carousel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ runId: round.body.runId }),
   });
   assert(intelligentCached.body.cached === true, "O carrossel inteligente não foi reutilizado do cache D1.");
+  const forcedCycle = await getJson(`/api/topics/${topicForReading.id}/intelligent-carousel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: roundData.runId, force: true }),
+  });
+  assert(forcedCycle.response.status === 202 && forcedCycle.body.job?.jobId && forcedCycle.body.job.jobId !== intelligentQueued.body.job.jobId, "Um novo ciclo forçado não criou uma tarefa independente.");
+  let forcedReleased = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const status = await getJson(`/api/intelligent-jobs/${forcedCycle.body.job.jobId}`);
+    if (status.body.job?.status === "succeeded") {
+      forcedReleased = Boolean(status.body.job.released && status.body.job.nextCycleAllowed && status.body.data?.cycle?.released);
+      break;
+    }
+    if (status.body.job?.status === "failed") throw new Error(status.body.job.error || "O novo ciclo forçado falhou.");
+    await delay(100);
+  }
+  assert(forcedReleased, "O novo ciclo não foi encerrado e liberado.");
 
   const historicalData = await getJson(`/api/runs/${round.body.runId}/data`);
   assert(historicalData.body.data?.items?.length === roundData.items.length, "Notícias da ronda histórica não foram recuperadas.");
@@ -149,12 +262,17 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.1.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.4.0", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
   assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
-  assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.mode === "live-article-with-feed-fallback" && health.body.intelligentReading?.articleLimit === 5, "Saúde não confirmou a leitura inteligente.");
+  assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.mode === "single-article-with-feed-fallback" && health.body.intelligentReading?.articleLimit === 1 && health.body.intelligentReading?.readingStrategy === "single-best-source-with-history" && health.body.intelligentReading?.cycleFinalization === "terminal-and-released" && health.body.intelligentReading?.nextCycleAfterTerminal === true, "Saúde não confirmou a leitura inteligente e a liberação terminal.");
+  assert(health.body.backgroundMonitoring?.active && health.body.backgroundMonitoring?.browserRequired === false && health.body.backgroundMonitoring?.execution === "cloudflare-cron" && health.body.backgroundMonitoring?.customSources === 1 && health.body.backgroundMonitoring?.monitoringTerms === 1, "Saúde não confirmou a coleta em segundo plano com sites e termos.");
+
+  const deletedTerm = await getJson(`/api/monitoring-terms/${monitoringTermCreated.body.term.id}`, { method: "DELETE" });
+  const deletedSource = await getJson(`/api/custom-sources/${customSourceCreated.body.source.id}`, { method: "DELETE" });
+  assert(deletedTerm.body.deleted?.term === "Vini Jr" && deletedSource.body.deleted?.name === "Portal Local", "Cadastros de teste não foram removidos.");
 
   process.stdout.write(
-    `Smoke test aprovado: dashboard, D1, leitura inteligente, carrosséis de 7 slides, histórico detalhado, ${roundData.totals.items} conteúdos, ${roundData.totals.topics} assuntos e Bluesky.\n`,
+    "Smoke test aprovado: dashboard, D1, sites cadastrados, termos isolados, execução em segundo plano, leitura inteligente, carrosséis de 7 slides e ciclo liberado.\n",
   );
 } finally {
   await mf.dispose();

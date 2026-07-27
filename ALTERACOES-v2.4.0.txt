@@ -1,0 +1,68 @@
+RONDA EDITORIAL v2.4.0 — NOVOS PORTAIS E CLASSIFICAÇÃO EDITORIAL
+=================================================================
+
+NOVOS PORTAIS
+--------------
+
+Celebridades, televisão e realities:
+- UOL Splash
+- LeoDias
+- Quem
+- Caras Brasil
+- Contigo!
+- TV Foco
+- Purepeople Brasil
+- Observatório dos Famosos
+- Área VIP
+- NaTelinha
+
+Curiosidades, ciência pop e conteúdo viral:
+- Fatos Desconhecidos
+- Mega Curioso
+- Hypeness
+- Incrível.club
+- Mistérios do Mundo
+- Canaltech Curiosidades
+- Superinteressante
+- Revista Galileu
+- Segredos do Mundo
+- Awebic
+
+O catálogo passa de 30 para 50 portais: 37 do Brasil e 13 do Mundo.
+
+COLETA OTIMIZADA
+-----------------
+
+Os 20 novos portais usam consultas agregadas ao Google Notícias. Portais do
+mesmo grupo compartilham a mesma resposta externa, mas cada notícia conserva
+o nome canônico do veículo. Isso mantém a ronda dentro do orçamento seguro de
+subconsultas do Cloudflare Workers Free.
+
+NOVAS CATEGORIAS
+----------------
+
+- Fofoca e Celebridades
+- Reality Shows
+- Curiosidades e Ciência Pop
+- Conteúdo Viral e Redes Sociais
+- Luto e Obituário
+- Segurança e Justiça
+
+REGRAS DE SEGURANÇA EDITORIAL
+-----------------------------
+
+- Morreu, morte, faleceu, falecimento, óbito, velório e funeral: Luto e Obituário.
+- Assassinato, homicídio, feminicídio, corpo encontrado, tiros e acidente fatal:
+  Segurança e Justiça.
+- Morte de personagem em novela, série ou filme continua em Entretenimento.
+- Expressões figurativas como “morre de rir” não ativam a regra de obituário.
+- As fontes especializadas funcionam como indício, mas o texto da notícia decide
+  a classificação final.
+
+VALIDAÇÃO
+---------
+
+- 29 testes automatizados aprovados.
+- Bundle autossuficiente reconstruído.
+- Arquivos JavaScript validados por sintaxe.
+- O smoke test com Miniflare exige npm install antes da execução.

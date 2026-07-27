@@ -1,18 +1,20 @@
 import { decodeEntities, plainText, stableHash } from "./parser.js";
 
 export const ARTICLE_ANALYSIS_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-export const ARTICLE_READER_LIMIT = 5;
+export const ARTICLE_READER_LIMIT = 1;
 const MAX_HTML_BYTES = 2_500_000;
-const MAX_ARTICLE_CHARS = 8_000;
+const MAX_ARTICLE_CHARS = 12_000;
 const MAX_PROMPT_CHARS = 30_000;
 const MIN_ARTICLE_WORDS = 80;
 const ARTICLE_FETCH_TIMEOUT_MS = 5_500;
 const AMP_FETCH_TIMEOUT_MS = 3_000;
 const ARTICLE_TOTAL_TIMEOUT_MS = 10_000;
-const ARTICLE_READ_CONCURRENCY = 3;
 const READING_PROGRESS_START = 8;
 const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 14_000;
+const MAX_SLIDE_TITLE_CHARS = 68;
+const MAX_SLIDE_SUBTITLE_CHARS = 190;
+const CAROUSEL_PROMPT_VERSION = "facts-v2-evidence-v1";
 
 const NOISE_PATTERN = /(ad-|ads|advert|anuncio|banner|breadcrumb|cookie|coment|comments|footer|header|menu|nav|newsletter|paywall|popup|promo|publicidade|recommend|related|share|sidebar|social|subscribe|widget)/i;
 const NOISE_SENTENCE = /(assine|aceite os cookies|continuar lendo|conteúdo patrocinado|leia também|mais lidas|publicidade|receba nossa newsletter|siga-nos|todos os direitos reservados)/i;
@@ -36,6 +38,48 @@ function compact(value, limit = 300) {
 
 function wordCount(value) {
   return plainText(value).split(/\s+/).filter(Boolean).length;
+}
+
+function normalizedTokens(value, minimumLength = 4) {
+  return plainText(value)
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .match(/[a-z0-9]+/g)
+    ?.filter((token) => token.length >= minimumLength && !/^(para|como|mais|pela|pelo|pelos|pelas|sobre|entre|apenas|ainda|esta|este|essa|esse|isso|noticia|materia)$/.test(token)) || [];
+}
+
+function tokenSimilarity(left, right) {
+  const a = new Set(normalizedTokens(left));
+  const b = new Set(normalizedTokens(right));
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection += 1;
+  return intersection / Math.max(a.size, b.size);
+}
+
+function tokenCoverage(query, text) {
+  const expected = new Set(normalizedTokens(query));
+  const available = new Set(normalizedTokens(text));
+  if (!expected.size || !available.size) return 0;
+  let intersection = 0;
+  for (const token of expected) if (available.has(token)) intersection += 1;
+  return intersection / expected.size;
+}
+
+function editorialClip(value, limit) {
+  const text = plainText(value);
+  if (text.length <= limit) return text;
+  const clipped = text.slice(0, limit + 1);
+  const punctuation = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf("!"), clipped.lastIndexOf("?"));
+  if (punctuation >= limit * 0.58) return clipped.slice(0, punctuation + 1).trim();
+  const boundary = clipped.lastIndexOf(" ");
+  const safe = clipped.slice(0, boundary >= limit * 0.65 ? boundary : limit).replace(/[,:;–—-]+$/, "").trim();
+  return safe ? `${safe}.` : "";
+}
+
+function canonicalHostname(value) {
+  try { return new URL(String(value || "")).hostname.toLocaleLowerCase("pt-BR").replace(/^www\./, ""); } catch { return ""; }
 }
 
 function safeJsonParse(value) {
@@ -240,7 +284,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.1.2; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.4.0; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -322,26 +366,66 @@ export async function readArticle(item, fetcher = fetch, { timeoutMs = ARTICLE_T
   }
 }
 
-function distinctPortalItems(topic) {
+function sourceStatFor(sourceStats, hostname) {
+  if (!hostname || !sourceStats) return null;
+  if (sourceStats instanceof Map) return sourceStats.get(hostname) || null;
+  return sourceStats[hostname] || null;
+}
+
+function singlePortalItem(topic, sourceStats = null) {
   const items = Array.isArray(topic?.items) ? topic.items : [];
   const seen = new Set();
-  const seenSources = new Set();
-  const ordered = [...items]
-    .filter((item) => item?.kind !== "social" && plainText(item?.title))
-    .sort((left, right) => Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0));
-  const preferred = [];
-  const remainder = [];
-  for (const item of ordered) {
+  const candidates = [];
+  for (const item of items) {
+    if (item?.kind === "social" || !plainText(item?.title)) continue;
     const identity = String(item?.url || item?.id || `${item?.sourceName}|${item?.title}`);
     if (seen.has(identity)) continue;
     seen.add(identity);
-    const source = item.collectorName || item.sourceName || "Fonte não informada";
-    if (!seenSources.has(source)) {
-      seenSources.add(source);
-      preferred.push(item);
-    } else remainder.push(item);
+    const collected = collectedContent(item);
+    const levelScore = collected.level === "content" ? 70 : collected.level === "summary" ? 38 : 6;
+    const hasUrl = /^https?:\/\//i.test(String(item?.url || ""));
+    const publishedAt = Date.parse(item?.publishedAt || 0);
+    const ageHours = Number.isFinite(publishedAt) ? Math.max(0, (Date.now() - publishedAt) / 3_600_000) : 48;
+    const freshnessScore = Math.max(0, 20 - Math.min(20, ageHours * 1.25));
+    const relevanceScore = Math.round(tokenCoverage(topic?.title || "", `${item?.title || ""} ${item?.description || ""}`) * 25);
+    const hostname = canonicalHostname(item?.url);
+    const stats = sourceStatFor(sourceStats, hostname);
+    const attempts = Number(stats?.attempts) || 0;
+    const successes = Number(stats?.successes) || 0;
+    const historicalRate = attempts ? successes / attempts : 0.5;
+    const reliabilityScore = attempts >= 3 ? Math.round(historicalRate * 35) : 17;
+    const contentScore = Math.min(42, collected.wordCount / 4);
+    const score = levelScore + contentScore + freshnessScore + relevanceScore + reliabilityScore + (hasUrl ? 25 : 0);
+    candidates.push({
+      item,
+      hasUrl,
+      score,
+      hostname,
+      reasons: {
+        contentLevel: collected.level,
+        contentWords: collected.wordCount,
+        relevanceScore,
+        freshnessScore: Math.round(freshnessScore),
+        reliabilityScore,
+        historicalAttempts: attempts,
+        historicalSuccessRate: attempts ? Number(historicalRate.toFixed(2)) : null,
+      },
+      publishedAt: Number.isFinite(publishedAt) ? publishedAt : 0,
+    });
   }
-  return [...preferred, ...remainder].slice(0, ARTICLE_READER_LIMIT);
+  const readableCandidates = candidates.filter((candidate) => candidate.hasUrl);
+  const pool = readableCandidates.length ? readableCandidates : candidates;
+  pool.sort((left, right) => right.score - left.score || right.publishedAt - left.publishedAt);
+  const selected = pool[0];
+  return selected
+    ? {
+        item: selected.item,
+        score: Math.round(selected.score),
+        reasons: selected.reasons,
+        hostname: selected.hostname,
+        candidatesEvaluated: candidates.length,
+      }
+    : null;
 }
 
 function collectedContent(item) {
@@ -385,59 +469,52 @@ function collectedRecord(item) {
 }
 
 
-async function articleRecordWithFallback(item, fetcher, { timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS } = {}) {
-  const fallback = { ...collectedRecord(item), readMode: "feed-fallback", liveReadError: null };
+function articleReadCacheKey(item) {
+  return stableHash([
+    String(item?.url || ""),
+    String(item?.title || ""),
+    String(item?.publishedAt || ""),
+    String(item?.content || item?.description || "").slice(0, 1_200),
+  ].join("|"));
+}
+
+async function articleRecordWithFallback(item, fetcher, { timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS, readCache = null } = {}) {
+  const fallback = { ...collectedRecord(item), readMode: "feed-fallback", liveReadError: null, liveAttempted: false, cacheHit: false };
   if (!/^https?:\/\//i.test(String(item?.url || ""))) return fallback;
+  const cacheKey = articleReadCacheKey(item);
+  if (readCache?.get) {
+    try {
+      const cached = await readCache.get(cacheKey);
+      if (cached?.content && wordCount(cached.content) >= MIN_ARTICLE_WORDS) {
+        return {
+          ...cached,
+          ok: true,
+          readMode: "full-article-cache",
+          contentLevel: "article",
+          wordCount: wordCount(cached.content),
+          cacheHit: true,
+          liveAttempted: false,
+          liveReadError: null,
+          error: null,
+        };
+      }
+    } catch {}
+  }
   const live = await readArticle(item, fetcher, { timeoutMs });
-  if (live.ok && live.content) return { ...live, fallbackWordCount: fallback.wordCount, liveReadError: null };
+  if (live.ok && live.content) {
+    const record = { ...live, fallbackWordCount: fallback.wordCount, liveReadError: null, liveAttempted: true, cacheHit: false };
+    if (readCache?.set) {
+      try { await readCache.set(cacheKey, record); } catch {}
+    }
+    return record;
+  }
   return {
     ...fallback,
     readMode: live.readMode === "timeout" ? "feed-timeout" : "feed-fallback",
+    liveAttempted: true,
     liveReadError: live.error || "Matéria indisponível",
     error: live.error || null,
   };
-}
-
-async function collectArticlesWithProgress(items, {
-  fetcher,
-  onProgress,
-  timeoutMs = ARTICLE_TOTAL_TIMEOUT_MS,
-  concurrency = ARTICLE_READ_CONCURRENCY,
-} = {}) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-  let completed = 0;
-  const workers = Math.max(1, Math.min(items.length, Number(concurrency) || ARTICLE_READ_CONCURRENCY));
-  const taskTimeoutMs = Math.max(1_200, Number(timeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS);
-
-  const runWorker = async () => {
-    while (true) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) return;
-      const item = items[index];
-      const fallback = { ...collectedRecord(item), readMode: "feed-timeout", liveReadError: "Tempo limite da leitura direta; usado o conteúdo disponível no feed", error: "Tempo limite da leitura direta; usado o conteúdo disponível no feed" };
-      let record;
-      try {
-        record = await withTimeout(
-          articleRecordWithFallback(item, fetcher, { timeoutMs: taskTimeoutMs }),
-          taskTimeoutMs + 750,
-          "Tempo limite da fonte excedido",
-        );
-      } catch {
-        record = fallback;
-      }
-      results[index] = record;
-      completed += 1;
-      const progress = READING_PROGRESS_START + Math.round((completed / items.length) * (READING_PROGRESS_END - READING_PROGRESS_START));
-      const source = compact(record.sourceName || item?.sourceName || item?.collectorName || `Fonte ${completed}`, 70);
-      const resultLabel = record.readMode === "full-article" ? "texto principal extraído" : "fallback do feed aplicado";
-      await reportProgress(onProgress, progress, "reading", `Leitura ${completed} de ${items.length}: ${source} — ${resultLabel}.`);
-    }
-  };
-
-  await Promise.all(Array.from({ length: workers }, () => runWorker()));
-  return results.filter((item) => item?.content);
 }
 
 async function reportProgress(callback, progress, stage, message) {
@@ -463,19 +540,49 @@ function readingQuality(records) {
   const contentSources = records.filter((item) => item.contentLevel === "content").length;
   const summarySources = records.filter((item) => item.contentLevel === "summary").length;
   const titleOnlySources = records.filter((item) => item.contentLevel === "title").length;
+  const combined = records.map((item) => item.content || "").join("\n\n");
+  const tokens = normalizedTokens(combined, 3);
+  const uniqueTokenRatio = tokens.length ? new Set(tokens).size / tokens.length : 0;
+  const paragraphCount = combined.split(/\n{2,}/).map((item) => plainText(item)).filter((item) => wordCount(item) >= 12).length;
+  const titleMatch = records.length
+    ? Math.max(...records.map((item) => tokenCoverage(item.title || "", item.content || "")))
+    : 0;
   let code = "insufficient";
   let label = "Conteúdo insuficiente";
-  if (totalWords >= 280 && (articleSources >= 1 || contentSources >= 1 || records.length >= 3)) {
+  if (
+    ((articleSources >= 1 && totalWords >= 160) || (contentSources >= 1 && totalWords >= 260))
+    && uniqueTokenRatio >= 0.32
+    && titleMatch >= 0.12
+  ) {
     code = "broad";
-    label = articleSources ? "Leitura ampla das matérias" : "Conteúdo amplo";
-  } else if (totalWords >= 90 || (records.length >= 2 && totalWords >= 55)) {
+    label = articleSources ? "Leitura ampla e consistente" : "Conteúdo amplo do feed";
+  } else if (
+    totalWords >= 85
+    && titleOnlySources === 0
+    && uniqueTokenRatio >= 0.25
+  ) {
     code = "partial";
-    label = articleSources ? "Leitura parcial das matérias" : "Conteúdo parcial";
-  } else if (totalWords >= 8) {
+    label = articleSources ? "Leitura parcial da matéria" : "Conteúdo parcial";
+  } else if (totalWords >= 18 && titleOnlySources === 0) {
     code = "limited";
     label = "Conteúdo limitado";
   }
-  return { code, label, totalWords, articleSources, contentSources, summarySources, titleOnlySources };
+  const generationAllowed = code !== "insufficient";
+  const copyAllowed = code === "broad";
+  return {
+    code,
+    label,
+    totalWords,
+    articleSources,
+    contentSources,
+    summarySources,
+    titleOnlySources,
+    paragraphCount,
+    uniqueTokenRatio: Number(uniqueTokenRatio.toFixed(2)),
+    titleMatch: Number(titleMatch.toFixed(2)),
+    generationAllowed,
+    copyAllowed,
+  };
 }
 
 function sentences(value) {
@@ -513,11 +620,39 @@ function heuristicEntities(text) {
   return { people, companies, places, dates, themes, keywords };
 }
 
+function fallbackFactsFromArticle(article, limit = 8) {
+  const list = sentences(`${article?.title || ""}. ${article?.content || ""}`);
+  const output = [];
+  const seen = new Set();
+  for (const sentence of list) {
+    const evidence = editorialClip(sentence, 240);
+    const key = plainText(evidence).toLocaleLowerCase("pt-BR");
+    if (!evidence || seen.has(key)) continue;
+    seen.add(key);
+    output.push({
+      id: `fact-${output.length + 1}`,
+      claim: editorialClip(sentence, 220),
+      evidence,
+      confidence: article?.contentLevel === "article" || article?.contentLevel === "content" ? "high" : "medium",
+    });
+    if (output.length >= limit) break;
+  }
+  if (!output.length && plainText(article?.title)) {
+    output.push({
+      id: "fact-1",
+      claim: editorialClip(article.title, 180),
+      evidence: editorialClip(article.title, 180),
+      confidence: "low",
+    });
+  }
+  return output;
+}
+
 function fallbackAnalysis(topic, articles, socialItems) {
   const combined = articles.map((article) => `${article.title}. ${article.content}`).join("\n\n");
   const list = sentences(combined);
-  const headline = compact(topic?.title || articles[0]?.title || "Assunto em acompanhamento", 110);
-  const whatHappened = compact(list.slice(0, 2).join(" ") || topic?.items?.[0]?.description || headline, 420);
+  const headline = compact(articles[0]?.title || topic?.title || "Assunto em acompanhamento", 110);
+  const whatHappened = compact(list.slice(0, 2).join(" ") || articles[0]?.content || headline, 420);
   const context = compact(list.slice(2, 4).join(" ") || articles[1]?.content || whatHappened, 420);
   const details = compact(list.slice(4, 7).join(" ") || articles.slice(1, 3).map((item) => item.content).join(" ") || context, 420);
   const impact = firstMatchingSentence(list, /impact|consequ|efeito|mudan|risco|benef|preju|custo|afeta|pode/i, details);
@@ -525,6 +660,7 @@ function fallbackAnalysis(topic, articles, socialItems) {
     ? `O assunto também apareceu em ${socialItems.length} publicação${socialItems.length === 1 ? "" : "ões"} do Bluesky monitoradas pela ronda.`
     : firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta/i, "O conteúdo coletado ainda não detalha uma repercussão consolidada.");
   const entities = heuristicEntities(`${headline}\n${combined}`);
+  const facts = fallbackFactsFromArticle(articles[0]);
   const slides = [
     { number: 1, role: "Título principal", title: headline, subtitle: compact(whatHappened, 260) },
     { number: 2, role: "Contexto", title: "Entenda o cenário", subtitle: context },
@@ -532,8 +668,14 @@ function fallbackAnalysis(topic, articles, socialItems) {
     { number: 4, role: "Detalhamento", title: "Os principais detalhes", subtitle: details },
     { number: 5, role: "Consequência", title: "Qual é o impacto", subtitle: impact },
     { number: 6, role: "Conclusão", title: "O que fica da notícia", subtitle: compact(repercussion, 360) },
-    { number: 7, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte as fontes originais e acompanhe as próximas atualizações." },
-  ].map((slide) => ({ ...slide, body: slide.subtitle }));
+    { number: 7, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte a matéria original e acompanhe as próximas atualizações." },
+  ].map((slide, index) => ({
+    ...slide,
+    body: slide.subtitle,
+    evidenceIds: facts[index === 6 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))]?.id
+      ? [facts[index === 6 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))].id]
+      : [],
+  }));
   return {
     questions: {
       whatHappened,
@@ -544,11 +686,12 @@ function fallbackAnalysis(topic, articles, socialItems) {
       repercussion,
     },
     entities,
+    facts,
     slides,
   };
 }
 
-const ANALYSIS_SCHEMA = {
+const FACT_ANALYSIS_SCHEMA = {
   type: "object",
   properties: {
     questions: {
@@ -575,6 +718,27 @@ const ANALYSIS_SCHEMA = {
       },
       required: ["people", "companies", "places", "dates", "themes", "keywords"],
     },
+    facts: {
+      type: "array",
+      minItems: 1,
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          claim: { type: "string" },
+          evidence: { type: "string" },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+        },
+        required: ["claim", "evidence", "confidence"],
+      },
+    },
+  },
+  required: ["questions", "entities", "facts"],
+};
+
+const CAROUSEL_SCHEMA = {
+  type: "object",
+  properties: {
     slides: {
       type: "array",
       minItems: 7,
@@ -586,12 +750,13 @@ const ANALYSIS_SCHEMA = {
           role: { type: "string" },
           title: { type: "string" },
           subtitle: { type: "string" },
+          evidenceIds: { type: "array", items: { type: "string" } },
         },
-        required: ["number", "role", "title", "subtitle"],
+        required: ["number", "role", "title", "subtitle", "evidenceIds"],
       },
     },
   },
-  required: ["questions", "entities", "slides"],
+  required: ["slides"],
 };
 
 function normalizeList(value, limit = 10) {
@@ -603,67 +768,217 @@ function normalizeList(value, limit = 10) {
   return output;
 }
 
-function normalizeAnalysis(value, fallback) {
+function normalizedEvidenceText(value) {
+  return plainText(value)
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9%]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function numericTokens(value) {
+  return normalizedEvidenceText(value).match(/\b\d+(?:[.,]\d+)?%?\b/g) || [];
+}
+
+function unsupportedNumbers(value, articleText) {
+  const allowed = new Set(numericTokens(articleText));
+  return numericTokens(value).filter((token) => !allowed.has(token));
+}
+
+function factHasEvidence(fact, article) {
+  const content = normalizedEvidenceText(`${article?.title || ""} ${article?.content || ""}`);
+  const evidence = normalizedEvidenceText(fact?.evidence || "");
+  if (!evidence || evidence.length < 16) return false;
+  if (content.includes(evidence)) return true;
+  return tokenSimilarity(evidence, content) >= 0.72 && unsupportedNumbers(evidence, content).length === 0;
+}
+
+function normalizeFacts(value, fallbackFacts, article) {
+  const output = [];
+  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  for (const raw of Array.isArray(value) ? value : []) {
+    const fact = {
+      claim: editorialClip(raw?.claim, 220),
+      evidence: editorialClip(raw?.evidence, 240),
+      confidence: ["high", "medium", "low"].includes(raw?.confidence) ? raw.confidence : "medium",
+    };
+    if (!fact.claim || !factHasEvidence(fact, article) || unsupportedNumbers(fact.claim, sourceText).length) continue;
+    output.push({ ...fact, id: `fact-${output.length + 1}` });
+    if (output.length >= 10) break;
+  }
+  return output.length ? output : fallbackFacts.map((fact, index) => ({ ...fact, id: `fact-${index + 1}` }));
+}
+
+function normalizeFactAnalysis(value, fallback, article) {
   const source = value && typeof value === "object" ? value : {};
   const questions = {};
+  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
   for (const key of ["whatHappened", "who", "where", "when", "impact", "repercussion"]) {
-    questions[key] = compact(source.questions?.[key] || fallback.questions[key], 440);
+    const generated = editorialClip(source.questions?.[key], 360);
+    questions[key] = generated && !unsupportedNumbers(generated, sourceText).length
+      ? generated
+      : editorialClip(fallback.questions[key], 360);
   }
   const entities = {};
+  const articleEvidence = normalizedEvidenceText(`${article?.title || ""} ${article?.content || ""}`);
   for (const key of ["people", "companies", "places", "dates", "themes", "keywords"]) {
-    entities[key] = normalizeList(source.entities?.[key]?.length ? source.entities[key] : fallback.entities[key]);
+    const generated = normalizeList(source.entities?.[key]);
+    const supported = generated.filter((item) => {
+      const normalized = normalizedEvidenceText(item);
+      if (!normalized) return false;
+      if (articleEvidence.includes(normalized)) return true;
+      return normalizedTokens(normalized).some((token) => articleEvidence.includes(token));
+    });
+    entities[key] = supported.length ? supported : normalizeList(fallback.entities[key]);
   }
+  const facts = normalizeFacts(source.facts, fallback.facts, article);
+  return { questions, entities, facts };
+}
+
+function normalizeSlides(value, fallback, facts) {
+  const source = value && typeof value === "object" ? value : {};
   const rawSlides = Array.isArray(source.slides) ? source.slides : [];
   const slides = EXPECTED_SLIDES.map(([number, role], index) => {
-    const subtitle = compact(rawSlides[index]?.subtitle || rawSlides[index]?.body || fallback.slides[index]?.subtitle || fallback.slides[index]?.body || "", 460);
+    const subtitle = editorialClip(
+      rawSlides[index]?.subtitle || rawSlides[index]?.body || fallback.slides[index]?.subtitle || fallback.slides[index]?.body || "",
+      MAX_SLIDE_SUBTITLE_CHARS,
+    );
+    const requestedEvidence = normalizeList(rawSlides[index]?.evidenceIds, 4);
+    const evidenceIds = requestedEvidence.filter((id) => facts.some((fact) => fact.id === id));
+    const fallbackEvidence = fallback.slides[index]?.evidenceIds?.filter((id) => facts.some((fact) => fact.id === id)) || [];
     return {
       number,
       role,
-      title: compact(rawSlides[index]?.title || fallback.slides[index]?.title || role, 120),
+      title: editorialClip(rawSlides[index]?.title || fallback.slides[index]?.title || role, MAX_SLIDE_TITLE_CHARS),
       subtitle,
       body: subtitle,
+      evidenceIds: evidenceIds.length ? evidenceIds : fallbackEvidence.length ? fallbackEvidence : facts[0]?.id ? [facts[0].id] : [],
     };
   });
-  return { questions, entities, slides };
+  return slides;
 }
 
-function promptFor(topic, articles, socialItems, quality) {
-  const sourceBlocks = articles.map((article, index) => {
-    const contentType = article.contentLevel === "article"
-      ? "texto principal extraído da matéria original"
-      : article.contentLevel === "content"
-        ? "texto fornecido pelo feed"
-        : article.contentLevel === "summary"
-          ? "resumo fornecido pelo feed"
-          : "somente título";
-    return [
-      `CONTEÚDO ${index + 1}`,
-      `Portal: ${article.sourceName}`,
-      `Título: ${article.title}`,
-      `Data: ${article.publishedAt || "não informada"}`,
-      `Tipo de conteúdo: ${contentType}`,
-      article.liveReadError ? `Falha da leitura direta: ${article.liveReadError}` : null,
-      `Texto disponível para análise:\n${article.content.slice(0, 5_500)}`,
-    ].filter(Boolean).join("\n");
-  }).join("\n\n---\n\n");
-  const social = socialItems.slice(0, 8).map((item) => `- ${item.sourceName}: ${compact(item.title, 260)} (${Number(item.interactions) || 0} interações observadas)`).join("\n") || "Nenhuma publicação social relacionada foi captada.";
-  return `ASSUNTO DA RONDA: ${compact(topic?.title, 180)}\nEDITORIA: ${topic?.editoria || "Notícias"}\nQUALIDADE DO CONTEÚDO: ${quality.label}\n\n${sourceBlocks}\n\nSINAIS DE REPERCUSSÃO NO BLUESKY:\n${social}`.slice(0, MAX_PROMPT_CHARS);
+function validateSlides(slides, fallbackSlides, facts, article) {
+  const issues = [];
+  const corrected = slides.map((slide) => ({ ...slide, evidenceIds: [...(slide.evidenceIds || [])] }));
+  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  for (let index = 0; index < corrected.length; index += 1) {
+    const slide = corrected[index];
+    if (!slide.title || !slide.subtitle) {
+      issues.push({ code: "empty-slide", slide: index + 1 });
+      corrected[index] = { ...fallbackSlides[index], evidenceIds: fallbackSlides[index]?.evidenceIds || [] };
+      continue;
+    }
+    const unsupported = unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText);
+    if (unsupported.length) {
+      issues.push({ code: "unsupported-number", slide: index + 1, values: unsupported });
+      corrected[index] = { ...fallbackSlides[index], evidenceIds: fallbackSlides[index]?.evidenceIds || [] };
+    }
+  }
+  for (let left = 0; left < corrected.length; left += 1) {
+    for (let right = left + 1; right < corrected.length; right += 1) {
+      if (tokenSimilarity(corrected[left].subtitle, corrected[right].subtitle) < 0.76) continue;
+      issues.push({ code: "repeated-slide", slide: right + 1, similarTo: left + 1 });
+      corrected[right] = { ...fallbackSlides[right], evidenceIds: fallbackSlides[right]?.evidenceIds || [] };
+    }
+  }
+  const finalProblems = corrected.flatMap((slide, index) => {
+    const problems = [];
+    if (!slide.title || !slide.subtitle) problems.push({ code: "empty-slide", slide: index + 1 });
+    if (unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText).length) problems.push({ code: "unsupported-number", slide: index + 1 });
+    if ((slide.evidenceIds || []).some((id) => !facts.some((fact) => fact.id === id))) problems.push({ code: "invalid-evidence", slide: index + 1 });
+    return problems;
+  });
+  const evidenceCoverage = corrected.length
+    ? corrected.filter((slide) => slide.evidenceIds?.length).length / corrected.length
+    : 0;
+  return {
+    slides: corrected.map((slide) => ({ ...slide, body: slide.subtitle })),
+    report: {
+      passed: finalProblems.length === 0,
+      issues,
+      finalProblems,
+      correctedSlides: [...new Set(issues.map((issue) => issue.slide).filter(Boolean))],
+      factCount: facts.length,
+      evidenceCoverage: Number(evidenceCoverage.toFixed(2)),
+      limits: { titleChars: MAX_SLIDE_TITLE_CHARS, subtitleChars: MAX_SLIDE_SUBTITLE_CHARS },
+    },
+  };
 }
 
-async function runAiAnalysis(ai, model, topic, articles, socialItems, quality) {
+function promptForFacts(topic, article, quality) {
+  const contentType = article.contentLevel === "article"
+    ? "texto principal extraído da matéria original"
+    : article.contentLevel === "content"
+      ? "texto fornecido pelo feed da mesma matéria"
+      : article.contentLevel === "summary"
+        ? "resumo fornecido pelo feed da mesma matéria"
+        : "somente o título da mesma matéria";
+  return [
+    `ASSUNTO DA SUGESTÃO: ${compact(topic?.title || article.title, 180)}`,
+    `EDITORIA: ${topic?.editoria || "Notícias"}`,
+    `QUALIDADE DO CONTEÚDO: ${quality.label}`,
+    "REGRA DE FONTE: use somente a matéria abaixo. Outras fontes do assunto não foram lidas e não podem ser usadas, comparadas ou inferidas.",
+    `PORTAL SELECIONADO: ${article.sourceName}`,
+    `TÍTULO DA MATÉRIA: ${article.title}`,
+    `DATA: ${article.publishedAt || "não informada"}`,
+    `TIPO DE CONTEÚDO: ${contentType}`,
+    article.liveReadError ? `FALHA DA LEITURA DIRETA: ${article.liveReadError}` : null,
+    `TEXTO ÚNICO DISPONÍVEL PARA ANÁLISE:
+${article.content.slice(0, MAX_ARTICLE_CHARS)}`,
+    "Extraia somente fatos sustentados por trechos do texto. Para cada fato, copie uma evidência curta que exista na matéria. Não redija slides nesta etapa.",
+  ].filter(Boolean).join("\n\n").slice(0, MAX_PROMPT_CHARS);
+}
+
+async function runAiFactAnalysis(ai, model, topic, article, quality) {
   const response = await withTimeout(ai.run(model, {
     messages: [
       {
         role: "system",
-        content: "Você é um editor jornalístico brasileiro. Analise exclusivamente os textos fornecidos. Alguns são trechos principais extraídos das matérias originais; outros são conteúdos ou resumos dos feeds. Não invente fatos, nomes, números, datas, locais, impacto ou repercussão. Quando a informação não estiver comprovada, escreva 'Não informado no conteúdo disponível'. Produza um carrossel em português do Brasil com exatamente 7 slides. Cada slide deve conter apenas título e subtítulo. Estrutura: título principal, contexto, informação principal, detalhamento, consequência, conclusão e CTA. Não use hashtags, emojis ou sensacionalismo.",
+        content: "Você é um editor de apuração jornalística brasileiro. Receberá exatamente UMA matéria. Use exclusivamente esse texto único. Não combine, compare, confirme nem complete informações com conhecimento externo, títulos da ronda ou sinais sociais. Extraia perguntas editoriais, entidades e um mapa de fatos. Cada fato precisa de uma evidência textual curta existente na matéria. Não invente nomes, números, datas, locais, impacto ou repercussão. Quando não houver comprovação, escreva 'Não informado no conteúdo disponível'. Retorne somente o JSON solicitado.",
       },
-      { role: "user", content: promptFor(topic, articles, socialItems, quality) },
+      { role: "user", content: promptForFacts(topic, article, quality) },
     ],
-    response_format: { type: "json_schema", json_schema: ANALYSIS_SCHEMA },
-    max_tokens: 2_400,
-    temperature: 0.15,
-    top_p: 0.85,
-  }), AI_ANALYSIS_TIMEOUT_MS, "A análise da IA excedeu o tempo limite");
+    response_format: { type: "json_schema", json_schema: FACT_ANALYSIS_SCHEMA },
+    max_tokens: 1_800,
+    temperature: 0.05,
+    top_p: 0.75,
+  }), AI_ANALYSIS_TIMEOUT_MS, "A extração dos fatos excedeu o tempo limite");
+  return safeJsonParse(response?.response ?? response?.result ?? response);
+}
+
+function carouselPrompt(topic, factAnalysis, quality) {
+  return [
+    `ASSUNTO: ${compact(topic?.title, 180)}`,
+    `EDITORIA: ${topic?.editoria || "Notícias"}`,
+    `QUALIDADE: ${quality.label}`,
+    `MAPA DE FATOS VALIDADO:
+${JSON.stringify(factAnalysis.facts)}`,
+    `RESPOSTAS EDITORIAIS VALIDADAS:
+${JSON.stringify(factAnalysis.questions)}`,
+    "Escreva exatamente sete slides: 1 título principal; 2 contexto; 3 informação principal; 4 detalhamento; 5 consequência; 6 conclusão; 7 CTA.",
+    `Limites obrigatórios: título com até ${MAX_SLIDE_TITLE_CHARS} caracteres e subtítulo com até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres. Use no máximo duas frases por subtítulo.`,
+    "Cada slide deve trazer uma ideia diferente e indicar em evidenceIds os fatos utilizados. Não crie nomes, números, datas ou consequências fora do mapa. O CTA não pode acrescentar fatos.",
+    "Não use hashtags, emojis, sensacionalismo nem comentários fora do JSON. Depois do slide 7, encerre a geração.",
+  ].join("\n\n").slice(0, MAX_PROMPT_CHARS);
+}
+
+async function runAiCarouselGeneration(ai, model, topic, factAnalysis, quality) {
+  const response = await withTimeout(ai.run(model, {
+    messages: [
+      {
+        role: "system",
+        content: "Você é um redator de carrosséis jornalísticos em português do Brasil. Trabalhe somente com o mapa de fatos validado de UMA matéria. Produza exatamente sete slides concisos, factuais e não repetitivos. Cada slide deve conter apenas título, subtítulo e evidenceIds. Não use conhecimento externo. Retorne somente o JSON solicitado e encerre após o sétimo slide.",
+      },
+      { role: "user", content: carouselPrompt(topic, factAnalysis, quality) },
+    ],
+    response_format: { type: "json_schema", json_schema: CAROUSEL_SCHEMA },
+    max_tokens: 1_600,
+    temperature: 0.12,
+    top_p: 0.82,
+  }), AI_ANALYSIS_TIMEOUT_MS, "A redação do carrossel excedeu o tempo limite");
   return safeJsonParse(response?.response ?? response?.result ?? response);
 }
 
@@ -673,8 +988,10 @@ function publicArticleRecord(article) {
 }
 
 export function intelligentCarouselCacheKey(runId, topic) {
-  const items = (topic?.items || []).map((item) => [item?.url, item?.title, item?.content, item?.description].filter(Boolean).join("|")).filter(Boolean).sort();
-  return `smart-v4-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${items.join("||")}`)}`;
+  const selected = singlePortalItem(topic);
+  const item = selected?.item;
+  const sourceFingerprint = [item?.url, item?.title, item?.publishedAt, item?.content, item?.description].filter(Boolean).join("|");
+  return `smart-v6-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${sourceFingerprint}`)}`;
 }
 
 export async function buildIntelligentCarousel(topic, {
@@ -684,43 +1001,109 @@ export async function buildIntelligentCarousel(topic, {
   liveReading = true,
   onProgress = null,
   articleTimeoutMs = ARTICLE_TOTAL_TIMEOUT_MS,
-  readingConcurrency = ARTICLE_READ_CONCURRENCY,
+  sourceStats = null,
+  readCache = null,
 } = {}) {
-  const requestedItems = distinctPortalItems(topic);
-  if (!requestedItems.length) throw new Error("Este assunto não possui conteúdo de portal armazenado na ronda.");
+  const selection = singlePortalItem(topic, sourceStats);
+  const selectedItem = selection?.item;
+  if (!selectedItem) throw new Error("Este assunto não possui conteúdo de portal armazenado na ronda.");
+  const selectedSourceName = selectedItem.sourceName || selectedItem.collectorName || "Fonte não informada";
 
-  await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Preparando a leitura de ${requestedItems.length} ${requestedItems.length === 1 ? "matéria" : "matérias"} em lotes seguros.`);
-  const collected = liveReading
-    ? await collectArticlesWithProgress(requestedItems, {
-        fetcher,
-        onProgress,
-        timeoutMs: articleTimeoutMs,
-        concurrency: readingConcurrency,
-      })
-    : requestedItems.map((item) => ({ ...collectedRecord(item), readMode: "feed-only", liveReadError: null })).filter((item) => item.content);
-  if (!collected.length) throw new Error("Não foi encontrado conteúdo suficiente para este assunto.");
+  await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Selecionando uma única matéria: ${compact(selectedSourceName, 70)}.`);
+  await reportProgress(onProgress, 18, "reading", `Abrindo a matéria escolhida em ${compact(selectedSourceName, 70)}.`);
+  let selectedRecord;
+  if (liveReading) {
+    const sameSourceFallback = {
+      ...collectedRecord(selectedItem),
+      readMode: "feed-timeout",
+      liveReadError: "Tempo limite da leitura direta; usado o conteúdo disponível no feed da mesma matéria",
+      error: "Tempo limite da leitura direta; usado o conteúdo disponível no feed da mesma matéria",
+      liveAttempted: true,
+      cacheHit: false,
+    };
+    try {
+      selectedRecord = await withTimeout(
+        articleRecordWithFallback(selectedItem, fetcher, { timeoutMs: articleTimeoutMs, readCache }),
+        Math.max(1_950, Number(articleTimeoutMs) || ARTICLE_TOTAL_TIMEOUT_MS) + 750,
+        "Tempo limite da matéria selecionada excedido",
+      );
+    } catch {
+      selectedRecord = sameSourceFallback;
+    }
+  } else {
+    selectedRecord = {
+      ...collectedRecord(selectedItem),
+      readMode: "feed-only",
+      liveReadError: null,
+      liveAttempted: false,
+      cacheHit: false,
+    };
+  }
+  selectedRecord.selection = {
+    score: selection.score,
+    hostname: selection.hostname,
+    candidatesEvaluated: selection.candidatesEvaluated,
+    reasons: selection.reasons,
+  };
+  const collected = selectedRecord?.content ? [selectedRecord] : [];
+  if (!collected.length) throw new Error("A matéria selecionada não possui conteúdo suficiente para gerar o roteiro.");
+  const readLabel = selectedRecord.readMode === "full-article"
+    ? "texto principal extraído"
+    : selectedRecord.readMode === "full-article-cache"
+      ? "texto principal recuperado do cache"
+      : "fallback do feed da mesma matéria aplicado";
+  await reportProgress(onProgress, READING_PROGRESS_END, "reading", `Matéria concluída: ${compact(selectedSourceName, 70)} — ${readLabel}.`);
 
   const quality = readingQuality(collected);
-  const socialItems = (topic?.items || []).filter((item) => item?.kind === "social");
+  if (!quality.generationAllowed) {
+    throw new Error("O conteúdo disponível possui apenas título ou informação insuficiente. O carrossel foi bloqueado para evitar inferências sem evidência.");
+  }
+  const socialItems = [];
   const fallback = fallbackAnalysis(topic, collected, socialItems);
-  await reportProgress(onProgress, 66, "analysis", "Estruturando os fatos e preparando os sete slides.");
+  await reportProgress(onProgress, 70, "analysis", "Extraindo fatos e evidências da matéria selecionada.");
 
-  let analysis = fallback;
+  let factAnalysis = {
+    questions: fallback.questions,
+    entities: fallback.entities,
+    facts: fallback.facts,
+  };
+  let slideSource = { slides: fallback.slides };
   let analysisMode = "fallback";
   let aiError = null;
   if (ai?.run) {
     try {
-      const generated = await runAiAnalysis(ai, model, topic, collected, socialItems, quality);
-      if (!generated) throw new Error("A IA não retornou JSON válido");
-      analysis = normalizeAnalysis(generated, fallback);
+      const generatedFacts = await runAiFactAnalysis(ai, model, topic, collected[0], quality);
+      if (!generatedFacts) throw new Error("A IA não retornou um mapa de fatos válido");
+      factAnalysis = normalizeFactAnalysis(generatedFacts, fallback, collected[0]);
+      await reportProgress(onProgress, 82, "analysis", "Redigindo sete slides somente com os fatos validados.");
+      const generatedSlides = await runAiCarouselGeneration(ai, model, topic, factAnalysis, quality);
+      if (!generatedSlides) throw new Error("A IA não retornou os sete slides em JSON válido");
+      slideSource = generatedSlides;
       analysisMode = "ai";
     } catch (error) {
       aiError = error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
-      analysis = normalizeAnalysis(fallback, fallback);
+      factAnalysis = {
+        questions: fallback.questions,
+        entities: fallback.entities,
+        facts: fallback.facts,
+      };
+      slideSource = { slides: fallback.slides };
     }
-  } else analysis = normalizeAnalysis(fallback, fallback);
+  }
+  const normalizedFallbackSlides = normalizeSlides({ slides: fallback.slides }, fallback, factAnalysis.facts);
+  const normalizedSlides = normalizeSlides(slideSource, fallback, factAnalysis.facts);
+  const validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
+  const editorialGate = {
+    status: quality.copyAllowed && validated.report.passed ? "ready" : "review-required",
+    copyAllowed: Boolean(quality.copyAllowed && validated.report.passed),
+    reason: quality.copyAllowed
+      ? validated.report.passed
+        ? "Conteúdo amplo e roteiro validado."
+        : "O roteiro precisa de revisão por inconsistências de validação."
+      : `A qualidade foi classificada como ${quality.label.toLocaleLowerCase("pt-BR")}; revise a matéria antes de copiar.`,
+  };
 
-  await reportProgress(onProgress, 90, "finalizing", "Revisando a estrutura e salvando o roteiro.");
+  await reportProgress(onProgress, 92, "finalizing", "Salvando o roteiro e encerrando o ciclo desta sugestão.");
   const verificationLinks = (topic?.items || []).filter((item) => /^https?:\/\//i.test(String(item?.url || ""))).map((item) => ({
     title: compact(item.title || "Notícia sem título", 180),
     sourceName: item.sourceName || item.collectorName || "Fonte não informada",
@@ -728,16 +1111,20 @@ export async function buildIntelligentCarousel(topic, {
     url: item.url,
   })).filter((item, index, list) => list.findIndex((other) => other.url === item.url) === index);
 
-  const liveSuccessful = collected.filter((item) => item.readMode === "full-article").length;
-  const fallbackSources = collected.filter((item) => item.readMode !== "full-article").length;
+  const liveSuccessful = collected.filter((item) => /^full-article/.test(item.readMode)).length;
+  const fallbackSources = collected.filter((item) => !/^full-article/.test(item.readMode)).length;
   const blockedSources = collected.filter((item) => item.liveReadError).length;
+  const alternativesAvailable = Math.max(0, (topic?.items || []).filter((item) => item?.kind !== "social" && /^https?:\/\//i.test(String(item?.url || "")) && item.url !== selectedRecord.url).length);
+  const alternativesNotice = alternativesAvailable
+    ? `${alternativesAvailable} ${alternativesAvailable === 1 ? "outra fonte disponível não foi lida" : "outras fontes disponíveis não foram lidas"}.`
+    : "Não havia outra fonte de portal disponível para leitura.";
   const disclaimer = liveSuccessful
-    ? `Foram extraídos textos principais de ${liveSuccessful} ${liveSuccessful === 1 ? "matéria" : "matérias"}. As demais fontes usaram o conteúdo disponível nos feeds. Confirme nomes, números, datas e contexto nos links originais antes de publicar.`
+    ? `Roteiro gerado exclusivamente a partir de uma matéria: ${selectedRecord.sourceName}. ${alternativesNotice} Confirme nomes, números, datas e contexto no link original antes de publicar.`
     : quality.code === "broad"
-      ? "Os portais bloquearam ou limitaram a leitura direta; o carrossel foi gerado com o conteúdo amplo armazenado pelos feeds. Confirme as informações nos links originais."
+      ? `A leitura direta da matéria selecionada em ${selectedRecord.sourceName} foi limitada; o roteiro usou somente o conteúdo amplo do feed dessa mesma matéria. Outras fontes não foram lidas.`
       : quality.code === "partial"
-        ? "Os portais bloquearam ou limitaram a leitura direta; o carrossel foi baseado em títulos, textos e resumos dos feeds. Revise os links originais antes de publicar."
-        : "Carrossel preliminar baseado em conteúdo limitado. Faça apuração manual antes de publicar.";
+        ? `A leitura direta da matéria selecionada em ${selectedRecord.sourceName} foi limitada; o roteiro usou somente o resumo ou texto do feed dessa mesma matéria. Outras fontes não foram lidas.`
+        : `Carrossel preliminar baseado somente no conteúdo limitado da matéria selecionada em ${selectedRecord.sourceName}. Faça apuração manual antes de publicar.`;
 
   return {
     language: "pt-BR",
@@ -747,11 +1134,26 @@ export async function buildIntelligentCarousel(topic, {
     aiError,
     voiceTone: "Jornalístico, factual e explicativo",
     postModel: "Instagram · 7 slides · título + subtítulo",
+    promptVersion: CAROUSEL_PROMPT_VERSION,
+    cycle: {
+      status: "completed",
+      terminal: true,
+      released: true,
+      releasedAt: new Date().toISOString(),
+      nextCycleAllowed: true,
+    },
     reading: {
-      basis: liveSuccessful ? "live-article-with-feed-fallback" : "feed-fallback",
-      requested: requestedItems.length,
+      basis: liveSuccessful ? "single-live-article-with-feed-fallback" : "single-feed-fallback",
+      strategy: "single-best-source",
+      cycleMode: "one-article-one-script",
+      cycleComplete: true,
+      cycleStatus: "released",
+      nextCycleAllowed: true,
+      requested: 1,
       successful: collected.length,
-      failed: Math.max(0, requestedItems.length - collected.length),
+      failed: collected.length ? 0 : 1,
+      selectedSource: publicArticleRecord(selectedRecord),
+      alternativesAvailable,
       liveSuccessful,
       fallbackSources,
       blockedSources,
@@ -762,11 +1164,17 @@ export async function buildIntelligentCarousel(topic, {
       contentSources: quality.contentSources,
       summarySources: quality.summarySources,
       titleOnlySources: quality.titleOnlySources,
+      paragraphCount: quality.paragraphCount,
+      uniqueTokenRatio: quality.uniqueTokenRatio,
+      titleMatch: quality.titleMatch,
       sources: collected.map(publicArticleRecord),
     },
-    questions: analysis.questions,
-    entities: analysis.entities,
-    slides: analysis.slides,
+    questions: factAnalysis.questions,
+    entities: factAnalysis.entities,
+    facts: factAnalysis.facts,
+    slides: validated.slides,
+    validation: validated.report,
+    editorialGate,
     verificationLinks,
     disclaimer,
     cacheKey: intelligentCarouselCacheKey("generated", topic),

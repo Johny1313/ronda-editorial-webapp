@@ -1,0 +1,32 @@
+RONDA EDITORIAL v2.1.2 — LEITURA MULTIFONTE ESTÁVEL
+
+CORREÇÕES
+- A leitura não permanece mais parada em 8% enquanto aguarda todas as matérias.
+- Cada fonte possui limite total de 10 segundos para leitura direta.
+- Portais lentos, bloqueados ou com resposta incompleta usam automaticamente o conteúdo do feed.
+- As matérias são lidas em lotes de até 3 conexões simultâneas para evitar saturação de subrequisições.
+- O progresso agora avança fonte por fonte entre 8% e 60%.
+- Uma matéria lenta não impede o processamento das outras.
+- O consumidor da Cloudflare Queue agora aguarda diretamente o processamento do lote.
+- O cache da leitura foi atualizado para smart-v4.
+
+FLUXO DE PROGRESSO
+8%   Preparação das fontes
+9–60% Leitura individual das matérias e fallback por fonte
+66%  Estruturação editorial
+90%  Revisão e persistência
+100% Roteiro concluído
+
+PUBLICAÇÃO
+- Substitua os arquivos na raiz do GitHub.
+- Não envie package-lock.json.
+- Aguarde o build automático da branch main.
+- Não é necessário alterar D1 ou recriar a Queue.
+
+VALIDAÇÃO
+/api/health deve informar:
+version: 2.1.2
+queueReady: true
+multiSourceProgress: true
+perSourceTimeoutSeconds: 10
+readingConcurrency: 3

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.1.2">
+  <link rel="stylesheet" href="/styles.css?v=2.4.0">
 </head>
 <body>
   <main class="app">
@@ -15,6 +15,8 @@
       <nav aria-label="Navegação principal">
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
+        <button class="nav" id="navCustomSources" type="button"><span class="nav-icon">S</span><span>Sites</span></button>
+        <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
         <button class="nav" id="navHistory" type="button"><span class="nav-icon">H</span><span>Histórico</span></button>
       </nav>
       <button class="nav settings" id="openSettings" type="button"><span class="nav-icon">·</span><span>Ajustes</span></button>
@@ -30,7 +32,7 @@
         </div>
       </header>
 
-      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> Fontes internacionais e carrosséis são exibidos sempre em português; o roteiro tenta ler o conteúdo principal das matérias e usa os feeds como contingência; o resultado fica armazenado por 48 horas.</div>
+      <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> A ronda e o monitoramento dedicado continuam no Cloudflare mesmo com esta janela fechada; resultados de termos aparecem somente na aba Termos.</div>
       <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
@@ -39,6 +41,39 @@
           <button class="secondary" id="showAllSources" type="button">Ver todas as notícias</button>
         </div>
         <div class="source-portal-grid" id="sourcePortalGrid"></div>
+      </section>
+
+      <section class="management-view" id="customSourcesView" hidden aria-labelledby="customSourcesTitle">
+        <div class="management-heading">
+          <div><p class="eyebrow">Configuração persistente</p><h2 id="customSourcesTitle">Sites cadastrados</h2><p>Adicione um site ou endereço RSS. O Worker tentará o feed informado e usará o Google Notícias por domínio quando necessário.</p></div>
+          <span id="customSourcesLimit">0/8 ativos</span>
+        </div>
+        <div class="background-note"><strong>Funciona com a janela fechada</strong><span>Os sites ativos são lidos pelo Cron do Cloudflare a cada cinco minutos e passam a integrar a aba Ronda.</span></div>
+        <form class="config-form config-form-sites" id="customSourceForm">
+          <label><span>Nome do site</span><input id="customSourceName" maxlength="80" required placeholder="Ex.: Jornal local"></label>
+          <label><span>URL do site ou RSS</span><input id="customSourceUrl" type="url" maxlength="500" required placeholder="https://exemplo.com/feed/"></label>
+          <label><span>Região</span><select id="customSourceRegion"><option value="Brasil">Brasil</option><option value="Mundo">Mundo</option></select></label>
+          <button class="primary" type="submit">Cadastrar site</button>
+        </form>
+        <p class="config-message" id="customSourceMessage"></p>
+        <div class="config-list" id="customSourcesList"><div class="loading-row">Carregando sites cadastrados…</div></div>
+      </section>
+
+      <section class="management-view" id="monitoringView" hidden aria-labelledby="monitoringTitle">
+        <div class="management-heading">
+          <div><p class="eyebrow">Acompanhamento exclusivo</p><h2 id="monitoringTitle">Monitoramento dedicado</h2><p>Cadastre nomes, marcas ou assuntos. Essas notícias ficam isoladas nesta aba e nunca entram na Ronda principal.</p></div>
+          <span id="monitoringTermsLimit">0/6 ativos</span>
+        </div>
+        <div class="background-note"><strong>Busca automática contínua</strong><span>Enquanto o termo estiver ativo, o Cron buscará novas notícias mesmo sem navegador aberto.</span></div>
+        <form class="config-form config-form-terms" id="monitoringTermForm">
+          <label><span>Termo para acompanhar</span><input id="monitoringTermInput" maxlength="80" required placeholder="Ex.: Vini Jr"></label>
+          <button class="primary" type="submit">Adicionar termo</button>
+        </form>
+        <p class="config-message" id="monitoringTermMessage"></p>
+        <div class="config-list compact-config-list" id="monitoringTermsList"><div class="loading-row">Carregando termos…</div></div>
+        <div class="dedicated-heading"><div><p class="eyebrow">Última ronda automática</p><h3>Notícias dos termos ativos</h3></div><span id="dedicatedMonitoringMeta">Nenhum resultado</span></div>
+        <div class="term-filters" id="monitoringTermFilters"></div>
+        <div class="dedicated-news-list" id="dedicatedNewsList"><div class="empty"><strong>Nenhum termo monitorado</strong><span>Cadastre um termo para iniciar a busca dedicada.</span></div></div>
       </section>
 
       <div class="round-view" id="roundView">
@@ -70,6 +105,12 @@
           <button data-editoria="Política" type="button">Política</button>
           <button data-editoria="Esportes" type="button">Esportes</button>
           <button data-editoria="Entretenimento" type="button">Entretenimento</button>
+          <button data-editoria="Fofoca e Celebridades" type="button">Fofoca e Celebridades</button>
+          <button data-editoria="Reality Shows" type="button">Reality Shows</button>
+          <button data-editoria="Curiosidades e Ciência Pop" type="button">Curiosidades e Ciência Pop</button>
+          <button data-editoria="Conteúdo Viral e Redes Sociais" type="button">Viral e Redes Sociais</button>
+          <button data-editoria="Luto e Obituário" type="button">Luto e Obituário</button>
+          <button data-editoria="Segurança e Justiça" type="button">Segurança e Justiça</button>
           <button data-editoria="Economia" type="button">Economia</button>
           <button data-editoria="Mundo" type="button">Mundo</button>
           <button data-editoria="Tecnologia" type="button">Tecnologia</button>
@@ -107,9 +148,10 @@
   <div class="modal-backdrop" id="carouselModal" hidden>
     <section class="modal modal-wide carousel-modal" role="dialog" aria-modal="true" aria-labelledby="carouselTitle">
       <div class="modal-head"><div><p class="eyebrow">Apoio editorial</p><h2 id="carouselTitle">Roteiro para carrossel</h2></div><button class="close-modal" data-close="carouselModal" type="button" aria-label="Fechar">×</button></div>
-      <div class="carousel-loading" id="carouselLoading" hidden><span class="reader-spinner">↻</span><div><strong>Abrindo as matérias…</strong><small>Extraindo o conteúdo principal e preparando o roteiro.</small></div></div>
+      <div class="carousel-loading" id="carouselLoading" hidden><span class="reader-spinner">↻</span><div><strong>Abrindo uma matéria…</strong><small>Selecionando uma fonte, extraindo o texto e encerrando o ciclo após o roteiro.</small></div></div>
       <div class="carousel-meta" id="carouselMeta"></div>
       <section class="carousel-reading" id="carouselReading" hidden aria-label="Resumo da leitura inteligente"></section>
+      <section class="carousel-evidence" id="carouselEvidence" hidden aria-label="Mapa de fatos e evidências"></section>
       <section class="carousel-analysis" id="carouselAnalysis" hidden aria-label="Interpretação da notícia"></section>
       <section class="carousel-entities" id="carouselEntities" hidden aria-label="Dados estruturados extraídos"></section>
       <div class="carousel-slides" id="carouselSlides"></div>
@@ -120,6 +162,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.1.2" defer></script>
+  <script src="/app.js?v=2.4.0" defer></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ test("bloqueia URLs locais e privadas", () => {
   assert.equal(validateArticleUrl("https://portal.test/materia"), "https://portal.test/materia");
 });
 
-test("lê as matérias, usa fallback do feed e gera sete slides com título e subtítulo", async () => {
+test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async () => {
   const topic = {
     id: "topic-mobilidade",
     title: "Congresso aprova plano de mobilidade urbana",
@@ -47,8 +47,11 @@ test("lê as matérias, usa fallback do feed e gera sete slides com título e su
     }
     throw new Error("portal bloqueou a leitura direta");
   };
+  const aiInputs = [];
   const ai = {
-    run: async () => ({ response: {
+    run: async (_model, input) => {
+      aiInputs.push(input);
+      return ({ response: {
       questions: {
         whatHappened: "O Congresso aprovou um plano nacional de mobilidade urbana.",
         who: "Congresso Nacional, governos locais e órgãos de controle.",
@@ -61,27 +64,48 @@ test("lê as matérias, usa fallback do feed e gera sete slides com título e su
         people: [], companies: ["Congresso Nacional"], places: ["Brasil"], dates: ["24 de julho de 2026"], themes: ["mobilidade urbana"], keywords: ["transporte", "investimentos"],
       },
       slides: Array.from({ length: 7 }, (_, index) => ({ number: index + 1, role: `Papel ${index + 1}`, title: `Título ${index + 1}`, subtitle: `Subtítulo factual do slide ${index + 1}.` })),
-    } }),
+    } });
+    },
   };
 
   const result = await buildIntelligentCarousel(topic, { ai, fetcher });
-  assert.equal(externalFetches, 2);
+  assert.equal(externalFetches, 1);
   assert.equal(result.analysisMode, "ai");
-  assert.equal(result.reading.basis, "live-article-with-feed-fallback");
-  assert.equal(result.reading.successful, 2);
+  assert.equal(result.reading.basis, "single-live-article-with-feed-fallback");
+  assert.equal(result.reading.successful, 1);
   assert.equal(result.reading.liveSuccessful, 1);
-  assert.equal(result.reading.fallbackSources, 1);
-  assert.equal(result.reading.blockedSources, 1);
+  assert.equal(result.reading.fallbackSources, 0);
+  assert.equal(result.reading.blockedSources, 0);
   assert.ok(result.reading.totalWords > 100);
   assert.equal(result.slides.length, 7);
   assert.ok(result.slides.every((slide) => slide.title && slide.subtitle && slide.body === slide.subtitle));
   assert.deepEqual(result.slides.map((slide) => slide.role), ["Título principal", "Contexto", "Informação principal", "Detalhamento", "Consequência", "Conclusão", "CTA"]);
   assert.equal(result.questions.where, "Brasil.");
+  assert.equal(result.reading.strategy, "single-best-source");
+  assert.equal(result.reading.cycleMode, "one-article-one-script");
+  assert.equal(result.reading.cycleComplete, true);
+  assert.equal(result.reading.nextCycleAllowed, true);
+  assert.equal(result.cycle.status, "completed");
+  assert.equal(result.cycle.released, true);
+  assert.equal(result.cycle.nextCycleAllowed, true);
+  assert.equal(result.reading.selectedSource.sourceName, "Portal A");
+  assert.ok(result.reading.selectedSource.selection.score > 0);
+  assert.equal(result.reading.alternativesAvailable, 1);
+  assert.equal(aiInputs.length, 2);
+  assert.match(aiInputs[0].messages[0].content, /exatamente UMA matéria/i);
+  assert.match(aiInputs[0].messages[1].content, /PORTAL SELECIONADO: Portal A/);
+  assert.match(aiInputs[1].messages[0].content, /UMA matéria/);
+  assert.doesNotMatch(aiInputs[0].messages[1].content, /Portal B detalha|Plano prevê investimentos/);
+  assert.ok(result.facts.length >= 1);
+  assert.ok(result.facts.every((fact) => fact.id && fact.claim && fact.evidence));
+  assert.equal(result.validation.passed, true);
+  assert.equal(result.editorialGate.copyAllowed, true);
+  assert.ok(result.slides.every((slide) => slide.title.length <= 68 && slide.subtitle.length <= 190));
   assert.equal(result.verificationLinks.length, 3);
   assert.ok(result.reading.sources.every((source) => !("content" in source)));
 });
 
-test("gera roteiro preliminar mesmo quando a ronda possui apenas títulos", async () => {
+test("bloqueia o carrossel quando a ronda possui apenas títulos", async () => {
   const topic = {
     id: "topic-limitado",
     title: "Assunto em desenvolvimento",
@@ -91,66 +115,107 @@ test("gera roteiro preliminar mesmo quando a ronda possui apenas títulos", asyn
       { id: "b", kind: "portal", title: "Nova informação é divulgada", sourceName: "Portal B", publishedAt: "2026-07-24T09:50:00Z", url: "https://portal-b.test/b" },
     ],
   };
-  const result = await buildIntelligentCarousel(topic, { fetcher: async () => { throw new Error("bloqueado"); } });
-  assert.equal(result.reading.quality, "limited");
-  assert.equal(result.reading.liveSuccessful, 0);
-  assert.equal(result.reading.fallbackSources, 2);
-  assert.equal(result.slides.length, 7);
-  assert.match(result.disclaimer, /preliminar/i);
+  await assert.rejects(
+    buildIntelligentCarousel(topic, { fetcher: async () => { throw new Error("bloqueado"); } }),
+    /apenas título|informação insuficiente/i,
+  );
 });
 
-test("avança o progresso por fonte e não trava quando um portal demora", async () => {
+test("lê somente uma fonte mesmo quando o assunto possui vários portais", async () => {
   const topic = {
     id: "topic-multifonte",
     title: "Assunto acompanhado por vários portais",
     editoria: "Notícias",
     items: [
-      { id: "a", kind: "portal", title: "Portal A publica a informação principal", description: "Informação principal confirmada pelo primeiro portal.", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/a" },
+      { id: "a", kind: "portal", title: "Portal A publica a informação principal", description: "Informação principal confirmada pelo primeiro portal.", content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/a" },
       { id: "b", kind: "portal", title: "Portal B detalha o assunto", description: "O segundo portal apresenta contexto e detalhes adicionais.", sourceName: "Portal B", publishedAt: "2026-07-24T09:59:00Z", url: "https://portal-b.test/b" },
       { id: "c", kind: "portal", title: "Portal C repercute a notícia", description: "O terceiro portal registra a repercussão do acontecimento.", sourceName: "Portal C", publishedAt: "2026-07-24T09:58:00Z", url: "https://portal-c.test/c" },
       { id: "d", kind: "portal", title: "Portal D acompanha os desdobramentos", description: "O quarto portal acompanha os próximos passos.", sourceName: "Portal D", publishedAt: "2026-07-24T09:57:00Z", url: "https://portal-d.test/d" },
     ],
   };
-  let active = 0;
-  let maxActive = 0;
-  const fetcher = async (url, options = {}) => {
-    active += 1;
-    maxActive = Math.max(maxActive, active);
-    try {
-      if (String(url).includes("portal-a.test")) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        return new Response(articleHtml("Portal A publica a informação principal"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
-      }
-      if (String(url).includes("portal-b.test")) throw new Error("bloqueado pelo portal");
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, 5_000);
-        options.signal?.addEventListener?.("abort", () => {
-          clearTimeout(timer);
-          reject(new Error("aborted"));
-        }, { once: true });
-      });
-      throw new Error("resposta lenta");
-    } finally {
-      active -= 1;
-    }
+  const fetchedUrls = [];
+  const fetcher = async (url) => {
+    fetchedUrls.push(String(url));
+    return new Response(articleHtml("Portal A publica a informação principal"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
   };
   const progress = [];
-  const startedAt = Date.now();
   const result = await buildIntelligentCarousel(topic, {
     fetcher,
     articleTimeoutMs: 80,
-    readingConcurrency: 2,
     onProgress: async (event) => progress.push(event),
   });
-  const elapsed = Date.now() - startedAt;
 
-  assert.ok(elapsed < 1_500, `processamento demorou ${elapsed}ms`);
-  assert.ok(maxActive <= 2);
-  assert.equal(result.reading.successful, 4);
+  assert.deepEqual(fetchedUrls, ["https://portal-a.test/a"]);
+  assert.equal(result.reading.requested, 1);
+  assert.equal(result.reading.successful, 1);
   assert.equal(result.reading.liveSuccessful, 1);
-  assert.equal(result.reading.fallbackSources, 3);
-  assert.ok(progress.some((event) => event.progress > 8 && event.progress <= 60));
-  assert.ok(progress.filter((event) => event.stage === "reading").length >= 5);
-  assert.match(progress.findLast((event) => event.stage === "reading")?.message || "", /Leitura 4 de 4/);
+  assert.equal(result.reading.fallbackSources, 0);
+  assert.equal(result.reading.selectedSource.sourceName, "Portal A");
+  assert.equal(result.reading.alternativesAvailable, 3);
+  assert.equal(result.reading.cycleComplete, true);
+  assert.ok(progress.some((event) => event.progress === 8));
+  assert.ok(progress.some((event) => event.progress === 18));
+  assert.ok(progress.some((event) => event.progress === 60));
+  assert.match(progress.findLast((event) => event.stage === "reading")?.message || "", /Matéria concluída: Portal A/);
   assert.equal(result.slides.length, 7);
+});
+
+test("usa o histórico de leitura para escolher a fonte mais confiável", async () => {
+  const topic = {
+    id: "topic-historico",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [
+      { id: "a", kind: "portal", title: "Plano de mobilidade urbana avança", content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/a" },
+      { id: "b", kind: "portal", title: "Plano de mobilidade urbana avança", content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content", sourceName: "Portal B", publishedAt: "2026-07-24T09:59:00Z", url: "https://portal-b.test/b" },
+    ],
+  };
+  const fetched = [];
+  const result = await buildIntelligentCarousel(topic, {
+    sourceStats: {
+      "portal-a.test": { attempts: 10, successes: 0 },
+      "portal-b.test": { attempts: 10, successes: 10 },
+    },
+    fetcher: async (url) => {
+      fetched.push(String(url));
+      return new Response(articleHtml("Plano de mobilidade urbana avança"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    },
+  });
+  assert.deepEqual(fetched, ["https://portal-b.test/b"]);
+  assert.equal(result.reading.selectedSource.sourceName, "Portal B");
+  assert.equal(result.reading.selectedSource.selection.reasons.historicalSuccessRate, 1);
+});
+
+test("reutiliza o texto extraído sem abrir novamente o portal", async () => {
+  const topic = {
+    id: "topic-cache",
+    title: "Plano de mobilidade urbana",
+    editoria: "Política",
+    items: [
+      { id: "a", kind: "portal", title: "Plano de mobilidade urbana", content: longParagraph, contentSource: "feed-content", sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/cache" },
+    ],
+  };
+  let cacheReads = 0;
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async () => { throw new Error("o portal não deveria ser aberto"); },
+    readCache: {
+      get: async () => {
+        cacheReads += 1;
+        return {
+          url: "https://portal-a.test/cache",
+          sourceName: "Portal A",
+          title: "Plano de mobilidade urbana",
+          publishedAt: "2026-07-24T10:00:00Z",
+          contentLevel: "article",
+          extractionMethod: "json-ld",
+          content: `${longParagraph} ${longParagraph}`,
+        };
+      },
+    },
+  });
+  assert.equal(cacheReads, 1);
+  assert.equal(result.reading.selectedSource.readMode, "full-article-cache");
+  assert.equal(result.reading.selectedSource.cacheHit, true);
+  assert.equal(result.reading.liveSuccessful, 1);
+  assert.equal(result.cycle.nextCycleAllowed, true);
 });

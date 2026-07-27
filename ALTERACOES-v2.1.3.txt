@@ -1,0 +1,17 @@
+RONDA EDITORIAL v2.1.3 — UMA MATÉRIA POR SUGESTÃO
+
+ALTERAÇÕES
+- Cada sugestão editorial lê somente uma matéria, mesmo quando o assunto aparece em G1, Metrópoles, InfoMoney ou outras fontes.
+- A seleção prioriza URL válida e o item com conteúdo de feed mais completo; em empate, escolhe a publicação mais recente.
+- Se a leitura direta falhar, o fallback usa somente o conteúdo do feed da mesma matéria.
+- Nenhuma segunda fonte é aberta durante o ciclo.
+- O prompt da IA proíbe combinar, comparar ou completar fatos com outros portais ou sinais sociais.
+- Depois dos sete slides, o job muda para succeeded, a mensagem informa que o ciclo foi encerrado e a Queue fica livre para a próxima sugestão.
+- Cache atualizado para smart-v5, evitando reaproveitar roteiros multifonte antigos.
+- Health check: articleLimit 1, readingStrategy single-best-source e cycleMode one-article-one-script.
+
+PUBLICAÇÃO
+1. Envie o conteúdo deste pacote para a raiz do GitHub.
+2. Não envie package-lock.json.
+3. Aguarde o build ficar verde.
+4. Confirme /api/health com version 2.1.3 e articleLimit 1.

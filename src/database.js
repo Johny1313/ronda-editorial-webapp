@@ -1,4 +1,6 @@
 const initializedBindings = new WeakSet();
+export const MAX_CUSTOM_SOURCES = 8;
+export const MAX_MONITORING_TERMS = 6;
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -60,6 +62,40 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_job_id ON intelligent_jobs(job_id)",
   "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_expires ON intelligent_jobs(expires_at)",
+  `CREATE TABLE IF NOT EXISTS article_read_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_article_read_cache_expires ON article_read_cache(expires_at)",
+  `CREATE TABLE IF NOT EXISTS article_source_stats (
+    hostname TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    successes INTEGER NOT NULL DEFAULT 0,
+    total_words INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_article_source_stats_updated ON article_source_stats(updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS custom_sources (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_url TEXT NOT NULL UNIQUE,
+    region TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_custom_sources_active_name ON custom_sources(active, name)",
+  `CREATE TABLE IF NOT EXISTS monitoring_terms (
+    id TEXT PRIMARY KEY,
+    term TEXT NOT NULL,
+    term_key TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_monitoring_terms_active_term ON monitoring_terms(active, term)",
 ];
 
 export async function ensureSchema(db) {
@@ -89,6 +125,132 @@ export async function acquireLock(db, name, ttlMs, nowMs = Date.now()) {
 export async function releaseLock(db, lock) {
   if (!db || !lock) return;
   await db.prepare("DELETE FROM locks WHERE name = ? AND token = ?").bind(lock.name, lock.token).run();
+}
+
+function customSourceRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    url: row.source_url,
+    region: row.region,
+    active: Number(row.active) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function monitoringTermRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    term: row.term,
+    active: Number(row.active) === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function monitoringTermKey(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+export async function listCustomSources(db, { activeOnly = false } = {}) {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(`SELECT * FROM custom_sources ${activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, name COLLATE NOCASE`)
+    .all();
+  return (result?.results || []).map(customSourceRow);
+}
+
+export async function createCustomSource(db, { name, url, region = "Brasil" } = {}) {
+  await ensureSchema(db);
+  const existing = await db.prepare("SELECT id FROM custom_sources WHERE source_url = ? LIMIT 1").bind(url).first();
+  if (existing) throw new Error("Este endereço já está cadastrado.");
+  const count = await db.prepare("SELECT COUNT(*) AS total FROM custom_sources WHERE active = 1").first();
+  if (Number(count?.total) >= MAX_CUSTOM_SOURCES) throw new Error(`O limite é de ${MAX_CUSTOM_SOURCES} sites ativos.`);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO custom_sources (id, name, source_url, region, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 1, ?, ?)
+  `).bind(id, name, url, region, now, now).run();
+  return customSourceRow(await db.prepare("SELECT * FROM custom_sources WHERE id = ?").bind(id).first());
+}
+
+export async function setCustomSourceActive(db, id, active) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM custom_sources WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  if (active && Number(current.active) !== 1) {
+    const count = await db.prepare("SELECT COUNT(*) AS total FROM custom_sources WHERE active = 1").first();
+    if (Number(count?.total) >= MAX_CUSTOM_SOURCES) throw new Error(`O limite é de ${MAX_CUSTOM_SOURCES} sites ativos.`);
+  }
+  const updatedAt = new Date().toISOString();
+  await db.prepare("UPDATE custom_sources SET active = ?, updated_at = ? WHERE id = ?")
+    .bind(active ? 1 : 0, updatedAt, id)
+    .run();
+  return customSourceRow(await db.prepare("SELECT * FROM custom_sources WHERE id = ?").bind(id).first());
+}
+
+export async function deleteCustomSource(db, id) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM custom_sources WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  await db.prepare("DELETE FROM custom_sources WHERE id = ?").bind(id).run();
+  return customSourceRow(current);
+}
+
+export async function listMonitoringTerms(db, { activeOnly = false } = {}) {
+  await ensureSchema(db);
+  const result = await db
+    .prepare(`SELECT * FROM monitoring_terms ${activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, term COLLATE NOCASE`)
+    .all();
+  return (result?.results || []).map(monitoringTermRow);
+}
+
+export async function createMonitoringTerm(db, term) {
+  await ensureSchema(db);
+  const termKey = monitoringTermKey(term);
+  const existing = await db.prepare("SELECT id FROM monitoring_terms WHERE term_key = ? LIMIT 1").bind(termKey).first();
+  if (existing) throw new Error("Este termo já está cadastrado.");
+  const count = await db.prepare("SELECT COUNT(*) AS total FROM monitoring_terms WHERE active = 1").first();
+  if (Number(count?.total) >= MAX_MONITORING_TERMS) throw new Error(`O limite é de ${MAX_MONITORING_TERMS} termos ativos.`);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO monitoring_terms (id, term, term_key, active, created_at, updated_at)
+    VALUES (?, ?, ?, 1, ?, ?)
+  `).bind(id, term, termKey, now, now).run();
+  return monitoringTermRow(await db.prepare("SELECT * FROM monitoring_terms WHERE id = ?").bind(id).first());
+}
+
+export async function setMonitoringTermActive(db, id, active) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM monitoring_terms WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  if (active && Number(current.active) !== 1) {
+    const count = await db.prepare("SELECT COUNT(*) AS total FROM monitoring_terms WHERE active = 1").first();
+    if (Number(count?.total) >= MAX_MONITORING_TERMS) throw new Error(`O limite é de ${MAX_MONITORING_TERMS} termos ativos.`);
+  }
+  const updatedAt = new Date().toISOString();
+  await db.prepare("UPDATE monitoring_terms SET active = ?, updated_at = ? WHERE id = ?")
+    .bind(active ? 1 : 0, updatedAt, id)
+    .run();
+  return monitoringTermRow(await db.prepare("SELECT * FROM monitoring_terms WHERE id = ?").bind(id).first());
+}
+
+export async function deleteMonitoringTerm(db, id) {
+  await ensureSchema(db);
+  const current = await db.prepare("SELECT * FROM monitoring_terms WHERE id = ? LIMIT 1").bind(id).first();
+  if (!current) return null;
+  await db.prepare("DELETE FROM monitoring_terms WHERE id = ?").bind(id).run();
+  return monitoringTermRow(current);
 }
 
 export async function startRun(db, { id, triggerType, startedAt }) {
@@ -179,6 +341,7 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(new Date().toISOString()),
     db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(new Date().toISOString()),
+    db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(new Date().toISOString()),
   ]);
   return { id, status, completedAt };
 }
@@ -290,6 +453,81 @@ export async function getRunPayload(db, id) {
   };
 }
 
+export async function getArticleReadCache(db, cacheKey) {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT payload_json, expires_at FROM article_read_cache WHERE cache_key = ? LIMIT 1")
+    .bind(cacheKey)
+    .first();
+  if (!row?.payload_json || Date.parse(row.expires_at) <= Date.now()) return null;
+  try {
+    const payload = JSON.parse(row.payload_json);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveArticleReadCache(db, cacheKey, payload, ttlHours = 12) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlHours) || 12) * 60 * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO article_read_cache (cache_key, payload_json, updated_at, expires_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at,
+      expires_at = excluded.expires_at
+  `).bind(cacheKey, JSON.stringify(payload), updatedAt, expiresAt).run();
+  return { updatedAt, expiresAt };
+}
+
+function hostnameFromUrl(value) {
+  try { return new URL(String(value || "")).hostname.toLocaleLowerCase("pt-BR").replace(/^www\./, ""); } catch { return ""; }
+}
+
+export async function getArticleSourceStats(db, urls = []) {
+  await ensureSchema(db);
+  const hostnames = [...new Set(urls.map(hostnameFromUrl).filter(Boolean))];
+  if (!hostnames.length) return {};
+  const output = {};
+  for (let offset = 0; offset < hostnames.length; offset += 80) {
+    const chunk = hostnames.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db
+      .prepare(`SELECT hostname, attempts, successes, total_words, updated_at FROM article_source_stats WHERE hostname IN (${placeholders})`)
+      .bind(...chunk)
+      .all();
+    for (const row of result?.results || []) {
+      output[row.hostname] = {
+        attempts: Number(row.attempts) || 0,
+        successes: Number(row.successes) || 0,
+        totalWords: Number(row.total_words) || 0,
+        updatedAt: row.updated_at,
+      };
+    }
+  }
+  return output;
+}
+
+export async function recordArticleSourceAttempt(db, { url, success, wordCount = 0 } = {}) {
+  await ensureSchema(db);
+  const hostname = hostnameFromUrl(url);
+  if (!hostname) return null;
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO article_source_stats (hostname, attempts, successes, total_words, updated_at)
+    VALUES (?, 1, ?, ?, ?)
+    ON CONFLICT(hostname) DO UPDATE SET
+      attempts = article_source_stats.attempts + 1,
+      successes = article_source_stats.successes + excluded.successes,
+      total_words = article_source_stats.total_words + excluded.total_words,
+      updated_at = excluded.updated_at
+  `).bind(hostname, success ? 1 : 0, Math.max(0, Number(wordCount) || 0), updatedAt).run();
+  return { hostname, updatedAt };
+}
+
 
 export async function getIntelligentCarousel(db, cacheKey) {
   await ensureSchema(db);
@@ -361,7 +599,14 @@ export async function getIntelligentJob(db, jobId) {
   return parseIntelligentJob(row);
 }
 
-export async function createIntelligentJob(db, { cacheKey, runId, topicId, staleMs = 10 * 60 * 1000, ttlMinutes = 120 } = {}) {
+export async function createIntelligentJob(db, {
+  cacheKey,
+  runId,
+  topicId,
+  staleMs = 10 * 60 * 1000,
+  ttlMinutes = 120,
+  replaceCompleted = false,
+} = {}) {
   await ensureSchema(db);
   const existingRow = await db
     .prepare("SELECT * FROM intelligent_jobs WHERE cache_key = ? LIMIT 1")
@@ -369,7 +614,10 @@ export async function createIntelligentJob(db, { cacheKey, runId, topicId, stale
     .first();
   const existing = parseIntelligentJob(existingRow);
   const existingAge = existing?.updatedAt ? Date.now() - Date.parse(existing.updatedAt) : Number.POSITIVE_INFINITY;
-  if (existing && ((["queued", "running"].includes(existing.status) && existingAge <= staleMs) || (existing.status === "succeeded" && existing.payload))) {
+  if (existing && (
+    (["queued", "running"].includes(existing.status) && existingAge <= staleMs)
+    || (!replaceCompleted && existing.status === "succeeded" && existing.payload)
+  )) {
     return { created: false, job: existing };
   }
 
