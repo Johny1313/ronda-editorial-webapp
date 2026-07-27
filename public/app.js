@@ -18,11 +18,12 @@ const state = {
   activeTopicId: null,
   carouselLoading: false,
   carouselRequestSerial: 0,
-  customSources: [],
-  customSourcesLimit: 8,
   monitoringTerms: [],
   monitoringTermsLimit: 6,
   monitoringTermFilter: "all",
+  statusEtag: "",
+  latestEtag: "",
+  serverRunning: false,
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -34,7 +35,6 @@ const statusLabel = document.getElementById("statusLabel");
 const statusSub = document.getElementById("statusSub");
 const roundView = document.getElementById("roundView");
 const sourcesView = document.getElementById("sourcesView");
-const customSourcesView = document.getElementById("customSourcesView");
 const monitoringView = document.getElementById("monitoringView");
 
 function escapeHtml(value) {
@@ -69,17 +69,29 @@ function setStatus(type, label, sub) {
   statusSub.textContent = sub;
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, { cache: "no-store", ...options });
-  const payload = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) {
+async function parseApiResponse(response) {
+  const payload = response.status === 204 || response.status === 304 ? null : await response.json().catch(() => null);
+  if (!response.ok && response.status !== 304) {
     const parts = [payload?.error, payload?.detail].filter((value, index, list) => value && list.indexOf(value) === index);
     const error = new Error(parts.join(" — ") || `Falha HTTP ${response.status}`);
     error.status = response.status;
     error.payload = payload;
     throw error;
   }
-  return payload;
+  return { payload, etag: response.headers.get("ETag") || "", notModified: response.status === 304 };
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { cache: "no-cache", ...options });
+  return (await parseApiResponse(response)).payload;
+}
+
+async function conditionalApi(path, etag = "") {
+  const response = await fetch(path, {
+    cache: "no-cache",
+    headers: etag ? { "If-None-Match": etag } : {},
+  });
+  return parseApiResponse(response);
 }
 
 function itemMatchesSource(item) {
@@ -108,11 +120,37 @@ function sourceRegion(source) {
 }
 
 function sourceRouteLabel(source, compact = false) {
-  if (source?.cached || source?.route === "cache") return compact ? "cache" : "cache recente";
-  if (source?.fallback || source?.route === "fallback") return compact ? "fb" : "fallback";
+  if (source?.route === "not-modified") return compact ? "304" : "sem alteração no feed";
+  if (source?.cached || source?.route === "cache") return compact ? "cache" : source?.deferred ? "cache programado" : "cache recente";
+  if (source?.fallback || source?.route === "fallback") return compact ? "alt" : "rota alternativa";
   if (source?.route === "no-new") return compact ? "sem novas" : "sem novas publicações";
   if (source?.ok && Number(source?.count) > 0) return compact ? "dir" : "coleta direta";
   return "";
+}
+
+function sourceFailureLabel(source, compact = false) {
+  const labels = {
+    blocked: compact ? "403" : "acesso bloqueado",
+    "rate-limited": compact ? "429" : "limite temporário",
+    timeout: compact ? "timeout" : "tempo limite excedido",
+    "not-found": compact ? "404" : "endereço não encontrado",
+    "invalid-feed": compact ? "feed" : "feed inválido",
+    "budget-exhausted": compact ? "limite" : "limite seguro atingido",
+    "upstream-error": compact ? `HTTP ${source?.httpStatus || "5xx"}` : "erro temporário do portal",
+  };
+  return labels[source?.errorCode] || (source?.httpStatus ? `HTTP ${source.httpStatus}` : compact ? "erro" : "erro de coleta");
+}
+
+function sourceDiagnosticTitle(source) {
+  const parts = [source.name];
+  parts.push(source.ok ? `Status: ${sourceRouteLabel(source) || "fonte acessível"}` : `Status: ${sourceFailureLabel(source)}`);
+  if (source.httpStatus) parts.push(`HTTP: ${source.httpStatus}`);
+  if (source.count) parts.push(`Conteúdos: ${source.count}`);
+  if (source.lastSuccessAt) parts.push(`Último sucesso: ${formatDate(source.lastSuccessAt)}`);
+  if (source.nextCheckAt) parts.push(`Próxima verificação: ${formatDate(source.nextCheckAt)}`);
+  if (source.responseMs != null) parts.push(`Resposta: ${source.responseMs} ms`);
+  if (source.warning || source.error) parts.push(`Detalhe: ${source.warning || source.error}`);
+  return parts.join(" | ");
 }
 
 function portalCardMarkup(source) {
@@ -121,9 +159,9 @@ function portalCardMarkup(source) {
   const route = sourceRouteLabel(source);
   const detail = available
     ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo recolhido" : "conteúdos recolhidos"}${route ? ` · ${route}` : ""}`
-    : source.ok ? `Nenhuma notícia recente${source.windowHours ? ` nas últimas ${source.windowHours} horas` : ""}` : "Fonte indisponível nesta ronda";
-  const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
-  return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : source.ok ? "Sem novas" : "Sem coleta"}</span></button>`;
+    : source.ok ? `Nenhuma notícia recente${source.nextCheckAt ? ` · próxima ${relativeTime(source.nextCheckAt)}` : ""}` : sourceFailureLabel(source);
+  const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}${source.degraded ? " degraded" : ""}` : `error ${escapeHtml(source.errorCode || "failed")}`;
+  return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" title="${escapeHtml(sourceDiagnosticTitle(source))}"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : source.ok ? "Sem novas" : escapeHtml(sourceFailureLabel(source, true))}</span></button>`;
 }
 
 function renderPortalCards() {
@@ -162,9 +200,9 @@ function renderSourceHealth(message = "", warning = false) {
       const available = source.ok && Number(source.count) > 0;
       const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
       const route = sourceRouteLabel(source);
-      const title = source.error || (available ? `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${route ? ` por ${route}` : ""}${source.warning ? `. Aviso: ${source.warning}` : ""}` : `Nenhum conteúdo recente de ${source.name}${source.windowHours ? ` nas últimas ${source.windowHours} horas` : ""}`);
-      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "sem novas" : "falhou";
-      const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
+      const title = sourceDiagnosticTitle(source);
+      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "sem novas" : sourceFailureLabel(source, true);
+      const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}${source.degraded ? " degraded" : ""}` : `error ${source.errorCode || "failed"}`;
       return `<button class="health-chip ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(title)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${escapeHtml(status)}</button>`;
     }).join("")}`;
   }).join("")}`;
@@ -190,14 +228,11 @@ function showView(view) {
   state.view = view;
   roundView.hidden = view !== "round";
   sourcesView.hidden = view !== "sources";
-  customSourcesView.hidden = view !== "custom-sources";
   monitoringView.hidden = view !== "monitoring";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
-  document.getElementById("navCustomSources").classList.toggle("active", view === "custom-sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
   if (view === "sources") renderPortalCards();
-  if (view === "custom-sources") loadCustomSources();
   if (view === "monitoring") {
     loadMonitoringTerms();
     renderDedicatedMonitoring();
@@ -212,70 +247,11 @@ function operationHeaders() {
 function handleConfigurationError(error, messageId) {
   document.getElementById(messageId).textContent = error.message;
   if (error.status === 401) {
-    document.getElementById("tokenMessage").textContent = "Informe a chave do Worker para alterar sites e termos.";
+    document.getElementById("tokenMessage").textContent = "Informe a chave do Worker para alterar os termos monitorados.";
     openModal("settingsModal");
   }
 }
 
-function renderCustomSources() {
-  const holder = document.getElementById("customSourcesList");
-  const active = state.customSources.filter((source) => source.active).length;
-  document.getElementById("customSourcesLimit").textContent = `${active}/${state.customSourcesLimit} ativos`;
-  if (!state.customSources.length) {
-    holder.innerHTML = '<div class="empty config-empty"><strong>Nenhum site cadastrado</strong><span>Cadastre um endereço para incluí-lo nas próximas rondas automáticas.</span></div>';
-    return;
-  }
-  holder.innerHTML = state.customSources.map((source) => `<article class="config-row ${source.active ? "" : "inactive"}"><div class="config-status">${source.active ? "Ativo" : "Pausado"}</div><div class="config-main"><strong>${escapeHtml(source.name)}</strong><a href="${escapeHtml(safeUrl(source.url))}" target="_blank" rel="noreferrer">${escapeHtml(source.url)}</a><small>${escapeHtml(source.region)} · ${source.active ? "entra nas próximas rondas" : "fora da coleta"}</small></div><div class="config-actions"><button class="secondary" data-custom-toggle="${escapeHtml(source.id)}" data-next-active="${source.active ? "false" : "true"}" type="button">${source.active ? "Pausar" : "Ativar"}</button><button class="danger-button" data-custom-delete="${escapeHtml(source.id)}" type="button">Remover</button></div></article>`).join("");
-}
-
-async function loadCustomSources() {
-  try {
-    const response = await api(`/api/custom-sources?t=${Date.now()}`);
-    state.customSources = Array.isArray(response?.sources) ? response.sources : [];
-    state.customSourcesLimit = Number(response?.limits?.maximumActive) || 8;
-    renderCustomSources();
-  } catch (error) {
-    document.getElementById("customSourcesList").innerHTML = `<div class="empty config-empty"><strong>Não foi possível carregar os sites</strong><span>${escapeHtml(error.message)}</span></div>`;
-  }
-}
-
-async function submitCustomSource(event) {
-  event.preventDefault();
-  const message = document.getElementById("customSourceMessage");
-  message.textContent = "Salvando…";
-  try {
-    await api("/api/custom-sources", {
-      method: "POST",
-      headers: operationHeaders(),
-      body: JSON.stringify({
-        name: document.getElementById("customSourceName").value,
-        url: document.getElementById("customSourceUrl").value,
-        region: document.getElementById("customSourceRegion").value,
-      }),
-    });
-    event.currentTarget.reset();
-    message.textContent = "Site cadastrado. Ele será incluído na próxima ronda automática.";
-    await loadCustomSources();
-  } catch (error) {
-    handleConfigurationError(error, "customSourceMessage");
-  }
-}
-
-async function changeCustomSource(id, options) {
-  const message = document.getElementById("customSourceMessage");
-  message.textContent = "Atualizando cadastro…";
-  try {
-    await api(`/api/custom-sources/${encodeURIComponent(id)}`, {
-      method: options.delete ? "DELETE" : "PATCH",
-      headers: operationHeaders(),
-      ...(options.delete ? {} : { body: JSON.stringify({ active: options.active }) }),
-    });
-    message.textContent = options.delete ? "Site removido." : options.active ? "Site ativado para as próximas rondas." : "Site pausado.";
-    await loadCustomSources();
-  } catch (error) {
-    handleConfigurationError(error, "customSourceMessage");
-  }
-}
 
 function renderMonitoringTerms() {
   const holder = document.getElementById("monitoringTermsList");
@@ -439,11 +415,13 @@ function applyRound(payload) {
   render();
 }
 
-async function loadLatest({ quiet = false } = {}) {
+async function loadLatest({ quiet = false, force = false } = {}) {
   try {
-    const response = await api(`/api/latest?t=${Date.now()}`);
-    const payload = response?.data;
-    if (payload?.ok && (!state.lastRunId || payload.runId !== state.lastRunId)) applyRound(payload);
+    const response = await conditionalApi("/api/latest", force ? "" : state.latestEtag);
+    if (response.notModified) return state.data;
+    state.latestEtag = response.etag;
+    const payload = response.payload?.data;
+    if (payload?.ok && (!state.lastRunId || payload.runId !== state.lastRunId || force)) applyRound(payload);
     return payload;
   } catch (error) {
     if (!quiet) renderSourceHealth(error.message);
@@ -475,7 +453,7 @@ async function waitForRun(runId) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await wait(attempt === 0 ? 1_000 : 2_500);
     try {
-      const payload = await api(`/api/runs/${encodeURIComponent(runId)}?t=${Date.now()}`);
+      const payload = await api(`/api/runs/${encodeURIComponent(runId)}`);
       const run = payload?.run;
       if (run?.status === "success") return run;
       if (run?.status === "failed") throw new Error(run.error || "A coleta não encontrou conteúdo válido.");
@@ -534,12 +512,13 @@ async function executeRound(automatic = false) {
     runButton.disabled = false;
     runButton.classList.remove("loading");
     runButton.innerHTML = "<span>↻</span>Executar ronda";
+    scheduleStatusPolling(500);
   }
 }
 
 async function checkHealth() {
   try {
-    const health = await api(`/api/health?t=${Date.now()}`);
+    const health = await api("/api/health");
     if (!health || typeof health !== "object" || !health.version) throw new Error("A versão publicada do Worker não é compatível com este painel.");
     state.health = health;
     const translationReady = health.translation?.ready !== false;
@@ -915,12 +894,54 @@ async function copyCarouselText() {
   }
 }
 
+let statusPollTimer = null;
+let statusPolling = false;
+
+function nextStatusPollDelay() {
+  if (state.running || state.serverRunning) return 3_000;
+  return document.hidden ? 5 * 60_000 : 60_000;
+}
+
+function scheduleStatusPolling(delay = null) {
+  clearTimeout(statusPollTimer);
+  statusPollTimer = setTimeout(() => pollStatus(), delay ?? nextStatusPollDelay());
+}
+
+async function pollStatus({ force = false } = {}) {
+  if (statusPolling) return;
+  statusPolling = true;
+  try {
+    const response = await conditionalApi("/api/status", force ? "" : state.statusEtag);
+    if (!response.notModified) {
+      state.statusEtag = response.etag;
+      const status = response.payload;
+      state.serverRunning = Boolean(status?.running);
+      if (status?.running) {
+        const started = status.activeRunStartedAt ? relativeTime(status.activeRunStartedAt) : "agora";
+        setStatus("", "Ronda em andamento", `Processamento seguro na fila · iniciado ${started}`);
+      } else if (status?.lastRunId && status.lastRunId !== state.lastRunId) {
+        await loadLatest({ quiet: true });
+        const completedAt = status.lastSuccessAt || state.data?.collectedAt;
+        if (completedAt) setStatus("ok", "Serviço online", `Última ronda ${relativeTime(completedAt)}`);
+      } else if (status?.schedulerHealthy && state.health?.translation?.ready !== false) {
+        setStatus("ok", "Serviço online", status.lastSuccessAt ? `Última ronda ${relativeTime(status.lastSuccessAt)}` : "Aguardando primeira ronda");
+      }
+    }
+  } catch (error) {
+    if (!state.running) setStatus("warn", "Atualização temporariamente indisponível", error.message);
+  } finally {
+    statusPolling = false;
+    scheduleStatusPolling();
+  }
+}
+
 async function startApplication() {
   render();
   document.getElementById("operationToken").value = operationToken();
   const healthy = await checkHealth();
   if (!healthy) return;
-  const latest = await loadLatest();
+  await pollStatus({ force: true });
+  const latest = state.data || await loadLatest();
   if (!latest && (!state.health.manualAuthRequired || operationToken())) executeRound(true);
 }
 
@@ -968,13 +989,6 @@ document.getElementById("carouselLoading").addEventListener("click", (event) => 
   const button = event.target.closest("[data-retry-carousel]");
   if (button && state.activeTopicId) showCarousel(state.activeTopicId, { force: true });
 });
-document.getElementById("customSourceForm").addEventListener("submit", submitCustomSource);
-document.getElementById("customSourcesList").addEventListener("click", (event) => {
-  const toggle = event.target.closest("[data-custom-toggle]");
-  const remove = event.target.closest("[data-custom-delete]");
-  if (toggle) changeCustomSource(toggle.dataset.customToggle, { active: toggle.dataset.nextActive === "true" });
-  if (remove) changeCustomSource(remove.dataset.customDelete, { delete: true });
-});
 document.getElementById("monitoringTermForm").addEventListener("submit", submitMonitoringTerm);
 document.getElementById("monitoringTermsList").addEventListener("click", (event) => {
   const toggle = event.target.closest("[data-term-toggle]");
@@ -1001,7 +1015,6 @@ document.getElementById("historyBack").addEventListener("click", () => {
   document.getElementById("historyBack").hidden = true;
 });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
-document.getElementById("navCustomSources").addEventListener("click", () => { showView("custom-sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navRound").addEventListener("click", () => { showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));
@@ -1022,10 +1035,7 @@ document.querySelectorAll("[data-close]").forEach((button) => button.addEventLis
 document.querySelectorAll(".modal-backdrop").forEach((backdrop) => backdrop.addEventListener("click", (event) => { if (event.target === backdrop) closeModal(backdrop.id); }));
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelectorAll(".modal-backdrop:not([hidden])").forEach((modal) => closeModal(modal.id)); });
 
-setInterval(async () => {
-  if (state.running || !state.health) return;
-  await checkHealth();
-  await loadLatest({ quiet: true });
-}, 30_000);
+document.addEventListener("visibilitychange", () => scheduleStatusPolling(250));
+window.addEventListener("online", () => scheduleStatusPolling(250));
 
 startApplication();

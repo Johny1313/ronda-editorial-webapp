@@ -1,21 +1,16 @@
 {
   "name": "ronda-editorial-cloudflare",
-  "version": "2.4.3",
+  "version": "2.5.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "build:ui": "node scripts/build-ui.mjs",
-    "build": "npm run build:ui && node scripts/simple-bundle.mjs",
-    "test": "npm run build:ui && node --test test/*.test.js",
-    "smoke": "npm run build && node scripts/smoke-worker.mjs",
-    "dev": "npm run build:ui && wrangler dev --local",
-    "deploy": "npm run build:ui && wrangler deploy",
-    "check": "npm test && npm run smoke"
-  },
-  "devDependencies": {
-    "esbuild": "0.28.1",
-    "miniflare": "4.20260721.0",
-    "wrangler": "4.113.0"
+    "build": "node scripts/validate-release.mjs",
+    "test": "node --test test/*.test.js",
+    "check": "npm test && npm run build",
+    "dev": "npx --yes wrangler@4.113.0 dev --local",
+    "deploy": "npm run check && npx --yes wrangler@4.113.0 deploy",
+    "deploy:preview": "npm run check && npx --yes wrangler@4.113.0 versions upload",
+    "deploy:dry": "npm run check && npx --yes wrangler@4.113.0 deploy --dry-run --outdir .wrangler/dry-run"
   },
   "engines": {
     "node": ">=20"

@@ -1,6 +1,6 @@
 const initializedBindings = new WeakSet();
-export const MAX_CUSTOM_SOURCES = 8;
 export const MAX_MONITORING_TERMS = 6;
+export const DATABASE_SCHEMA_VERSION = "2.5.1";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -44,7 +44,6 @@ const SCHEMA_STATEMENTS = [
     updated_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_run_topic ON intelligent_carousels(run_id, topic_id)",
   "CREATE INDEX IF NOT EXISTS idx_intelligent_carousels_expires ON intelligent_carousels(expires_at)",
   `CREATE TABLE IF NOT EXISTS intelligent_jobs (
     cache_key TEXT PRIMARY KEY,
@@ -60,7 +59,6 @@ const SCHEMA_STATEMENTS = [
     updated_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_job_id ON intelligent_jobs(job_id)",
   "CREATE INDEX IF NOT EXISTS idx_intelligent_jobs_expires ON intelligent_jobs(expires_at)",
   `CREATE TABLE IF NOT EXISTS article_read_cache (
     cache_key TEXT PRIMARY KEY,
@@ -76,17 +74,6 @@ const SCHEMA_STATEMENTS = [
     total_words INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_article_source_stats_updated ON article_source_stats(updated_at DESC)",
-  `CREATE TABLE IF NOT EXISTS custom_sources (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    source_url TEXT NOT NULL UNIQUE,
-    region TEXT NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`,
-  "CREATE INDEX IF NOT EXISTS idx_custom_sources_active_name ON custom_sources(active, name)",
   `CREATE TABLE IF NOT EXISTS monitoring_terms (
     id TEXT PRIMARY KEY,
     term TEXT NOT NULL,
@@ -96,12 +83,56 @@ const SCHEMA_STATEMENTS = [
     updated_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS idx_monitoring_terms_active_term ON monitoring_terms(active, term)",
+  `CREATE TABLE IF NOT EXISTS source_state (
+    source_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    region TEXT NOT NULL,
+    status TEXT NOT NULL,
+    route TEXT NOT NULL,
+    http_status INTEGER,
+    error_code TEXT,
+    error_detail TEXT,
+    items_json TEXT NOT NULL DEFAULT '[]',
+    item_count INTEGER NOT NULL DEFAULT 0,
+    last_url TEXT,
+    validators_json TEXT NOT NULL DEFAULT '{}',
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    next_check_at TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    response_ms INTEGER,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
+  "CREATE INDEX IF NOT EXISTS idx_source_state_status ON source_state(status, updated_at DESC)",
+  `DELETE FROM source_state WHERE source_id IN (
+    'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
+    'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
+    'segredos-do-mundo', 'awebic', 'hypeness'
+  )`,
 ];
+
+async function currentSchemaVersion(db) {
+  try {
+    const row = await db.prepare("SELECT value FROM app_state WHERE key = 'schema_version' LIMIT 1").first();
+    return String(row?.value || "");
+  } catch {
+    return "";
+  }
+}
 
 export async function ensureSchema(db) {
   if (!db) throw new Error("Binding D1 'DB' não configurado.");
   if (initializedBindings.has(db)) return;
-  for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
+  const version = await currentSchemaVersion(db);
+  if (version !== DATABASE_SCHEMA_VERSION) {
+    for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
+    const now = new Date().toISOString();
+    await db.prepare(`
+      INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(DATABASE_SCHEMA_VERSION, now).run();
+  }
   initializedBindings.add(db);
 }
 
@@ -122,23 +153,23 @@ export async function acquireLock(db, name, ttlMs, nowMs = Date.now()) {
   return row?.token === token ? { name, token, expiresAt } : null;
 }
 
+export async function renewLock(db, lock, ttlMs, nowMs = Date.now()) {
+  if (!db || !lock) return null;
+  const expiresAt = nowMs + Math.max(1_000, Number(ttlMs) || 1_000);
+  await db.prepare("UPDATE locks SET expires_at = ? WHERE name = ? AND token = ?")
+    .bind(expiresAt, lock.name, lock.token)
+    .run();
+  const row = await db.prepare("SELECT token, expires_at FROM locks WHERE name = ? LIMIT 1").bind(lock.name).first();
+  if (row?.token !== lock.token) return null;
+  lock.expiresAt = Number(row.expires_at) || expiresAt;
+  return lock;
+}
+
 export async function releaseLock(db, lock) {
   if (!db || !lock) return;
   await db.prepare("DELETE FROM locks WHERE name = ? AND token = ?").bind(lock.name, lock.token).run();
 }
 
-function customSourceRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    name: row.name,
-    url: row.source_url,
-    region: row.region,
-    active: Number(row.active) === 1,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
 
 function monitoringTermRow(row) {
   if (!row) return null;
@@ -160,51 +191,6 @@ function monitoringTermKey(value) {
     .replace(/\s+/g, " ");
 }
 
-export async function listCustomSources(db, { activeOnly = false } = {}) {
-  await ensureSchema(db);
-  const result = await db
-    .prepare(`SELECT * FROM custom_sources ${activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, name COLLATE NOCASE`)
-    .all();
-  return (result?.results || []).map(customSourceRow);
-}
-
-export async function createCustomSource(db, { name, url, region = "Brasil" } = {}) {
-  await ensureSchema(db);
-  const existing = await db.prepare("SELECT id FROM custom_sources WHERE source_url = ? LIMIT 1").bind(url).first();
-  if (existing) throw new Error("Este endereço já está cadastrado.");
-  const count = await db.prepare("SELECT COUNT(*) AS total FROM custom_sources WHERE active = 1").first();
-  if (Number(count?.total) >= MAX_CUSTOM_SOURCES) throw new Error(`O limite é de ${MAX_CUSTOM_SOURCES} sites ativos.`);
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO custom_sources (id, name, source_url, region, active, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 1, ?, ?)
-  `).bind(id, name, url, region, now, now).run();
-  return customSourceRow(await db.prepare("SELECT * FROM custom_sources WHERE id = ?").bind(id).first());
-}
-
-export async function setCustomSourceActive(db, id, active) {
-  await ensureSchema(db);
-  const current = await db.prepare("SELECT * FROM custom_sources WHERE id = ? LIMIT 1").bind(id).first();
-  if (!current) return null;
-  if (active && Number(current.active) !== 1) {
-    const count = await db.prepare("SELECT COUNT(*) AS total FROM custom_sources WHERE active = 1").first();
-    if (Number(count?.total) >= MAX_CUSTOM_SOURCES) throw new Error(`O limite é de ${MAX_CUSTOM_SOURCES} sites ativos.`);
-  }
-  const updatedAt = new Date().toISOString();
-  await db.prepare("UPDATE custom_sources SET active = ?, updated_at = ? WHERE id = ?")
-    .bind(active ? 1 : 0, updatedAt, id)
-    .run();
-  return customSourceRow(await db.prepare("SELECT * FROM custom_sources WHERE id = ?").bind(id).first());
-}
-
-export async function deleteCustomSource(db, id) {
-  await ensureSchema(db);
-  const current = await db.prepare("SELECT * FROM custom_sources WHERE id = ? LIMIT 1").bind(id).first();
-  if (!current) return null;
-  await db.prepare("DELETE FROM custom_sources WHERE id = ?").bind(id).run();
-  return customSourceRow(current);
-}
 
 export async function listMonitoringTerms(db, { activeOnly = false } = {}) {
   await ensureSchema(db);
@@ -285,18 +271,6 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   const totals = safePayload.totals ?? {};
   const status = safePayload.ok ? "success" : "failed";
   const payloadJson = JSON.stringify(safePayload);
-  const retentionCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-  const translationCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const latestSummary = JSON.stringify({
-    id,
-    triggerType,
-    status,
-    completedAt,
-    items: Number(totals.items) || 0,
-    topics: Number(totals.topics) || 0,
-    sources: Number(totals.sources) || 0,
-  });
-
   await db.batch([
     db
       .prepare(`
@@ -330,18 +304,6 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
         safePayload.error || null,
         payloadJson,
       ),
-    db
-      .prepare(`
-        INSERT INTO app_state (key, value, updated_at) VALUES ('latest_run', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-      `)
-      .bind(latestSummary, completedAt),
-    db.prepare("DELETE FROM runs WHERE completed_at < ?").bind(retentionCutoff),
-    db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(Date.now() - 5 * 60 * 1000),
-    db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
-    db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(new Date().toISOString()),
-    db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(new Date().toISOString()),
-    db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(new Date().toISOString()),
   ]);
   return { id, status, completedAt };
 }
@@ -689,6 +651,187 @@ export async function updateIntelligentJob(db, {
     jobId,
   ).run();
   return getIntelligentJob(db, jobId);
+}
+
+
+function parseJsonObject(value, fallback) {
+  try {
+    const parsed = JSON.parse(value || "");
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sourceStateRow(row) {
+  if (!row) return null;
+  return {
+    sourceId: row.source_id,
+    name: row.name,
+    region: row.region,
+    status: row.status,
+    route: row.route,
+    httpStatus: row.http_status == null ? null : Number(row.http_status),
+    errorCode: row.error_code || null,
+    errorDetail: row.error_detail || null,
+    items: Array.isArray(parseJsonObject(row.items_json, [])) ? parseJsonObject(row.items_json, []) : [],
+    itemCount: Number(row.item_count) || 0,
+    lastUrl: row.last_url || null,
+    validators: parseJsonObject(row.validators_json, {}),
+    lastAttemptAt: row.last_attempt_at || null,
+    lastSuccessAt: row.last_success_at || null,
+    nextCheckAt: row.next_check_at || null,
+    failureCount: Number(row.failure_count) || 0,
+    responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getSourceStates(db, sourceIds = []) {
+  await ensureSchema(db);
+  const ids = [...new Set(sourceIds.map((value) => String(value || "").trim()).filter(Boolean))];
+  const output = new Map();
+  for (let offset = 0; offset < ids.length; offset += 80) {
+    const chunk = ids.slice(offset, offset + 80);
+    const placeholders = chunk.map(() => "?").join(",");
+    const result = await db.prepare(`SELECT * FROM source_state WHERE source_id IN (${placeholders})`).bind(...chunk).all();
+    for (const row of result?.results || []) {
+      const parsed = sourceStateRow(row);
+      if (parsed) output.set(parsed.sourceId, parsed);
+    }
+  }
+  return output;
+}
+
+export async function saveSourceStates(db, entries = []) {
+  await ensureSchema(db);
+  const valid = entries.filter((entry) => entry?.sourceId && entry?.name);
+  if (!valid.length) return 0;
+  for (let offset = 0; offset < valid.length; offset += 40) {
+    const chunk = valid.slice(offset, offset + 40);
+    await db.batch(chunk.map((entry) => db.prepare(`
+      INSERT INTO source_state (
+        source_id, name, region, status, route, http_status, error_code, error_detail,
+        items_json, item_count, last_url, validators_json, last_attempt_at, last_success_at,
+        next_check_at, failure_count, response_ms, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id) DO UPDATE SET
+        name = excluded.name,
+        region = excluded.region,
+        status = excluded.status,
+        route = excluded.route,
+        http_status = excluded.http_status,
+        error_code = excluded.error_code,
+        error_detail = excluded.error_detail,
+        items_json = excluded.items_json,
+        item_count = excluded.item_count,
+        last_url = excluded.last_url,
+        validators_json = excluded.validators_json,
+        last_attempt_at = excluded.last_attempt_at,
+        last_success_at = excluded.last_success_at,
+        next_check_at = excluded.next_check_at,
+        failure_count = excluded.failure_count,
+        response_ms = excluded.response_ms,
+        updated_at = excluded.updated_at
+    `).bind(
+      entry.sourceId,
+      entry.name,
+      entry.region || "Brasil",
+      entry.status || "unknown",
+      entry.route || "unknown",
+      entry.httpStatus ?? null,
+      entry.errorCode || null,
+      entry.errorDetail ? String(entry.errorDetail).slice(0, 300) : null,
+      JSON.stringify(Array.isArray(entry.items) ? entry.items : []),
+      Number(entry.itemCount) || 0,
+      entry.lastUrl || null,
+      JSON.stringify(entry.validators && typeof entry.validators === "object" ? entry.validators : {}),
+      entry.lastAttemptAt || null,
+      entry.lastSuccessAt || null,
+      entry.nextCheckAt || null,
+      Number(entry.failureCount) || 0,
+      entry.responseMs == null ? null : Math.max(0, Number(entry.responseMs) || 0),
+      entry.updatedAt || new Date().toISOString(),
+    )));
+  }
+  return valid.length;
+}
+
+export async function listSourceDiagnostics(db) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT source_id, name, region, status, route, http_status, error_code, error_detail,
+           item_count, last_attempt_at, last_success_at, next_check_at, failure_count,
+           response_ms, updated_at
+    FROM source_state
+    ORDER BY region, name COLLATE NOCASE
+  `).all();
+  return (result?.results || []).map((row) => ({
+    sourceId: row.source_id,
+    name: row.name,
+    region: row.region,
+    status: row.status,
+    route: row.route,
+    httpStatus: row.http_status == null ? null : Number(row.http_status),
+    errorCode: row.error_code || null,
+    errorDetail: row.error_detail || null,
+    itemCount: Number(row.item_count) || 0,
+    lastAttemptAt: row.last_attempt_at || null,
+    lastSuccessAt: row.last_success_at || null,
+    nextCheckAt: row.next_check_at || null,
+    failureCount: Number(row.failure_count) || 0,
+    responseMs: row.response_ms == null ? null : Number(row.response_ms),
+    updatedAt: row.updated_at,
+  }));
+}
+
+export async function getLatestRunSummary(db, { successOnly = false } = {}) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT id, trigger_type, status, started_at, completed_at,
+           items_count, topics_count, sources_count, social_items_count, error
+    FROM runs
+    ${successOnly ? "WHERE status = 'success'" : ""}
+    ORDER BY completed_at DESC
+    LIMIT 1
+  `).first();
+  if (!row) return null;
+  return {
+    id: row.id,
+    triggerType: row.trigger_type,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    items: Number(row.items_count) || 0,
+    topics: Number(row.topics_count) || 0,
+    sources: Number(row.sources_count) || 0,
+    socialItems: Number(row.social_items_count) || 0,
+    error: row.error || null,
+  };
+}
+
+export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
+  await ensureSchema(db);
+  const nowMs = Date.now();
+  const row = await db.prepare("SELECT value FROM app_state WHERE key = 'last_maintenance_at' LIMIT 1").first();
+  const lastMs = Date.parse(row?.value || "");
+  if (Number.isFinite(lastMs) && nowMs - lastMs < Math.max(1, Number(intervalHours) || 12) * 60 * 60 * 1000) return false;
+  const now = new Date(nowMs).toISOString();
+  const retentionCutoff = new Date(nowMs - 48 * 60 * 60 * 1000).toISOString();
+  const translationCutoff = new Date(nowMs - 30 * 24 * 60 * 60 * 1000).toISOString();
+  await db.batch([
+    db.prepare("DELETE FROM runs WHERE completed_at < ?").bind(retentionCutoff),
+    db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
+    db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
+    db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
+    db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
+    db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
+    db.prepare(`
+      INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).bind(now, now),
+  ]);
+  return true;
 }
 
 export async function databaseHealth(db) {

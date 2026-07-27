@@ -1,70 +1,122 @@
-RONDA EDITORIAL v2.4.3 — ATUALIZAÇÃO PELO GITHUB
-=================================================
+RONDA EDITORIAL v2.5.1 — PUBLICAÇÃO PELO GITHUB
+================================================
 
-Esta versão corrige a interrupção após 30–45 segundos usando Cloudflare Queues.
-O computador não precisa permanecer ligado e não é necessário instalar Node.js.
+OBJETIVO
+--------
+Usar uma branch de validação, receber uma URL de preview e somente depois
+promover a atualização para a branch main.
 
-ETAPA 1 — CRIAR A FILA UMA ÚNICA VEZ
-------------------------------------
+1. LIMPAR O REPOSITÓRIO
+-----------------------
+Substitua o conteúdo antigo pelo conteúdo completo deste pacote.
 
-1. No Cloudflare, abra Storage & Databases > Queues.
-2. Clique em Create queue.
-3. Use exatamente este nome:
+Arquivos antigos ALTERACOES-v*.txt, a pasta dist e os antigos scripts de bundle
+não devem permanecer. O histórico agora está consolidado em CHANGELOG.md.
 
-   ronda-editorial-intelligent-jobs
+2. CRIAR UMA BRANCH DE TESTE
+----------------------------
+No GitHub, crie uma branch, por exemplo:
 
-4. Confirme a criação.
+  ajuste-v2.5.1
 
-ETAPA 2 — ATUALIZAR O REPOSITÓRIO
----------------------------------
+Envie os arquivos para essa branch. Não envie diretamente para main na primeira
+tentativa.
 
-5. Extraia este ZIP.
-6. No GitHub, abra Johny1313/ronda-editorial-webapp.
-7. Substitua os arquivos e pastas atuais pelo conteúdo desta versão.
-8. O arquivo package-lock.json deve permanecer ausente.
-9. Confirme o commit diretamente na branch main.
+3. CONFIGURAR WORKERS BUILDS
+----------------------------
+Cloudflare > Worker > Settings > Builds:
 
-ETAPA 3 — CONFIGURAÇÃO DO BUILD
--------------------------------
+  Production branch: main
+  Build command: npm ci && npm run check
+  Deploy command: npx --yes wrangler@4.113.0 deploy
+  Non-production deploy command:
+    npx --yes wrangler@4.113.0 versions upload
+  Root directory: /
 
-No Worker > Settings > Build, mantenha:
+A branch ajuste-v2.5.1 deve gerar uma versão de preview sem substituir a versão
+ativa em produção.
 
-   Build command: npm run build
-   Deploy command: npx wrangler deploy
-   Version command: npx wrangler versions upload
-   Root directory: /
+4. RECURSOS CLOUDFLARE
+----------------------
+O wrangler.jsonc declara:
 
-O commit na main inicia o build automaticamente.
+  DB                         banco D1
+  AI                         Workers AI
+  INTELLIGENT_JOBS_QUEUE     leitura inteligente
+  ROUND_JOBS_QUEUE           rondas manuais e automáticas
 
-ETAPA 4 — O QUE O WRANGLER CONFIGURA
-------------------------------------
+Filas configuradas:
 
-O wrangler.jsonc contém:
+  ronda-editorial-intelligent-jobs
+  ronda-editorial-intelligent-jobs-dlq
+  ronda-editorial-round-jobs
+  ronda-editorial-round-jobs-dlq
 
-- Worker: ronda-editorial-webapp
-- D1 no binding DB
-- Workers AI no binding AI
-- Produtor da fila no binding INTELLIGENT_JOBS_QUEUE
-- Consumidor da fila ronda-editorial-intelligent-jobs
-- Uma tarefa por lote, início em até um segundo e até três tentativas
-- Ronda automática a cada cinco minutos
-- Observabilidade ativada
+O Wrangler 4.113.0 pode provisionar recursos ausentes no deploy. Em um projeto
+já existente, confirme no painel que o binding DB continua apontando para o D1
+que contém o histórico atual antes de promover o preview.
 
-ETAPA 5 — VALIDAR
------------------
+5. VALIDAR O PREVIEW
+--------------------
+Na URL fornecida pelo Cloudflare, abra:
 
-Abra:
-
-https://ronda-editorial-webapp.johnymoraes13.workers.dev/api/health
+  /api/self-test
+  /api/health
+  /api/status
+  /api/sources/diagnostics
 
 Confirme:
 
-   "version": "2.4.3"
-   "queueReady": true
-   "executionMode": "cloudflare-queue"
+  versão 2.5.1
+  ready: true
+  roundQueueReady: true
+  intelligentQueueReady: true
+  maxExternalConcurrency: 5
+  sourceCacheHours: 72
 
-Depois atualize a página com Ctrl + F5 e faça uma nova leitura inteligente.
+Depois, abra o painel e valide o layout, os filtros, os chips e a leitura dos
+dados já existentes. Uma versão de preview do mesmo Worker pode usar os mesmos
+bindings de produção. Evite clicar em Executar ronda ou gerar uma nova leitura
+inteligente no preview, a menos que você tenha configurado D1 e Queues separados
+para staging.
 
-Não é necessário executar novamente o schema.sql se a tabela intelligent_jobs
-já existe. As tarefas antigas com status failed podem permanecer no banco; elas
-não impedem novas leituras.
+Após o merge em main, faça o teste funcional completo:
+
+1. Clique em Executar ronda.
+2. Confirme que o pedido retorna rapidamente e fica com status running.
+3. Aguarde a conclusão pela própria interface.
+4. Abra uma leitura inteligente e valide os sete slides em português.
+5. Confira se os chips diferenciam cache, sem novas, 403, timeout e rota
+   alternativa.
+
+6. APLICAR MIGRAÇÃO
+-------------------
+O deploy do Worker não executa migrations D1 automaticamente. Execute uma única
+vez em um ambiente com acesso à conta Cloudflare:
+
+  npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+
+A migração cria source_state e remove índices antigos que não eram usados.
+
+7. PROMOVER PARA PRODUÇÃO
+-------------------------
+Somente depois de validar o preview, abra um Pull Request de ajuste-v2.5.1 para
+main e faça o merge.
+
+O commit em main executará o deploy de produção.
+
+8. APÓS O DEPLOY
+----------------
+Abra a aplicação com Ctrl + F5 apenas na primeira visita. Depois disso, o painel
+usa ETag e baixa a ronda completa somente quando o runId muda.
+
+No Cloudflare, verifique:
+
+  Deployments / Version History
+  Logs
+  Traces
+  Queues
+  D1
+
+Não use o botão Upload files para atualizações futuras. Use branches e Pull
+Requests, pois o upload manual não remove arquivos antigos de forma confiável.

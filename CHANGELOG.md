@@ -1,0 +1,48 @@
+# Changelog
+
+## 2.5.1 — remoção dos canais de curiosidades
+
+- Remoção de Fatos Desconhecidos, Mega Curioso, Incrível.club, Mistérios do Mundo, Canaltech Curiosidades, Superinteressante, Revista Galileu, Segredos do Mundo e Awebic.
+- Hypeness permanece fora do catálogo.
+- Catálogo reduzido de 48 para 39 portais: 26 do Brasil e 13 do Mundo.
+- Remoção das consultas agregadas e individuais usadas exclusivamente pelos canais de curiosidades.
+- Diagnósticos ativos limitados ao catálogo atual.
+- Migração para limpar estados persistidos das fontes removidas.
+
+## 2.5.0 — processamento otimizado e diagnóstico persistente
+
+- Coleta escalonada em 5, 15 e 30 minutos.
+- Pool máximo de cinco conexões externas.
+- Rondas manuais e automáticas processadas em Queue.
+- Snapshot persistente por portal com ETag, Last-Modified e backoff.
+- Recuperação por fonte por até 72 horas.
+- Diagnóstico exato de 403, 404, 429, timeout, feed inválido e ausência de novas matérias.
+- Static Assets separados do Worker.
+- Polling adaptativo e ETag em `/api/status` e `/api/latest`.
+- Migração D1 versionada e manutenção periódica.
+- Menos gravações de progresso e renovação de locks.
+- Retries classificados e Dead Letter Queue.
+- Logs estruturados, traces, minificação e preview por branch.
+- Cadastro manual de sites permanece removido.
+- Tradução internacional mantém baixa concorrência, cache e prioridade por portal.
+
+## 2.4.4
+
+- Remoção do cadastro manual de sites.
+- Estabilização da tradução internacional.
+
+## 2.4.3
+
+- Remoção e correção de portais inativos ou com domínio alterado.
+
+## 2.4.2
+
+- Correções na apuração, seleção de URL e leitura de matéria.
+
+## 2.4.0–2.4.1
+
+- Coleta ampliada de portais e leitura inteligente baseada em uma matéria.
+
+## Versões anteriores
+
+- Evolução do painel, termos dedicados, classificação editorial, histórico e integração com Cloudflare.

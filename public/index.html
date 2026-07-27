@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.4.3">
+  <link rel="stylesheet" href="/styles.css?v=2.5.1">
 </head>
 <body>
   <main class="app">
@@ -15,7 +15,6 @@
       <nav aria-label="Navegação principal">
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
-        <button class="nav" id="navCustomSources" type="button"><span class="nav-icon">S</span><span>Sites</span></button>
         <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
         <button class="nav" id="navHistory" type="button"><span class="nav-icon">H</span><span>Histórico</span></button>
       </nav>
@@ -43,21 +42,6 @@
         <div class="source-portal-grid" id="sourcePortalGrid"></div>
       </section>
 
-      <section class="management-view" id="customSourcesView" hidden aria-labelledby="customSourcesTitle">
-        <div class="management-heading">
-          <div><p class="eyebrow">Configuração persistente</p><h2 id="customSourcesTitle">Sites cadastrados</h2><p>Adicione um site ou endereço RSS. O Worker tentará o feed informado e usará o Google Notícias por domínio quando necessário.</p></div>
-          <span id="customSourcesLimit">0/8 ativos</span>
-        </div>
-        <div class="background-note"><strong>Funciona com a janela fechada</strong><span>Os sites ativos são lidos pelo Cron do Cloudflare a cada cinco minutos e passam a integrar a aba Ronda.</span></div>
-        <form class="config-form config-form-sites" id="customSourceForm">
-          <label><span>Nome do site</span><input id="customSourceName" maxlength="80" required placeholder="Ex.: Jornal local"></label>
-          <label><span>URL do site ou RSS</span><input id="customSourceUrl" type="url" maxlength="500" required placeholder="https://exemplo.com/feed/"></label>
-          <label><span>Região</span><select id="customSourceRegion"><option value="Brasil">Brasil</option><option value="Mundo">Mundo</option></select></label>
-          <button class="primary" type="submit">Cadastrar site</button>
-        </form>
-        <p class="config-message" id="customSourceMessage"></p>
-        <div class="config-list" id="customSourcesList"><div class="loading-row">Carregando sites cadastrados…</div></div>
-      </section>
 
       <section class="management-view" id="monitoringView" hidden aria-labelledby="monitoringTitle">
         <div class="management-heading">
@@ -162,6 +146,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.4.3" defer></script>
+  <script src="/app.js?v=2.5.1" defer></script>
 </body>
 </html>

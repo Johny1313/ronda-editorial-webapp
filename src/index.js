@@ -1,43 +1,43 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
-import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey, validateArticleUrl } from "./article-reader.js";
-import { collectRound, customSourceFeed, FEEDS } from "./collector.js";
+import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
+import { collectRound, FEEDS } from "./collector.js";
 import {
   acquireLock,
-  createCustomSource,
   createIntelligentJob,
   createMonitoringTerm,
   databaseHealth,
   databaseSelfTest,
-  deleteCustomSource,
   deleteMonitoringTerm,
   ensureSchema,
   getArticleReadCache,
   getArticleSourceStats,
   getIntelligentCarousel,
+  getLatestRunSummary,
+  getSourceStates,
+  listSourceDiagnostics,
   getIntelligentJob,
   getLatestRound,
   getRunHistory,
   getRunPayload,
   getRunStatus,
-  listCustomSources,
   listMonitoringTerms,
-  MAX_CUSTOM_SOURCES,
   MAX_MONITORING_TERMS,
   recordArticleSourceAttempt,
   releaseLock,
+  renewLock,
+  runDatabaseMaintenance,
   saveArticleReadCache,
   saveIntelligentCarousel,
   saveRun,
-  setCustomSourceActive,
+  saveSourceStates,
   setMonitoringTermActive,
   startRun,
   updateIntelligentJob,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
-import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.4.3";
+const VERSION = "2.5.1";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -60,16 +60,29 @@ function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...SECURITY_HEADERS, ...extraHeaders } });
 }
 
-function assetResponse(asset) {
-  return new Response(asset.body, {
-    headers: {
-      ...SECURITY_HEADERS,
-      "Content-Type": asset.contentType,
-      "Cache-Control": "no-store, max-age=0",
-      "X-Ronda-Version": VERSION,
-    },
-  });
+function normalizedEtag(value) {
+  const token = String(value || "empty").replace(/[^a-z0-9._-]+/gi, "-").slice(0, 120);
+  return `W/"${token || "empty"}"`;
 }
+
+function conditionalJson(request, data, etagValue, status = 200) {
+  const etag = normalizedEtag(etagValue);
+  if (request.headers.get("If-None-Match") === etag) {
+    return new Response(null, { status: 304, headers: { ...SECURITY_HEADERS, ETag: etag, "Cache-Control": "no-cache" } });
+  }
+  return json(data, status, { ETag: etag, "Cache-Control": "no-cache" });
+}
+
+function structuredLog(event, fields = {}) {
+  console.log(JSON.stringify({ event, version: VERSION, at: new Date().toISOString(), ...fields }));
+}
+
+function freshRunningRun(run, maxAgeMs = 12 * 60 * 1000) {
+  if (run?.status !== "running") return null;
+  const startedMs = Date.parse(run.startedAt || run.completedAt || "");
+  return Number.isFinite(startedMs) && Date.now() - startedMs <= maxAgeMs ? run : null;
+}
+
 
 function secureEqual(left, right) {
   const a = new TextEncoder().encode(String(left ?? ""));
@@ -86,18 +99,6 @@ function requireOperationAuth(request, env) {
   }
 }
 
-function validatedCustomSource(body) {
-  const name = plainText(body?.name).slice(0, 80);
-  if (name.length < 2) throw new HttpError(400, "Informe um nome com pelo menos dois caracteres.");
-  let url;
-  try {
-    url = validateArticleUrl(body?.url);
-  } catch {
-    throw new HttpError(400, "Informe uma URL pública válida, começando com http:// ou https://.");
-  }
-  const region = body?.region === "Mundo" ? "Mundo" : "Brasil";
-  return { name, url, region };
-}
 
 function validatedMonitoringTerm(body) {
   const term = plainText(body?.term).replace(/\s+/g, " ").trim().slice(0, 80);
@@ -112,6 +113,7 @@ function requireDatabase(env) {
 
 function withEditorias(payload) {
   if (!payload || typeof payload !== "object" || !Array.isArray(payload.topics)) return payload;
+  if (Number(payload.schemaVersion) >= 4) return payload;
   const safePayload = payload.translation?.targetLanguage === "pt-BR" && payload.translation?.portugueseOnly
     ? payload
     : portugueseOnlyFallback(payload);
@@ -194,6 +196,34 @@ function articleAnalysisAi(env) {
 }
 
 
+function retryableProcessingError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /timeout|tempo limite|temporar|429|500|502|503|504|ai indisponível|falha de rede|network/i.test(message);
+}
+
+function createProgressReporter(db, jobId, lock) {
+  let lastProgress = -1;
+  let lastMessage = "";
+  let lastWriteAt = 0;
+  return async ({ progress, message }) => {
+    const now = Date.now();
+    const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
+    const changedStage = message && message !== lastMessage;
+    const advanced = safeProgress - lastProgress >= 3;
+    if (!changedStage && !advanced && now - lastWriteAt < 2_500) return;
+    await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
+    await updateIntelligentJob(db, {
+      jobId,
+      status: "running",
+      progress: safeProgress,
+      message,
+    });
+    lastProgress = safeProgress;
+    lastMessage = message || "";
+    lastWriteAt = now;
+  };
+}
+
 function publicIntelligentJob(job) {
   const terminal = ["succeeded", "failed"].includes(job.status);
   return {
@@ -214,7 +244,7 @@ function publicIntelligentJob(job) {
 
 async function processIntelligentCarouselJob(env, job, topic) {
   const db = requireDatabase(env);
-  const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 4 * 60 * 1000);
+  const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 12 * 60 * 1000);
   if (!jobLock) return null;
   try {
     const started = await updateIntelligentJob(db, {
@@ -243,14 +273,7 @@ async function processIntelligentCarouselJob(env, job, topic) {
         get: (cacheKey) => getArticleReadCache(db, cacheKey),
         set: (cacheKey, payload) => saveArticleReadCache(db, cacheKey, payload, 12),
       },
-      onProgress: async ({ progress, message }) => {
-        await updateIntelligentJob(db, {
-          jobId: job.jobId,
-          status: "running",
-          progress,
-          message,
-        });
-      },
+      onProgress: createProgressReporter(db, job.jobId, jobLock),
     });
     const selectedSource = data?.reading?.selectedSource;
     if (selectedSource?.liveAttempted) {
@@ -299,6 +322,7 @@ async function processIntelligentCarouselJob(env, job, topic) {
     return storedData;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (retryableProcessingError(error)) throw error;
     const failed = await updateIntelligentJob(db, {
       jobId: job.jobId,
       status: "failed",
@@ -307,7 +331,7 @@ async function processIntelligentCarouselJob(env, job, topic) {
       error: detail,
     });
     if (failed?.status !== "failed") throw error;
-    console.error("Leitura inteligente falhou", detail);
+    structuredLog("intelligent_job_failed", { jobId: job.jobId, detail });
     return null;
   } finally {
     try { await releaseLock(db, jobLock); } catch (error) {
@@ -338,90 +362,165 @@ async function resolveTopicForIntelligentJob(env, job) {
   return topic;
 }
 
+async function processIntelligentQueueMessage(message, env, body = {}) {
+  const jobId = String(body.jobId || "").trim();
+  if (!jobId) {
+    message?.ack?.();
+    return;
+  }
+  try {
+    const db = requireDatabase(env);
+    const job = await getIntelligentJob(db, jobId);
+    if (!job || ["succeeded", "failed"].includes(job.status)) {
+      message?.ack?.();
+      return;
+    }
+    const topic = await resolveTopicForIntelligentJob(env, job);
+    await processIntelligentCarouselJob(env, job, topic);
+    message?.ack?.();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const attempts = Number(message?.attempts || 1);
+    structuredLog("intelligent_queue_error", { jobId, attempts, detail });
+    if (retryableProcessingError(error) && attempts < 3 && message?.retry) {
+      await updateIntelligentJob(requireDatabase(env), {
+        jobId,
+        status: "queued",
+        progress: Math.max(2, Math.min(90, 8 * attempts)),
+        message: `Falha temporária. Nova tentativa ${attempts + 1}/3 agendada.`,
+        error: null,
+      }).catch(() => null);
+      message.retry({ delaySeconds: 15 * attempts });
+      return;
+    }
+    await updateIntelligentJob(requireDatabase(env), {
+      jobId,
+      status: "failed",
+      progress: 100,
+      message: "Ciclo encerrado no consumidor. Sistema liberado para uma nova leitura.",
+      error: detail,
+    }).catch(() => null);
+    message?.ack?.();
+  }
+}
+
 async function processIntelligentQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     const body = message?.body && typeof message.body === "object" ? message.body : {};
-    const jobId = String(body.jobId || "").trim();
-    if (!jobId) {
-      message?.ack?.();
-      continue;
+    await processIntelligentQueueMessage(message, env, body);
+  }
+}
+
+async function processRoundQueueMessage(message, env, body = {}) {
+  const runId = String(body.runId || "").trim();
+  const triggerType = body.triggerType === "manual" ? "manual" : "scheduled";
+  const startedAt = String(body.startedAt || new Date().toISOString());
+  if (!runId) {
+    message?.ack?.();
+    return;
+  }
+  try {
+    await performRound(env, triggerType, { runId, startedAt, runStarted: true, deferFailureSave: true });
+    structuredLog("round_queue_completed", { runId, triggerType });
+    message?.ack?.();
+  } catch (error) {
+    const attempts = Number(message?.attempts || 1);
+    const retryable = error instanceof HttpError ? [409, 429, 503].includes(error.status) : retryableProcessingError(error);
+    structuredLog("round_queue_error", {
+      runId,
+      triggerType,
+      attempts,
+      retryable,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    if (retryable && attempts < 3 && message?.retry) {
+      message.retry({ delaySeconds: 20 * attempts });
+      return;
     }
-    try {
-      const db = requireDatabase(env);
-      const job = await getIntelligentJob(db, jobId);
-      if (!job || ["succeeded", "failed"].includes(job.status)) {
-        message?.ack?.();
-        continue;
-      }
-      const topic = await resolveTopicForIntelligentJob(env, job);
-      await processIntelligentCarouselJob(env, job, topic);
-      message?.ack?.();
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.error("Consumidor da fila de leitura inteligente falhou", detail);
-      let terminalRecorded = false;
-      try {
-        const failed = await updateIntelligentJob(requireDatabase(env), {
-          jobId,
-          status: "failed",
-          progress: 100,
-          message: "Ciclo encerrado no consumidor. Sistema liberado para uma nova leitura.",
-          error: detail,
-        });
-        terminalRecorded = failed?.status === "failed";
-      } catch {}
-      if (terminalRecorded) message?.ack?.();
-      else if (Number(message?.attempts || 1) < 3 && message?.retry) message.retry({ delaySeconds: 5 });
-      else message?.ack?.();
-    }
+    const detail = error instanceof Error ? error.message : String(error);
+    await saveRun(requireDatabase(env), {
+      id: runId,
+      triggerType,
+      startedAt,
+      payload: {
+        ok: false,
+        collectedAt: new Date().toISOString(),
+        windowHours: 24,
+        error: "A ronda não pôde ser concluída após as tentativas automáticas.",
+        detail: detail.slice(0, 300),
+        sources: [],
+        totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
+        items: [],
+        topics: [],
+      },
+    }).catch(() => null);
+    message?.ack?.();
+  }
+}
+
+async function processQueueBatch(batch, env) {
+  for (const message of batch.messages || []) {
+    const body = message?.body && typeof message.body === "object" ? message.body : {};
+    if (body.type === "round") await processRoundQueueMessage(message, env, body);
+    else await processIntelligentQueueMessage(message, env, body);
   }
 }
 
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
   await ensureSchema(db);
-  const lock = options.lock || await acquireLock(db, "editorial-round", 3 * 60 * 1000);
+  const lock = options.lock || await acquireLock(db, "editorial-round", 12 * 60 * 1000);
   if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
 
   const runId = options.runId || crypto.randomUUID();
   const startedAt = options.startedAt || new Date().toISOString();
+  structuredLog("round_started", { runId, triggerType });
   try {
     if (!options.runStarted) await startRun(db, { id: runId, triggerType, startedAt });
     let payload;
     try {
-      const [customSources, monitoringTerms, previousRound] = await Promise.all([
-        listCustomSources(db, { activeOnly: true }),
+      const [monitoringTerms, previousRound, sourceStates] = await Promise.all([
         listMonitoringTerms(db, { activeOnly: true }),
         getLatestRound(db).catch(() => null),
+        getSourceStates(db, FEEDS.map((feed) => feed.id)).catch(() => new Map()),
       ]);
       payload = await collectRound({
-        feeds: [...FEEDS, ...customSources.map(customSourceFeed)],
+        feeds: FEEDS,
         monitoringTerms,
         previousRound,
+        sourceStates,
       });
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("O coletor não retornou um resultado válido.");
       }
+
+      const sourceStateUpdates = Array.isArray(payload.sourceStateUpdates) ? payload.sourceStateUpdates : [];
+      delete payload.sourceStateUpdates;
+      if (sourceStateUpdates.length) {
+        await saveSourceStates(db, sourceStateUpdates).catch((error) => {
+          structuredLog("source_state_save_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+        });
+      }
+
+      await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
       payload.configuration = {
-        customSources: customSources.map((source) => ({
-          id: source.id,
-          name: source.name,
-          region: source.region,
-          url: source.url,
-        })),
         monitoringTerms: monitoringTerms.map((term) => ({ id: term.id, term: term.term })),
         browserRequired: false,
-        execution: "cloudflare-cron",
+        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue" : "cloudflare-trigger",
+        catalogFixed: true,
       };
       try {
         payload = await translateRoundPayload(payload, { ai: translationAi(env), db });
       } catch (error) {
-        console.error("Tradução da ronda falhou", error);
+        structuredLog("round_translation_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
         payload = portugueseOnlyFallback(payload);
       }
+      payload = withEditorias(payload);
+      payload.schemaVersion = 4;
     } catch (error) {
       payload = {
         ok: false,
+        schemaVersion: 4,
         collectedAt: new Date().toISOString(),
         windowHours: 24,
         durationMs: Date.now() - Date.parse(startedAt),
@@ -440,12 +539,26 @@ async function performRound(env, triggerType, options = {}) {
         },
       };
     }
+    await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
+    if (!payload.ok && options.deferFailureSave) throw new HttpError(503, payload.error, payload.detail || null);
     await saveRun(db, { id: runId, triggerType, startedAt, payload });
+    await runDatabaseMaintenance(db).catch((error) => {
+      structuredLog("database_maintenance_failed", { detail: error instanceof Error ? error.message : String(error) });
+    });
     const storedPayload = { ...payload, runId, triggerType };
+    structuredLog("round_completed", {
+      runId,
+      triggerType,
+      ok: Boolean(payload.ok),
+      durationMs: payload.durationMs,
+      items: Number(payload?.totals?.items) || 0,
+      sources: Number(payload?.totals?.sources) || 0,
+      portalRequests: Number(payload?.operational?.externalPortalRequests) || 0,
+    });
     if (!payload.ok) throw new HttpError(503, payload.error, payload.detail || null);
     return storedPayload;
   } finally {
-    await releaseLock(db, lock);
+    await releaseLock(db, lock).catch(() => null);
   }
 }
 
@@ -483,15 +596,40 @@ async function handleApi(request, env, url, ctx) {
     return json(result, result.ok ? 200 : 500);
   }
 
+  if (url.pathname === "/api/status" && request.method === "GET") {
+    const db = requireDatabase(env);
+    const [latest, latestSuccess] = await Promise.all([
+      getLatestRunSummary(db),
+      getLatestRunSummary(db, { successOnly: true }),
+    ]);
+    const running = latest?.status === "running";
+    const payload = {
+      ok: true,
+      ready: true,
+      version: VERSION,
+      running,
+      activeRunId: running ? latest.id : null,
+      activeRunStartedAt: running ? latest.startedAt : null,
+      lastRunId: latestSuccess?.id || null,
+      lastSuccessAt: latestSuccess?.completedAt || null,
+      items: latestSuccess?.items || 0,
+      topics: latestSuccess?.topics || 0,
+      sources: latestSuccess?.sources || 0,
+      schedulerHealthy: latestSuccess?.completedAt
+        ? Date.now() - Date.parse(latestSuccess.completedAt) <= 12 * 60 * 1000
+        : false,
+    };
+    return conditionalJson(request, payload, `${latest?.id || "none"}-${latest?.status || "idle"}-${latestSuccess?.id || "none"}`);
+  }
+
   if (url.pathname === "/api/health" && request.method === "GET") {
     const db = requireDatabase(env);
     const dbOk = await databaseHealth(db);
-    const latest = await getLatestRound(db);
-    const [customSources, monitoringTerms] = await Promise.all([
-      listCustomSources(db, { activeOnly: true }),
+    const [latest, monitoringTerms] = await Promise.all([
+      getLatestRunSummary(db, { successOnly: true }),
       listMonitoringTerms(db, { activeOnly: true }),
     ]);
-    const lastSuccessAt = latest?.collectedAt ?? null;
+    const lastSuccessAt = latest?.completedAt ?? null;
     const ageMs = lastSuccessAt ? Date.now() - Date.parse(lastSuccessAt) : Number.POSITIVE_INFINITY;
     return json({
       ok: dbOk,
@@ -502,27 +640,28 @@ async function handleApi(request, env, url, ctx) {
       scheduleMinutes: 5,
       schedulerHealthy: ageMs <= 12 * 60 * 1000,
       lastSuccessAt,
-      lastRunId: latest?.runId ?? null,
+      lastRunId: latest?.id ?? null,
       manualAuthRequired: Boolean(env.MANUAL_ROUND_TOKEN),
       backgroundMonitoring: {
         active: true,
         browserRequired: false,
-        execution: "cloudflare-cron",
+        execution: env.ROUND_JOBS_QUEUE?.send ? "cloudflare-queue" : "cloudflare-cron",
         scheduleMinutes: 5,
-        customSources: customSources.length,
         monitoringTerms: monitoringTerms.length,
-        dedicatedResults: Number(latest?.dedicatedMonitoring?.items?.length) || 0,
+        dedicatedResults: null,
         catalogPortals: FEEDS.length,
         catalogBrazil: FEEDS.filter((feed) => feed.region === "Brasil").length,
         catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
       },
       portalCollection: {
-        strategy: "official-feed-shared-google-fallback-cache",
+        strategy: "scheduled-official-feed-shared-fallback-persistent-cache",
         sharedFallbackQueries: true,
         sourceDomainMatching: true,
         lastKnownGoodCache: true,
-        cacheWindowHours: 24,
-        statusModes: ["direct", "fallback", "cache", "failed"],
+        cacheWindowHours: 72,
+        maxConcurrency: 5,
+        staggeredIntervalsMinutes: [5, 15, 30],
+        statusModes: ["direct", "fallback", "not-modified", "cache", "no-new", "blocked", "rate-limited", "timeout", "failed"],
       },
       editorialClassification: {
         specializedCategories: [
@@ -541,6 +680,9 @@ async function handleApi(request, env, url, ctx) {
         ready: Boolean(translationAi(env)?.run),
         targetLanguage: "pt-BR",
         model: TRANSLATION_MODEL,
+        strategy: "cached-title-first",
+        maxNewTitlesPerRound: 48,
+        concurrency: 3,
       },
       intelligentReading: {
         ready: true,
@@ -548,6 +690,7 @@ async function handleApi(request, env, url, ctx) {
         mode: "single-article-with-feed-fallback",
         asynchronousJobs: true,
         queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
+        deadLetterQueueConfigured: true,
         executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 1,
         readingStrategy: "single-best-source-with-history",
@@ -564,49 +707,13 @@ async function handleApi(request, env, url, ctx) {
     });
   }
 
-  if (url.pathname === "/api/custom-sources" && request.method === "GET") {
-    const sources = await listCustomSources(requireDatabase(env));
-    return json({
-      ok: true,
-      sources,
-      limits: {
-        maximumActive: MAX_CUSTOM_SOURCES,
-        active: sources.filter((source) => source.active).length,
-      },
-    });
-  }
 
-  if (url.pathname === "/api/custom-sources" && request.method === "POST") {
-    requireOperationAuth(request, env);
-    const body = await request.json().catch(() => ({}));
-    const input = validatedCustomSource(body);
-    try {
-      const source = await createCustomSource(requireDatabase(env), input);
-      return json({ ok: true, source }, 201);
-    } catch (error) {
-      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível cadastrar o site.");
-    }
-  }
-
-  const customSourceRoute = /^\/api\/custom-sources\/([a-z0-9-]{8,80})$/i.exec(url.pathname);
-  if (customSourceRoute && request.method === "PATCH") {
-    requireOperationAuth(request, env);
-    const body = await request.json().catch(() => ({}));
-    if (typeof body?.active !== "boolean") throw new HttpError(400, "Informe se o site deve ficar ativo.");
-    try {
-      const source = await setCustomSourceActive(requireDatabase(env), customSourceRoute[1], body.active);
-      if (!source) throw new HttpError(404, "Site cadastrado não encontrado.");
-      return json({ ok: true, source });
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(409, error instanceof Error ? error.message : "Não foi possível atualizar o site.");
-    }
-  }
-  if (customSourceRoute && request.method === "DELETE") {
-    requireOperationAuth(request, env);
-    const source = await deleteCustomSource(requireDatabase(env), customSourceRoute[1]);
-    if (!source) throw new HttpError(404, "Site cadastrado não encontrado.");
-    return json({ ok: true, deleted: source });
+  if (url.pathname === "/api/sources/diagnostics" && request.method === "GET") {
+    const activeSourceIds = new Set(FEEDS.map((feed) => feed.id));
+    const diagnostics = (await listSourceDiagnostics(requireDatabase(env)))
+      .filter((item) => activeSourceIds.has(item.sourceId));
+    const updatedAt = diagnostics.reduce((latest, item) => item.updatedAt > latest ? item.updatedAt : latest, "");
+    return conditionalJson(request, { ok: true, diagnostics }, `sources-${updatedAt || "empty"}`);
   }
 
   if (url.pathname === "/api/monitoring-terms" && request.method === "GET") {
@@ -656,7 +763,8 @@ async function handleApi(request, env, url, ctx) {
 
   if (url.pathname === "/api/latest" && request.method === "GET") {
     const latest = await getLatestRound(requireDatabase(env));
-    return json({ ok: true, data: withEditorias(latest) });
+    const data = withEditorias(latest);
+    return conditionalJson(request, { ok: true, data }, `latest-${data?.runId || "empty"}`);
   }
 
   if (url.pathname === "/api/history" && request.method === "GET") {
@@ -750,6 +858,7 @@ async function handleApi(request, env, url, ctx) {
       if (env.INTELLIGENT_JOBS_QUEUE?.send) {
         try {
           await env.INTELLIGENT_JOBS_QUEUE.send({
+            type: "intelligent",
             jobId: queued.job.jobId,
             runId: queued.job.runId,
             topicId: queued.job.topicId,
@@ -791,36 +900,44 @@ async function handleApi(request, env, url, ctx) {
       throw new HttpError(401, "Chave de operação inválida.");
     }
     const db = requireDatabase(env);
+    const activeRun = freshRunningRun(await getLatestRunSummary(db).catch(() => null));
+    if (activeRun) {
+      return json({ ok: true, queued: true, reused: true, runId: activeRun.id, status: "running" }, 202);
+    }
     const throttle = await acquireLock(db, "manual-throttle", 60 * 1000);
     if (!throttle) throw new HttpError(429, "Aguarde um minuto antes de executar outra ronda manual.");
-    const lock = await acquireLock(db, "editorial-round", 3 * 60 * 1000);
-    if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
     const runId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    try {
-      await startRun(db, { id: runId, triggerType: "manual", startedAt });
-    } catch (error) {
-      await releaseLock(db, lock);
-      throw error;
+    await startRun(db, { id: runId, triggerType: "manual", startedAt });
+
+    if (env.ROUND_JOBS_QUEUE?.send) {
+      try {
+        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "manual", startedAt });
+        structuredLog("round_enqueued", { runId, triggerType: "manual" });
+        return json({ ok: true, queued: true, runId, status: "running" }, 202);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        await saveRun(db, {
+          id: runId,
+          triggerType: "manual",
+          startedAt,
+          payload: {
+            ok: false,
+            collectedAt: new Date().toISOString(),
+            error: "Não foi possível enviar a ronda para a fila.",
+            detail,
+            sources: [],
+            totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
+            items: [],
+            topics: [],
+          },
+        });
+        throw new HttpError(503, "Fila de rondas indisponível.", detail);
+      }
     }
-    const latestForOlderPanels = withEditorias(await getLatestRound(db).catch(() => null));
-    const compatibilityData = latestForOlderPanels?.ok && Array.isArray(latestForOlderPanels.topics)
-      ? latestForOlderPanels
-      : {
-          ok: true,
-          collectedAt: startedAt,
-          windowHours: 24,
-          sources: [],
-          totals: { items: 0, topics: 0, sources: 0, socialItems: 0 },
-          items: [],
-          topics: [],
-        };
-    const task = performRound(env, "manual", { lock, runId, startedAt, runStarted: true }).catch((error) => {
-      console.error("Ronda manual falhou", error);
-    });
-    if (ctx?.waitUntil) ctx.waitUntil(task);
-    else await task;
-    return json({ ok: true, queued: true, runId, status: "running", data: compatibilityData }, 202);
+
+    const data = await performRound(env, "manual", { runId, startedAt, runStarted: true });
+    return json({ ok: true, queued: false, runId, status: "success", data });
   }
 
   throw new HttpError(404, "Rota não encontrada.");
@@ -832,12 +949,11 @@ async function handleRequest(request, env, ctx) {
   if (url.pathname.startsWith("/api/")) return handleApi(request, env, url, ctx);
   if (request.method !== "GET" && request.method !== "HEAD") throw new HttpError(405, "Método não permitido.");
   if (url.pathname === "/robots.txt") return new Response("User-agent: *\nDisallow: /api/\n", { headers: { ...SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8" } });
-  const asset = UI_ASSETS[url.pathname];
-  if (asset) return request.method === "HEAD" ? new Response(null, { headers: { ...SECURITY_HEADERS, "Content-Type": asset.contentType } }) : assetResponse(asset);
+  if (env.ASSETS?.fetch) return env.ASSETS.fetch(request);
   return json({ ok: false, error: "Página não encontrada." }, 404);
 }
 
-export { handleRequest, performRound, processIntelligentCarouselJob, processIntelligentQueueBatch, selfTest };
+export { handleRequest, performRound, processIntelligentCarouselJob, processIntelligentQueueBatch, processQueueBatch, selfTest };
 
 export default {
   async fetch(request, env, ctx) {
@@ -852,14 +968,29 @@ export default {
   },
 
   async queue(batch, env) {
-    await processIntelligentQueueBatch(batch, env);
+    await processQueueBatch(batch, env);
   },
 
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(
-      performRound(env, "scheduled").catch((error) => {
-        console.error("Ronda agendada falhou", error);
-      }),
-    );
+    const runId = crypto.randomUUID();
+    const startedAt = new Date().toISOString();
+    const task = (async () => {
+      const db = requireDatabase(env);
+      const activeRun = freshRunningRun(await getLatestRunSummary(db).catch(() => null));
+      if (activeRun) {
+        structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt });
+        return;
+      }
+      await startRun(db, { id: runId, triggerType: "scheduled", startedAt });
+      if (env.ROUND_JOBS_QUEUE?.send) {
+        await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", startedAt });
+        structuredLog("round_enqueued", { runId, triggerType: "scheduled" });
+        return;
+      }
+      await performRound(env, "scheduled", { runId, startedAt, runStarted: true });
+    })().catch((error) => {
+      structuredLog("scheduled_round_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+    });
+    ctx.waitUntil(task);
   },
 };

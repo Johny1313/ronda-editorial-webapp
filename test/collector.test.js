@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectFeed, collectRound, customSourceFeed, FEED_COUNTS, FEEDS } from "../src/collector.js";
+import { collectFeed, collectRound, FEED_COUNTS, FEEDS } from "../src/collector.js";
 
 const now = new Date("2026-07-22T12:00:00Z");
 const fallbackXml = `<rss><channel>
@@ -8,11 +8,11 @@ const fallbackXml = `<rss><channel>
   <item><title>Plano de mobilidade urbana é anunciado pela prefeitura</title><link>https://portal.test/b</link><pubDate>Wed, 22 Jul 2026 11:45:00 GMT</pubDate></item>
 </channel></rss>`;
 
-test("catálogo contém 35 portais do Brasil e 13 do Mundo", () => {
-  assert.equal(FEEDS.length, 48);
-  assert.deepEqual(FEED_COUNTS, { Brasil: 35, Mundo: 13, total: 48 });
-  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 48);
-  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 48);
+test("catálogo contém 26 portais do Brasil e 13 do Mundo sem canais de curiosidades", () => {
+  assert.equal(FEEDS.length, 39);
+  assert.deepEqual(FEED_COUNTS, { Brasil: 26, Mundo: 13, total: 39 });
+  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 39);
+  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 39);
   assert.ok(FEEDS.every((feed) => feed.canonicalSource && feed.urls.length >= 1));
   assert.ok(FEEDS.some((feed) => feed.name === "Metrópoles"));
   assert.ok(FEEDS.some((feed) => feed.name === "Canaltech"));
@@ -20,13 +20,22 @@ test("catálogo contém 35 portais do Brasil e 13 do Mundo", () => {
   assert.ok(FEEDS.some((feed) => feed.name === "ABC News Australia"));
   assert.ok(FEEDS.some((feed) => feed.name === "UOL Splash"));
   assert.ok(FEEDS.some((feed) => feed.name === "LeoDias"));
-  assert.ok(FEEDS.some((feed) => feed.name === "Superinteressante"));
-  assert.ok(FEEDS.some((feed) => feed.name === "Awebic"));
-  assert.ok(!FEEDS.some((feed) => feed.name === "Hypeness"));
-  assert.ok(!FEEDS.some((feed) => feed.name === "Contigo!"));
-  const misterios = FEEDS.find((feed) => feed.id === "misterios-do-mundo");
-  assert.deepEqual(misterios.sourceDomains, ["misteriosdomundo.org"]);
-  assert.equal(misterios.directUrl, "https://misteriosdomundo.org/feed/");
+
+  const removedNames = [
+    "Fatos Desconhecidos",
+    "Mega Curioso",
+    "Hypeness",
+    "Incrível.club",
+    "Mistérios do Mundo",
+    "Canaltech Curiosidades",
+    "Superinteressante",
+    "Revista Galileu",
+    "Segredos do Mundo",
+    "Awebic",
+    "Contigo!",
+  ];
+  for (const name of removedNames) assert.ok(!FEEDS.some((feed) => feed.name === name), `${name} não deve permanecer no catálogo`);
+
   const observatorio = FEEDS.find((feed) => feed.id === "observatorio-dos-famosos");
   assert.deepEqual(observatorio.sourceDomains, ["jc.uol.com.br"]);
   assert.ok(observatorio.urls[0].includes("site%3Ajc.uol.com.br"));
@@ -127,20 +136,6 @@ test("decodifica RSS Windows-1252 sem corromper acentos", async () => {
   assert.equal(result.items[0].title, "Assédio e polêmica no Japão");
 });
 
-test("transforma site cadastrado em fonte da ronda com fallback por domínio", () => {
-  const source = customSourceFeed({
-    id: "site-1",
-    name: "Portal Local",
-    url: "https://portal-local.test/",
-    region: "Brasil",
-  });
-  assert.equal(source.id, "custom-site-1");
-  assert.equal(source.name, "Portal Local");
-  assert.equal(source.custom, true);
-  assert.equal(source.urls.length, 1);
-  assert.match(source.urls[0], /news\.google\.com\/rss\/search/);
-  assert.match(decodeURIComponent(source.urls[0]), /site:portal-local\.test/);
-});
 
 test("mantém notícias de termos fora dos itens e assuntos da ronda", async () => {
   const feed = { id: "principal", name: "Portal Principal", region: "Brasil", urls: ["https://principal.test/rss"] };

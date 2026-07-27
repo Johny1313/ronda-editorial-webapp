@@ -13,3 +13,13 @@ test("link de apuração não compartilha a classe dos botões primários", asyn
   assert.doesNotMatch(css, /\.primary,\.source\{/);
   assert.match(app, /Abrir para apuração/);
 });
+
+
+test("interface não oferece cadastro manual de sites", async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(html, /navCustomSources|customSourcesView|Cadastrar site/);
+  assert.doesNotMatch(app, /custom-sources|customSourceForm|api\/custom-sources/);
+});

@@ -1,6 +1,38 @@
 import { buildTopics, clusterItems, titleTokens } from "./clustering.js";
 import { parseFeed, plainText, stableHash } from "./parser.js";
 
+const HIGH_FREQUENCY_SOURCES = new Set([
+  "g1", "cnn-brasil", "folha", "estadao", "o-globo", "poder360",
+  "agencia-brasil", "ge", "metropoles", "bbc", "guardian", "cnn",
+]);
+
+const MEDIUM_FREQUENCY_SOURCES = new Set([
+  "veja", "nexo", "infomoney", "money-times", "canaltech", "tecmundo",
+  "o-liberal", "campo-grande-news", "uol-splash", "leo-dias", "quem",
+  "caras-brasil", "observatorio-dos-famosos", "area-vip", "natelinha",
+  "new-york-times", "washington-post", "al-jazeera", "france-24", "deutsche-welle",
+]);
+
+function sourceRefreshMinutes(id) {
+  if (HIGH_FREQUENCY_SOURCES.has(id)) return 5;
+  if (MEDIUM_FREQUENCY_SOURCES.has(id)) return 15;
+  return 30;
+}
+
+export async function runPool(items, concurrency, worker) {
+  const list = Array.isArray(items) ? items : [];
+  const output = new Array(list.length);
+  let cursor = 0;
+  async function consume() {
+    while (cursor < list.length) {
+      const index = cursor++;
+      output[index] = await worker(list[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, Number(concurrency) || 1), list.length) }, consume));
+  return output;
+}
+
 function googleLocale(region = "Brasil") {
   return region === "Brasil"
     ? { hl: "pt-BR", gl: "BR", ceid: "BR:pt-419" }
@@ -48,33 +80,8 @@ function googleNewsTermSource(term) {
   return googleNewsQuerySource(`when:1d "${plainText(term).replace(/"/g, "")}"`, "Brasil");
 }
 
-function looksLikeFeedUrl(value) {
-  try {
-    const url = new URL(String(value || ""));
-    return /(?:rss|feed|atom|xml|mrss)(?:[./?=&_-]|$)/i.test(`${url.pathname}${url.search}`);
-  } catch {
-    return false;
-  }
-}
 
-export function customSourceFeed(source) {
-  const url = String(source?.url || "").trim();
-  const region = source?.region === "Mundo" ? "Mundo" : "Brasil";
-  const googleFallback = googleNewsSiteSource(url, region);
-  return Object.freeze({
-    id: `custom-${source?.id || stableHash(url)}`,
-    name: plainText(source?.name) || "Site cadastrado",
-    region,
-    canonicalSource: true,
-    directUrl: looksLikeFeedUrl(url) ? url : null,
-    custom: true,
-    limit: region === "Mundo" ? 8 : 15,
-    sourceDomains: Object.freeze([normalizedSite(url)].filter(Boolean)),
-    urls: Object.freeze([looksLikeFeedUrl(url) ? url : null, googleFallback].filter(Boolean)),
-  });
-}
-
-function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 240, emptyIsHealthy = false } = {}) {
+function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 240, emptyIsHealthy = false, refreshMinutes = null } = {}) {
   return Object.freeze({
     id,
     name,
@@ -84,6 +91,7 @@ function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, s
     limit: limit || (region === "Mundo" ? 8 : 15),
     scanLimit,
     emptyIsHealthy: Boolean(emptyIsHealthy),
+    refreshMinutes: Math.max(5, Number(refreshMinutes) || sourceRefreshMinutes(id)),
     sourceAliases: Object.freeze(sourceAliases),
     sourceDomains: Object.freeze(sourceDomains.map(normalizedSite).filter(Boolean)),
     editorialHints: Object.freeze(editorialHints),
@@ -124,13 +132,7 @@ const SPLASH_SEARCH = googleNewsSiteSource("uol.com.br", "Brasil", 'Splash entre
 const OBSERVATORIO_SEARCH = googleNewsSiteSource("jc.uol.com.br", "Brasil", '"Observatório dos Famosos"', 7);
 const NATELINHA_SEARCH = googleNewsSiteSource("natelinha.uol.com.br", "Brasil");
 
-const CURIOSITY_DOMAINS = Object.freeze([
-  "fatosdesconhecidos.com.br", "megacurioso.com.br", "misteriosdomundo.org", "super.abril.com.br",
-  "revistagalileu.globo.com", "segredosdomundo.r7.com", "awebic.com.br",
-]);
-const CURIOSITY_PORTALS_SEARCH = googleNewsSitesSource(CURIOSITY_DOMAINS, "Brasil");
-const CANALTECH_CURIOSIDADES_SEARCH = googleNewsSiteSource("canaltech.com.br", "Brasil", "curiosidades ciência");
-const INCRIVEL_SEARCH = googleNewsSiteSource("incrivel.club", "Brasil", "", 7);
+
 
 export const FEEDS = Object.freeze([
   // Brasil — portais gerais. O segundo endereço é um fallback agregado e compartilhado.
@@ -152,7 +154,7 @@ export const FEEDS = Object.freeze([
   portalFeed("metropoles", "Metrópoles", "Brasil", { primaryUrl: "https://www.metropoles.com/feed", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Metrópoles", "Metropoles"], sourceDomains: ["metropoles.com"] }),
   portalFeed("campo-grande-news", "Campo Grande News", "Brasil", { primaryUrl: "https://www.campograndenews.com.br/rss", fallbackUrl: CORE_BRASIL_FALLBACK, sourceAliases: ["Campo Grande News"], sourceDomains: ["campograndenews.com.br"] }),
 
-  // Brasil — entretenimento, celebridades, realities, curiosidades e ciência pop.
+  // Brasil — entretenimento, celebridades e realities.
   sharedGooglePortalFeed("uol-splash", "UOL Splash", SPLASH_SEARCH, ["UOL", "UOL Splash", "Splash"], ["uol.com.br"], ["Fofoca e Celebridades", "Reality Shows", "Entretenimento"]),
   sharedGooglePortalFeed("leo-dias", "LeoDias", ENTERTAINMENT_PORTALS_SEARCH, ["LeoDias", "Portal LeoDias", "Leo Dias"], ["portalleodias.com"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("quem", "Quem", ENTERTAINMENT_PORTALS_SEARCH, ["Quem", "Revista Quem"], ["revistaquem.globo.com"], ["Fofoca e Celebridades"]),
@@ -162,15 +164,6 @@ export const FEEDS = Object.freeze([
   portalFeed("observatorio-dos-famosos", "Observatório dos Famosos", "Brasil", { fallbackUrl: OBSERVATORIO_SEARCH, sourceAliases: ["Observatório dos Famosos", "Observatorio dos Famosos"], sourceDomains: ["jc.uol.com.br"], editorialHints: ["Fofoca e Celebridades"], scanLimit: 240, emptyIsHealthy: true }),
   sharedGooglePortalFeed("area-vip", "Área VIP", ENTERTAINMENT_PORTALS_SEARCH, ["Área VIP", "Area VIP", "Área Vip"], ["areavip.com.br"], ["Reality Shows", "Fofoca e Celebridades"]),
   sharedGooglePortalFeed("natelinha", "NaTelinha", NATELINHA_SEARCH, ["NaTelinha", "Na Telinha", "UOL"], ["natelinha.uol.com.br"], ["Reality Shows", "Entretenimento"]),
-  sharedGooglePortalFeed("fatos-desconhecidos", "Fatos Desconhecidos", CURIOSITY_PORTALS_SEARCH, ["Fatos Desconhecidos"], ["fatosdesconhecidos.com.br"], ["Conteúdo Viral e Redes Sociais", "Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("mega-curioso", "Mega Curioso", CURIOSITY_PORTALS_SEARCH, ["Mega Curioso", "MegaCurioso"], ["megacurioso.com.br"], ["Curiosidades e Ciência Pop"]),
-  portalFeed("incrivel-club", "Incrível.club", "Brasil", { fallbackUrl: INCRIVEL_SEARCH, sourceAliases: ["Incrível.club", "Incrivel.club", "Incrível Club"], sourceDomains: ["incrivel.club"], editorialHints: ["Conteúdo Viral e Redes Sociais"], scanLimit: 240, emptyIsHealthy: true }),
-  portalFeed("misterios-do-mundo", "Mistérios do Mundo", "Brasil", { primaryUrl: "https://misteriosdomundo.org/feed/", fallbackUrl: CURIOSITY_PORTALS_SEARCH, sourceAliases: ["Mistérios do Mundo", "Misterios do Mundo"], sourceDomains: ["misteriosdomundo.org"], editorialHints: ["Curiosidades e Ciência Pop"], scanLimit: 240, emptyIsHealthy: true }),
-  sharedGooglePortalFeed("canaltech-curiosidades", "Canaltech Curiosidades", CANALTECH_CURIOSIDADES_SEARCH, ["Canaltech"], ["canaltech.com.br"], ["Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("superinteressante", "Superinteressante", CURIOSITY_PORTALS_SEARCH, ["Superinteressante", "Super Interessante"], ["super.abril.com.br"], ["Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("revista-galileu", "Revista Galileu", CURIOSITY_PORTALS_SEARCH, ["Galileu", "Revista Galileu"], ["revistagalileu.globo.com"], ["Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("segredos-do-mundo", "Segredos do Mundo", CURIOSITY_PORTALS_SEARCH, ["Segredos do Mundo", "R7.com", "R7"], ["segredosdomundo.r7.com"], ["Curiosidades e Ciência Pop"]),
-  portalFeed("awebic", "Awebic", "Brasil", { fallbackUrl: CURIOSITY_PORTALS_SEARCH, sourceAliases: ["Awebic"], sourceDomains: ["awebic.com.br"], editorialHints: ["Curiosidades e Ciência Pop"], scanLimit: 500, emptyIsHealthy: true }),
 
   // Mundo — feeds oficiais com fallback agregado por domínio.
   portalFeed("bbc", "BBC News", "Mundo", { primaryUrl: "https://feeds.bbci.co.uk/news/world/rss.xml", fallbackUrl: WORLD_FALLBACK, sourceAliases: ["BBC", "BBC News"], sourceDomains: ["bbc.com"] }),
@@ -194,7 +187,7 @@ export const FEED_COUNTS = Object.freeze({
   total: FEEDS.length,
 });
 
-const PORTAL_SUBREQUEST_LIMIT = 38;
+const PORTAL_SUBREQUEST_LIMIT = 35;
 const TERM_SUBREQUEST_LIMIT = 6;
 
 function compactError(error) {
@@ -202,10 +195,46 @@ function compactError(error) {
   return message.replace(/\s+/g, " ").trim().slice(0, 150);
 }
 
+const RESPONSE_TIMINGS = new WeakMap();
+
+class SourceFetchError extends Error {
+  constructor(message, { code = "unknown", httpStatus = null, retryable = false } = {}) {
+    super(message);
+    this.name = "SourceFetchError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+    this.retryable = retryable;
+  }
+}
+
+function classifyHttpStatus(status) {
+  if (status === 403) return { code: "blocked", retryable: false };
+  if (status === 404) return { code: "not-found", retryable: false };
+  if (status === 429) return { code: "rate-limited", retryable: true };
+  if (status >= 500) return { code: "upstream-error", retryable: true };
+  return { code: "http-error", retryable: false };
+}
+
+function errorDiagnostic(error) {
+  if (error instanceof SourceFetchError) {
+    return {
+      code: error.code,
+      httpStatus: error.httpStatus,
+      retryable: error.retryable,
+      detail: compactError(error),
+    };
+  }
+  const message = compactError(error);
+  if (/tempo limite|timeout|aborted|abort/i.test(message)) return { code: "timeout", httpStatus: null, retryable: true, detail: message };
+  if (/xml|feed|parse|conteúdo/i.test(message)) return { code: "invalid-feed", httpStatus: null, retryable: false, detail: message };
+  return { code: "unknown", httpStatus: null, retryable: false, detail: message };
+}
+
 function sharedResponseFetcher(fetcher) {
   const pending = new Map();
   return async (url, options = {}) => {
-    const key = `${String(options?.method || "GET").toUpperCase()} ${String(url)}`;
+    const headers = new Headers(options?.headers || {});
+    const key = `${String(options?.method || "GET").toUpperCase()} ${String(url)} ${headers.get("If-None-Match") || ""} ${headers.get("If-Modified-Since") || ""}`;
     if (!pending.has(key)) {
       pending.set(key, (async () => {
         const response = await fetcher(url, options);
@@ -215,15 +244,18 @@ function sharedResponseFetcher(fetcher) {
           status: response.status,
           statusText: response.statusText,
           headers: [...response.headers.entries()],
+          responseMs: Number(RESPONSE_TIMINGS.get(response)) || null,
         };
       })());
     }
     const snapshot = await pending.get(key);
-    return new Response(snapshot.body.slice(), {
+    const cloned = new Response(snapshot.body.slice(), {
       status: snapshot.status,
       statusText: snapshot.statusText,
       headers: snapshot.headers,
     });
+    if (snapshot.responseMs != null) RESPONSE_TIMINGS.set(cloned, snapshot.responseMs);
+    return cloned;
   };
 }
 
@@ -232,14 +264,16 @@ function reserveExternalRequest(requestBudget, url) {
   requestBudget.seenUrls ||= new Set();
   const key = String(url);
   if (requestBudget.seenUrls.has(key)) return;
-  if (requestBudget.remaining <= 0) throw new Error("Limite seguro de consultas externas atingido");
+  if (requestBudget.remaining <= 0) throw new SourceFetchError("Limite seguro de consultas externas atingido", { code: "budget-exhausted" });
   requestBudget.seenUrls.add(key);
   requestBudget.remaining -= 1;
+  requestBudget.used = (requestBudget.used || 0) + 1;
 }
 
-async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 8_000 } = {}) {
+async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 8_000, validator = null } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort("Tempo limite excedido"), timeoutMs);
+  const startedAt = Date.now();
   try {
     const response = await fetcher(url, {
       redirect: "follow",
@@ -247,10 +281,25 @@ async function fetchWithTimeout(url, fetcher, { accept, timeoutMs = 8_000 } = {}
       headers: {
         Accept: accept ?? "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.7",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
+        "User-Agent": "RondaEditorial/2.5 (+coletor editorial automatizado)",
+        ...(validator?.etag ? { "If-None-Match": validator.etag } : {}),
+        ...(validator?.lastModified ? { "If-Modified-Since": validator.lastModified } : {}),
       },
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    RESPONSE_TIMINGS.set(response, Date.now() - startedAt);
+    if (response.status === 304) return response;
+    if (!response.ok) {
+      const classification = classifyHttpStatus(response.status);
+      throw new SourceFetchError(`HTTP ${response.status}`, { ...classification, httpStatus: response.status });
+    }
     return response;
+  } catch (error) {
+    if (error instanceof SourceFetchError) throw error;
+    const message = compactError(error);
+    if (controller.signal.aborted || /abort|tempo limite/i.test(message)) {
+      throw new SourceFetchError("Tempo limite excedido", { code: "timeout", retryable: true });
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -273,23 +322,74 @@ export async function decodeFeedResponse(response) {
   return new TextDecoder(normalizeCharset(headerCharset || declarationCharset)).decode(bytes);
 }
 
-export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null) {
+function cachedItemsFromState(sourceState, feed, cutoff, maxAgeHours = 72) {
+  const minimum = Math.max(cutoff.getTime(), Date.now() - Math.max(24, Number(maxAgeHours) || 72) * 60 * 60 * 1000);
+  return uniqueItems((Array.isArray(sourceState?.items) ? sourceState.items : [])
+    .filter((item) => {
+      const timestamp = Date.parse(item?.publishedAt);
+      return Number.isFinite(timestamp) && timestamp >= minimum;
+    })
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+    .slice(0, Number(feed.limit) || 15)
+    .map((item) => ({ ...item, collectionRoute: "cache", collectorName: feed.name, sourceName: feed.name })), Number(feed.limit) || 15);
+}
+
+function validatorSnapshot(response) {
+  return {
+    etag: response.headers.get("ETag") || null,
+    lastModified: response.headers.get("Last-Modified") || null,
+  };
+}
+
+export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null, sourceState = null) {
   const errors = [];
   let successfulResponses = 0;
   const effectiveCutoff = cutoff;
   const windowHours = 24;
+  const validators = { ...(sourceState?.validators || {}) };
+  let totalResponseMs = 0;
   for (let index = 0; index < feed.urls.length; index += 1) {
     const url = feed.urls[index];
     try {
       reserveExternalRequest(requestBudget, url);
-      const response = await fetchWithTimeout(url, fetcher);
-      successfulResponses += 1;
-      const xml = await decodeFeedResponse(response);
+      const response = await fetchWithTimeout(url, fetcher, { validator: validators[url] });
+      totalResponseMs += Number(RESPONSE_TIMINGS.get(response)) || 0;
       const direct = Boolean(feed.directUrl) && String(url) === String(feed.directUrl);
+      if (response.status === 304) {
+        if (sourceState?.lastUrl === url) {
+          const cached = cachedItemsFromState(sourceState, feed, cutoff);
+          return {
+            items: cached,
+            status: {
+              id: feed.id,
+              name: feed.name,
+              region: feed.region || "Brasil",
+              ok: true,
+              count: cached.length,
+              error: null,
+              warning: null,
+              fallback: !direct,
+              cached: true,
+              route: "not-modified",
+              attempts: index + 1,
+              windowHours,
+              httpStatus: 304,
+              errorCode: null,
+              responseMs: totalResponseMs,
+              lastUrl: url,
+            },
+            operational: { validators, lastUrl: url },
+          };
+        }
+        continue;
+      }
+      successfulResponses += 1;
+      validators[url] = validatorSnapshot(response);
+      const xml = await decodeFeedResponse(response);
       const parseConfiguration = direct ? { ...feed, sourceAliases: [], sourceDomains: [] } : feed;
       const items = parseFeed(xml, parseConfiguration, effectiveCutoff, Number(feed.limit) || 15);
       if (!items.length) {
-        errors.push(`Sem conteúdo válido nas últimas ${windowHours} horas`);
+        errors.push({ code: "no-new", httpStatus: response.status, retryable: false, detail: `Sem conteúdo válido nas últimas ${windowHours} horas` });
         continue;
       }
       return {
@@ -301,37 +401,49 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
           ok: true,
           count: items.length,
           error: null,
-          warning: errors.length ? [...new Set(errors)].slice(0, 2).join(" | ") : null,
+          warning: errors.length ? [...new Set(errors.map((item) => item.detail))].slice(0, 2).join(" | ") : null,
           fallback: !direct,
           cached: false,
           route: direct ? "direct" : "fallback",
           attempts: index + 1,
           windowHours,
+          httpStatus: response.status,
+          errorCode: null,
+          responseMs: totalResponseMs,
+          lastUrl: url,
         },
+        operational: { validators, lastUrl: url },
       };
     } catch (error) {
-      errors.push(compactError(error));
+      errors.push(errorDiagnostic(error));
     }
   }
   if (successfulResponses > 0 && feed.emptyIsHealthy) {
+    const cached = cachedItemsFromState(sourceState, feed, cutoff);
     return {
-      items: [],
+      items: cached,
       status: {
         id: feed.id,
         name: feed.name,
         region: feed.region || "Brasil",
         ok: true,
-        count: 0,
+        count: cached.length,
         error: null,
-        warning: [...new Set(errors)].filter((message) => !message.startsWith("Sem conteúdo válido")).slice(0, 2).join(" | ") || null,
+        warning: [...new Set(errors.filter((item) => item.code !== "no-new").map((item) => item.detail))].slice(0, 2).join(" | ") || null,
         fallback: false,
-        cached: false,
-        route: "no-new",
+        cached: cached.length > 0,
+        route: cached.length ? "cache" : "no-new",
         attempts: feed.urls.length,
         windowHours,
+        httpStatus: errors.at(-1)?.httpStatus ?? 200,
+        errorCode: null,
+        responseMs: totalResponseMs,
+        lastUrl: sourceState?.lastUrl || null,
       },
+      operational: { validators, lastUrl: sourceState?.lastUrl || null },
     };
   }
+  const primaryError = errors.find((item) => ["blocked", "rate-limited", "timeout", "not-found"].includes(item.code)) || errors.at(-1) || { code: "unknown", detail: "Fonte indisponível", httpStatus: null };
   return {
     items: [],
     status: {
@@ -340,14 +452,19 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       region: feed.region || "Brasil",
       ok: false,
       count: 0,
-      error: [...new Set(errors)].slice(0, 2).join(" | ") || "Fonte indisponível",
+      error: [...new Set(errors.map((item) => item.detail))].slice(0, 2).join(" | ") || "Fonte indisponível",
       warning: null,
       fallback: false,
       cached: false,
       route: "failed",
       attempts: feed.urls.length,
       windowHours,
+      httpStatus: primaryError.httpStatus ?? null,
+      errorCode: primaryError.code || "unknown",
+      responseMs: totalResponseMs || null,
+      lastUrl: sourceState?.lastUrl || null,
     },
+    operational: { validators, lastUrl: sourceState?.lastUrl || null },
   };
 }
 
@@ -378,7 +495,7 @@ export async function collectDedicatedMonitoring(terms = [], cutoff, fetcher = f
     };
   }
   const requestBudget = { remaining: TERM_SUBREQUEST_LIMIT };
-  const results = await Promise.all(activeTerms.map(async (term) => {
+  const results = await runPool(activeTerms, 3, async (term) => {
     const termFeed = {
       id: `term-${term.id}`,
       name: `Monitoramento: ${plainText(term.term)}`,
@@ -404,7 +521,7 @@ export async function collectDedicatedMonitoring(terms = [], cutoff, fetcher = f
         matchedTerms: [{ id: term.id, term: plainText(term.term) }],
       })),
     };
-  }));
+  });
 
   const byUrl = new Map();
   for (const result of results) {
@@ -482,14 +599,16 @@ export async function collectBluesky(initialClusters, cutoff, fetcher = fetch) {
     return { items: [], status: { id: "bluesky", name: "Bluesky", region: "Rede", ok: true, count: 0, error: null, fallback: false } };
   }
 
-  const results = await Promise.allSettled(
-    queries.map(async (query) => {
+  const results = await runPool(queries.slice(0, 3), 3, async (query) => {
+    try {
       const endpoint = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=8&sort=latest`;
       const response = await fetchWithTimeout(endpoint, fetcher, { accept: "application/json", timeoutMs: 6_500 });
       const payload = await response.json();
-      return Array.isArray(payload?.posts) ? payload.posts : [];
-    }),
-  );
+      return { status: "fulfilled", value: Array.isArray(payload?.posts) ? payload.posts : [] };
+    } catch (reason) {
+      return { status: "rejected", reason };
+    }
+  });
 
   const items = [];
   const errors = [];
@@ -534,24 +653,155 @@ function cachedItemsForFeed(previousRound, feed, cutoff) {
     .map((item) => ({ ...item, collectionRoute: "cache", collectorName: feed.name, sourceName: feed.name })), Number(feed.limit) || 15);
 }
 
-export async function collectRound({ fetcher = fetch, now = new Date(), feeds = FEEDS, monitoringTerms = [], previousRound = null } = {}) {
+function sourceStateFor(sourceStates, sourceId) {
+  if (sourceStates instanceof Map) return sourceStates.get(sourceId) || null;
+  if (sourceStates && typeof sourceStates === "object") return sourceStates[sourceId] || null;
+  return null;
+}
+
+function sourceIsDue(sourceState, collectedAt) {
+  if (!sourceState?.nextCheckAt) return true;
+  const next = Date.parse(sourceState.nextCheckAt);
+  return !Number.isFinite(next) || next <= collectedAt.getTime();
+}
+
+function deferredSourceResult(feed, sourceState, cutoff) {
+  const items = cachedItemsFromState(sourceState, feed, cutoff);
+  return {
+    items,
+    status: {
+      id: feed.id,
+      name: feed.name,
+      region: feed.region || "Brasil",
+      ok: true,
+      count: items.length,
+      error: null,
+      warning: null,
+      fallback: sourceState?.route === "fallback",
+      cached: items.length > 0,
+      route: items.length > 0 ? "cache" : "no-new",
+      attempts: 0,
+      windowHours: 24,
+      httpStatus: sourceState?.httpStatus ?? null,
+      errorCode: null,
+      responseMs: sourceState?.responseMs ?? null,
+      lastUrl: sourceState?.lastUrl || null,
+      lastAttemptAt: sourceState?.lastAttemptAt || null,
+      lastSuccessAt: sourceState?.lastSuccessAt || null,
+      nextCheckAt: sourceState?.nextCheckAt || null,
+      refreshMinutes: feed.refreshMinutes,
+      deferred: true,
+    },
+    operational: {
+      validators: sourceState?.validators || {},
+      lastUrl: sourceState?.lastUrl || null,
+    },
+  };
+}
+
+function retryBackoffMinutes(errorCode, failureCount) {
+  if (errorCode === "not-found") return 360;
+  if (errorCode === "blocked") return 60;
+  if (errorCode === "rate-limited") return Math.max(30, [5, 15, 30, 60, 180][Math.min(4, Math.max(0, failureCount - 1))]);
+  return [5, 15, 30, 60, 180][Math.min(4, Math.max(0, failureCount - 1))];
+}
+
+function snapshotItems(feed, currentItems, previousState, collectedAt) {
+  const oldest = collectedAt.getTime() - 72 * 60 * 60 * 1000;
+  return uniqueItems([
+    ...(Array.isArray(currentItems) ? currentItems : []),
+    ...(Array.isArray(previousState?.items) ? previousState.items : []),
+  ]
+    .filter((item) => {
+      const timestamp = Date.parse(item?.publishedAt);
+      return Number.isFinite(timestamp) && timestamp >= oldest;
+    })
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt)), Math.max(20, (Number(feed.limit) || 15) * 3));
+}
+
+function buildSourceStateUpdate(feed, rawResult, resilientResult, previousState, collectedAt) {
+  const attemptedAt = collectedAt.toISOString();
+  const healthy = Boolean(rawResult?.status?.ok);
+  const failureCount = healthy ? 0 : (Number(previousState?.failureCount) || 0) + 1;
+  const nextMinutes = healthy
+    ? Math.max(5, Number(feed.refreshMinutes) || 15)
+    : retryBackoffMinutes(rawResult?.status?.errorCode, failureCount);
+  const nextCheckAt = new Date(collectedAt.getTime() + nextMinutes * 60 * 1000).toISOString();
+  const items = snapshotItems(feed, resilientResult?.items, previousState, collectedAt);
+  const status = healthy
+    ? rawResult.status.route
+    : resilientResult?.status?.route === "cache" ? "degraded" : rawResult?.status?.errorCode || "failed";
+  return {
+    sourceId: feed.id,
+    name: feed.name,
+    region: feed.region || "Brasil",
+    status,
+    route: resilientResult?.status?.route || rawResult?.status?.route || "failed",
+    httpStatus: rawResult?.status?.httpStatus ?? previousState?.httpStatus ?? null,
+    errorCode: healthy ? null : rawResult?.status?.errorCode || "unknown",
+    errorDetail: healthy ? null : rawResult?.status?.error || "Fonte indisponível",
+    items,
+    itemCount: items.length,
+    lastUrl: rawResult?.operational?.lastUrl || previousState?.lastUrl || null,
+    validators: rawResult?.operational?.validators || previousState?.validators || {},
+    lastAttemptAt: attemptedAt,
+    lastSuccessAt: healthy ? attemptedAt : previousState?.lastSuccessAt || null,
+    nextCheckAt,
+    failureCount,
+    responseMs: rawResult?.status?.responseMs ?? previousState?.responseMs ?? null,
+    updatedAt: attemptedAt,
+  };
+}
+
+function enrichStatus(status, sourceState, feed) {
+  return {
+    ...status,
+    lastAttemptAt: status.lastAttemptAt || sourceState?.lastAttemptAt || null,
+    lastSuccessAt: status.lastSuccessAt || sourceState?.lastSuccessAt || null,
+    nextCheckAt: status.nextCheckAt || sourceState?.nextCheckAt || null,
+    failureCount: Number(sourceState?.failureCount) || 0,
+    refreshMinutes: feed.refreshMinutes,
+  };
+}
+
+export async function collectRound({
+  fetcher = fetch,
+  now = new Date(),
+  feeds = FEEDS,
+  monitoringTerms = [],
+  previousRound = null,
+  sourceStates = new Map(),
+} = {}) {
   const startedAt = Date.now();
   const collectedAt = new Date(now);
   const cutoff = new Date(collectedAt.getTime() - 24 * 60 * 60 * 1000);
-  const requestBudget = { remaining: PORTAL_SUBREQUEST_LIMIT, seenUrls: new Set() };
+  const requestBudget = { remaining: PORTAL_SUBREQUEST_LIMIT, used: 0, seenUrls: new Set() };
   const portalFetcher = sharedResponseFetcher(fetcher);
-  const [portalResults, dedicatedMonitoring] = await Promise.all([
-    Promise.all(feeds.map((feed) => collectFeed(feed, cutoff, portalFetcher, requestBudget))),
-    collectDedicatedMonitoring(monitoringTerms, cutoff, fetcher),
-  ]);
+  const portalResults = new Array(feeds.length);
+  const due = [];
+
+  feeds.forEach((feed, index) => {
+    const state = sourceStateFor(sourceStates, feed.id);
+    if (sourceIsDue(state, collectedAt)) due.push({ feed, index, state });
+    else portalResults[index] = deferredSourceResult(feed, state, cutoff);
+  });
+
+  const dueResults = await runPool(due, 5, async ({ feed, state }) => (
+    collectFeed(feed, cutoff, portalFetcher, requestBudget, state)
+  ));
+  due.forEach((entry, index) => { portalResults[entry.index] = dueResults[index]; });
+
   const resilientPortalResults = portalResults.map((result, index) => {
-    if (result.status.ok) return result;
     const feed = feeds[index];
-    const cachedItems = cachedItemsForFeed(previousRound, feed, cutoff);
-    if (!cachedItems.length) return result;
+    const state = sourceStateFor(sourceStates, feed.id);
+    if (result.status.ok) return { ...result, status: enrichStatus(result.status, state, feed) };
+    const stateItems = cachedItemsFromState(state, feed, cutoff);
+    const previousItems = stateItems.length ? [] : cachedItemsForFeed(previousRound, feed, cutoff);
+    const cachedItems = stateItems.length ? stateItems : previousItems;
+    if (!cachedItems.length) return { ...result, status: enrichStatus(result.status, state, feed) };
     return {
       items: cachedItems,
-      status: {
+      status: enrichStatus({
         ...result.status,
         ok: true,
         count: cachedItems.length,
@@ -559,12 +809,23 @@ export async function collectRound({ fetcher = fetch, now = new Date(), feeds = 
         warning: result.status.error,
         fallback: true,
         cached: true,
+        degraded: true,
         route: "cache",
-      },
+      }, state, feed),
+      operational: result.operational,
     };
   });
+
+  const sourceStateUpdates = due.map((entry, index) => {
+    const raw = dueResults[index];
+    const resilient = resilientPortalResults[entry.index];
+    return buildSourceStateUpdate(entry.feed, raw, resilient, entry.state, collectedAt);
+  });
+
   const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 435);
   const portalStatuses = resilientPortalResults.map((result) => result.status);
+
+  const dedicatedMonitoring = await collectDedicatedMonitoring(monitoringTerms, cutoff, fetcher);
 
   if (!portalItems.length) {
     return {
@@ -578,6 +839,14 @@ export async function collectRound({ fetcher = fetch, now = new Date(), feeds = 
       items: [],
       topics: [],
       dedicatedMonitoring,
+      sourceStateUpdates,
+      operational: {
+        portalConcurrency: 5,
+        portalsDue: due.length,
+        portalsDeferred: feeds.length - due.length,
+        externalPortalRequests: requestBudget.used,
+        externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+      },
     };
   }
 
@@ -604,5 +873,15 @@ export async function collectRound({ fetcher = fetch, now = new Date(), feeds = 
     items: allItems,
     topics,
     dedicatedMonitoring,
+    sourceStateUpdates,
+    operational: {
+      portalConcurrency: 5,
+      monitoringConcurrency: 3,
+      socialConcurrency: 3,
+      portalsDue: due.length,
+      portalsDeferred: feeds.length - due.length,
+      externalPortalRequests: requestBudget.used,
+      externalPortalLimit: PORTAL_SUBREQUEST_LIMIT,
+    },
   };
 }

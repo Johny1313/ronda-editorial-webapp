@@ -96,5 +96,5 @@ DROP INDEX IF EXISTS idx_intelligent_carousels_run_topic;
 DROP INDEX IF EXISTS idx_intelligent_jobs_job_id;
 DROP INDEX IF EXISTS idx_article_source_stats_updated;
 INSERT INTO app_state (key, value, updated_at)
-VALUES ('schema_version', '2.5.1', CURRENT_TIMESTAMP)
+VALUES ('schema_version', '2.5.0', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
