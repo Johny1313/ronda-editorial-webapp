@@ -37,7 +37,7 @@ import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import { UI_ASSETS } from "./ui.generated.js";
 
-const VERSION = "2.4.2";
+const VERSION = "2.4.3";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {

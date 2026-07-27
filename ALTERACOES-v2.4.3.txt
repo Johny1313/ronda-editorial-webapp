@@ -1,0 +1,42 @@
+RONDA EDITORIAL v2.4.3 — AJUSTE DO CATÁLOGO DE PORTAIS
+
+ALTERAÇÕES PRINCIPAIS
+
+1. Portais removidos
+- Hypeness foi removido porque o próprio site informa o encerramento das atividades.
+- Contigo! foi retirado da ronda diária porque não apresenta publicação atual confiável para a janela editorial.
+- O catálogo passa de 50 para 48 portais: 35 do Brasil e 13 do Mundo.
+
+2. Mistérios do Mundo atualizado
+- O domínio antigo misteriosdomundo.com.br foi substituído por misteriosdomundo.org.
+- A coleta tenta primeiro https://misteriosdomundo.org/feed/.
+- Se o feed direto falhar, usa a contingência de curiosidades já compartilhada, agora filtrando o domínio atual.
+
+3. Observatório dos Famosos atualizado
+- A rota antiga observatoriodosfamosos.uol.com.br foi removida.
+- A fonte passa a buscar a seção atual hospedada em jc.uol.com.br.
+- A consulta é exclusiva para “Observatório dos Famosos”, evitando misturar todo o conteúdo do JC.
+
+4. Fontes de publicação irregular
+- Incrível.club e Observatório dos Famosos usam consultas dedicadas de até sete dias no Google Notícias.
+- Mistérios do Mundo usa feed direto no domínio novo e contingência compartilhada; Awebic permanece na contingência compartilhada.
+- Somente publicações dentro das últimas 24 horas entram na ronda principal.
+- A distribuição mantém o orçamento seguro de subrequisições do Worker.
+- Quando a fonte responde normalmente, mas não possui publicação recente, o estado é “sem novas” em vez de “falhou”.
+
+5. Interface preservada
+- O formato compacto dos chips de portais foi mantido.
+- Fontes sem publicação mostram “sem novas”.
+- O tooltip informa a janela utilizada na consulta.
+
+VALIDAÇÃO
+- Testes de catálogo atualizados para 48 portais.
+- Testes garantem a remoção de Hypeness e Contigo!.
+- Testes verificam o domínio novo de Mistérios do Mundo e a rota atual do Observatório dos Famosos.
+- Testes verificam o estado saudável sem novas publicações, preservando a janela editorial de 24 horas.
+- Bundle reconstruído e sintaxe validada.
+
+PUBLICAÇÃO
+- Substitua os arquivos da versão anterior pelo conteúdo deste ZIP.
+- Não é necessário alterar o schema do D1.
+- Mantenha os bindings DB, AI e INTELLIGENT_JOBS_QUEUE já configurados.

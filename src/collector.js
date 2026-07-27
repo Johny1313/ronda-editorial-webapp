@@ -30,9 +30,10 @@ function normalizedSite(value) {
   }
 }
 
-function googleNewsSiteSource(value, region = "Brasil", extraQuery = "") {
+function googleNewsSiteSource(value, region = "Brasil", extraQuery = "", windowDays = 2) {
   const hostname = normalizedSite(value);
-  const query = [`when:2d`, hostname ? `site:${hostname}` : "", plainText(extraQuery)].filter(Boolean).join(" ");
+  const days = Math.min(30, Math.max(1, Math.round(Number(windowDays) || 2)));
+  const query = [`when:${days}d`, hostname ? `site:${hostname}` : "", plainText(extraQuery)].filter(Boolean).join(" ");
   return googleNewsQuerySource(query, region);
 }
 
@@ -73,7 +74,7 @@ export function customSourceFeed(source) {
   });
 }
 
-function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 240 } = {}) {
+function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, sourceAliases = [], sourceDomains = [], editorialHints = [], limit = null, scanLimit = 240, emptyIsHealthy = false } = {}) {
   return Object.freeze({
     id,
     name,
@@ -82,6 +83,7 @@ function portalFeed(id, name, region, { primaryUrl = null, fallbackUrl = null, s
     directUrl: primaryUrl || null,
     limit: limit || (region === "Mundo" ? 8 : 15),
     scanLimit,
+    emptyIsHealthy: Boolean(emptyIsHealthy),
     sourceAliases: Object.freeze(sourceAliases),
     sourceDomains: Object.freeze(sourceDomains.map(normalizedSite).filter(Boolean)),
     editorialHints: Object.freeze(editorialHints),
@@ -114,21 +116,21 @@ const WORLD_DOMAINS = Object.freeze([
 const WORLD_FALLBACK = googleNewsSitesSource(WORLD_DOMAINS, "Mundo");
 
 const ENTERTAINMENT_DOMAINS = Object.freeze([
-  "portalleodias.com", "revistaquem.globo.com", "caras.com.br", "contigo.com.br", "otvfoco.com.br",
+  "portalleodias.com", "revistaquem.globo.com", "caras.com.br", "otvfoco.com.br",
   "purepeople.com.br", "areavip.com.br",
 ]);
 const ENTERTAINMENT_PORTALS_SEARCH = googleNewsSitesSource(ENTERTAINMENT_DOMAINS, "Brasil");
 const SPLASH_SEARCH = googleNewsSiteSource("uol.com.br", "Brasil", 'Splash entretenimento celebridades BBB');
-const OBSERVATORIO_SEARCH = googleNewsSitesSource(["observatoriodosfamosos.uol.com.br", "jc.uol.com.br"], "Brasil", '"Observatório dos Famosos"');
+const OBSERVATORIO_SEARCH = googleNewsSiteSource("jc.uol.com.br", "Brasil", '"Observatório dos Famosos"', 7);
 const NATELINHA_SEARCH = googleNewsSiteSource("natelinha.uol.com.br", "Brasil");
 
 const CURIOSITY_DOMAINS = Object.freeze([
-  "fatosdesconhecidos.com.br", "megacurioso.com.br", "hypeness.com.br", "incrivel.club",
-  "misteriosdomundo.com.br", "super.abril.com.br", "revistagalileu.globo.com",
-  "segredosdomundo.r7.com", "awebic.com.br",
+  "fatosdesconhecidos.com.br", "megacurioso.com.br", "misteriosdomundo.org", "super.abril.com.br",
+  "revistagalileu.globo.com", "segredosdomundo.r7.com", "awebic.com.br",
 ]);
 const CURIOSITY_PORTALS_SEARCH = googleNewsSitesSource(CURIOSITY_DOMAINS, "Brasil");
 const CANALTECH_CURIOSIDADES_SEARCH = googleNewsSiteSource("canaltech.com.br", "Brasil", "curiosidades ciência");
+const INCRIVEL_SEARCH = googleNewsSiteSource("incrivel.club", "Brasil", "", 7);
 
 export const FEEDS = Object.freeze([
   // Brasil — portais gerais. O segundo endereço é um fallback agregado e compartilhado.
@@ -155,22 +157,20 @@ export const FEEDS = Object.freeze([
   sharedGooglePortalFeed("leo-dias", "LeoDias", ENTERTAINMENT_PORTALS_SEARCH, ["LeoDias", "Portal LeoDias", "Leo Dias"], ["portalleodias.com"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("quem", "Quem", ENTERTAINMENT_PORTALS_SEARCH, ["Quem", "Revista Quem"], ["revistaquem.globo.com"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("caras-brasil", "Caras Brasil", ENTERTAINMENT_PORTALS_SEARCH, ["Caras Brasil", "CARAS Brasil", "Caras"], ["caras.com.br"], ["Fofoca e Celebridades"]),
-  sharedGooglePortalFeed("contigo", "Contigo!", ENTERTAINMENT_PORTALS_SEARCH, ["Contigo!", "Contigo"], ["contigo.com.br"], ["Fofoca e Celebridades"]),
   sharedGooglePortalFeed("tv-foco", "TV Foco", ENTERTAINMENT_PORTALS_SEARCH, ["TV Foco", "O TV Foco", "TVFoco"], ["otvfoco.com.br"], ["Entretenimento", "Reality Shows"]),
   sharedGooglePortalFeed("purepeople-brasil", "Purepeople Brasil", ENTERTAINMENT_PORTALS_SEARCH, ["Purepeople Brasil", "Purepeople"], ["purepeople.com.br"], ["Fofoca e Celebridades"]),
-  sharedGooglePortalFeed("observatorio-dos-famosos", "Observatório dos Famosos", OBSERVATORIO_SEARCH, ["Observatório dos Famosos", "Observatorio dos Famosos", "JC"], ["observatoriodosfamosos.uol.com.br", "jc.uol.com.br"], ["Fofoca e Celebridades"]),
+  portalFeed("observatorio-dos-famosos", "Observatório dos Famosos", "Brasil", { fallbackUrl: OBSERVATORIO_SEARCH, sourceAliases: ["Observatório dos Famosos", "Observatorio dos Famosos"], sourceDomains: ["jc.uol.com.br"], editorialHints: ["Fofoca e Celebridades"], scanLimit: 240, emptyIsHealthy: true }),
   sharedGooglePortalFeed("area-vip", "Área VIP", ENTERTAINMENT_PORTALS_SEARCH, ["Área VIP", "Area VIP", "Área Vip"], ["areavip.com.br"], ["Reality Shows", "Fofoca e Celebridades"]),
   sharedGooglePortalFeed("natelinha", "NaTelinha", NATELINHA_SEARCH, ["NaTelinha", "Na Telinha", "UOL"], ["natelinha.uol.com.br"], ["Reality Shows", "Entretenimento"]),
   sharedGooglePortalFeed("fatos-desconhecidos", "Fatos Desconhecidos", CURIOSITY_PORTALS_SEARCH, ["Fatos Desconhecidos"], ["fatosdesconhecidos.com.br"], ["Conteúdo Viral e Redes Sociais", "Curiosidades e Ciência Pop"]),
   sharedGooglePortalFeed("mega-curioso", "Mega Curioso", CURIOSITY_PORTALS_SEARCH, ["Mega Curioso", "MegaCurioso"], ["megacurioso.com.br"], ["Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("hypeness", "Hypeness", CURIOSITY_PORTALS_SEARCH, ["Hypeness"], ["hypeness.com.br"], ["Conteúdo Viral e Redes Sociais"]),
-  sharedGooglePortalFeed("incrivel-club", "Incrível.club", CURIOSITY_PORTALS_SEARCH, ["Incrível.club", "Incrivel.club", "Incrível Club"], ["incrivel.club"], ["Conteúdo Viral e Redes Sociais"]),
-  sharedGooglePortalFeed("misterios-do-mundo", "Mistérios do Mundo", CURIOSITY_PORTALS_SEARCH, ["Mistérios do Mundo", "Misterios do Mundo"], ["misteriosdomundo.com.br"], ["Curiosidades e Ciência Pop"]),
+  portalFeed("incrivel-club", "Incrível.club", "Brasil", { fallbackUrl: INCRIVEL_SEARCH, sourceAliases: ["Incrível.club", "Incrivel.club", "Incrível Club"], sourceDomains: ["incrivel.club"], editorialHints: ["Conteúdo Viral e Redes Sociais"], scanLimit: 240, emptyIsHealthy: true }),
+  portalFeed("misterios-do-mundo", "Mistérios do Mundo", "Brasil", { primaryUrl: "https://misteriosdomundo.org/feed/", fallbackUrl: CURIOSITY_PORTALS_SEARCH, sourceAliases: ["Mistérios do Mundo", "Misterios do Mundo"], sourceDomains: ["misteriosdomundo.org"], editorialHints: ["Curiosidades e Ciência Pop"], scanLimit: 240, emptyIsHealthy: true }),
   sharedGooglePortalFeed("canaltech-curiosidades", "Canaltech Curiosidades", CANALTECH_CURIOSIDADES_SEARCH, ["Canaltech"], ["canaltech.com.br"], ["Curiosidades e Ciência Pop"]),
   sharedGooglePortalFeed("superinteressante", "Superinteressante", CURIOSITY_PORTALS_SEARCH, ["Superinteressante", "Super Interessante"], ["super.abril.com.br"], ["Curiosidades e Ciência Pop"]),
   sharedGooglePortalFeed("revista-galileu", "Revista Galileu", CURIOSITY_PORTALS_SEARCH, ["Galileu", "Revista Galileu"], ["revistagalileu.globo.com"], ["Curiosidades e Ciência Pop"]),
   sharedGooglePortalFeed("segredos-do-mundo", "Segredos do Mundo", CURIOSITY_PORTALS_SEARCH, ["Segredos do Mundo", "R7.com", "R7"], ["segredosdomundo.r7.com"], ["Curiosidades e Ciência Pop"]),
-  sharedGooglePortalFeed("awebic", "Awebic", CURIOSITY_PORTALS_SEARCH, ["Awebic"], ["awebic.com.br"], ["Curiosidades e Ciência Pop", "Conteúdo Viral e Redes Sociais"]),
+  portalFeed("awebic", "Awebic", "Brasil", { fallbackUrl: CURIOSITY_PORTALS_SEARCH, sourceAliases: ["Awebic"], sourceDomains: ["awebic.com.br"], editorialHints: ["Curiosidades e Ciência Pop"], scanLimit: 500, emptyIsHealthy: true }),
 
   // Mundo — feeds oficiais com fallback agregado por domínio.
   portalFeed("bbc", "BBC News", "Mundo", { primaryUrl: "https://feeds.bbci.co.uk/news/world/rss.xml", fallbackUrl: WORLD_FALLBACK, sourceAliases: ["BBC", "BBC News"], sourceDomains: ["bbc.com"] }),
@@ -275,16 +275,23 @@ export async function decodeFeedResponse(response) {
 
 export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget = null) {
   const errors = [];
+  let successfulResponses = 0;
+  const effectiveCutoff = cutoff;
+  const windowHours = 24;
   for (let index = 0; index < feed.urls.length; index += 1) {
     const url = feed.urls[index];
     try {
       reserveExternalRequest(requestBudget, url);
       const response = await fetchWithTimeout(url, fetcher);
+      successfulResponses += 1;
       const xml = await decodeFeedResponse(response);
       const direct = Boolean(feed.directUrl) && String(url) === String(feed.directUrl);
       const parseConfiguration = direct ? { ...feed, sourceAliases: [], sourceDomains: [] } : feed;
-      const items = parseFeed(xml, parseConfiguration, cutoff, Number(feed.limit) || 15);
-      if (!items.length) throw new Error("Feed sem conteúdo válido nas últimas 24 horas");
+      const items = parseFeed(xml, parseConfiguration, effectiveCutoff, Number(feed.limit) || 15);
+      if (!items.length) {
+        errors.push(`Sem conteúdo válido nas últimas ${windowHours} horas`);
+        continue;
+      }
       return {
         items: items.map((item) => ({ ...item, collectionRoute: direct ? "direct" : "fallback" })),
         status: {
@@ -299,11 +306,31 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
           cached: false,
           route: direct ? "direct" : "fallback",
           attempts: index + 1,
+          windowHours,
         },
       };
     } catch (error) {
       errors.push(compactError(error));
     }
+  }
+  if (successfulResponses > 0 && feed.emptyIsHealthy) {
+    return {
+      items: [],
+      status: {
+        id: feed.id,
+        name: feed.name,
+        region: feed.region || "Brasil",
+        ok: true,
+        count: 0,
+        error: null,
+        warning: [...new Set(errors)].filter((message) => !message.startsWith("Sem conteúdo válido")).slice(0, 2).join(" | ") || null,
+        fallback: false,
+        cached: false,
+        route: "no-new",
+        attempts: feed.urls.length,
+        windowHours,
+      },
+    };
   }
   return {
     items: [],
@@ -319,6 +346,7 @@ export async function collectFeed(feed, cutoff, fetcher = fetch, requestBudget =
       cached: false,
       route: "failed",
       attempts: feed.urls.length,
+      windowHours,
     },
   };
 }

@@ -8,11 +8,11 @@ const fallbackXml = `<rss><channel>
   <item><title>Plano de mobilidade urbana é anunciado pela prefeitura</title><link>https://portal.test/b</link><pubDate>Wed, 22 Jul 2026 11:45:00 GMT</pubDate></item>
 </channel></rss>`;
 
-test("catálogo contém 37 portais do Brasil e 13 do Mundo", () => {
-  assert.equal(FEEDS.length, 50);
-  assert.deepEqual(FEED_COUNTS, { Brasil: 37, Mundo: 13, total: 50 });
-  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 50);
-  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 50);
+test("catálogo contém 35 portais do Brasil e 13 do Mundo", () => {
+  assert.equal(FEEDS.length, 48);
+  assert.deepEqual(FEED_COUNTS, { Brasil: 35, Mundo: 13, total: 48 });
+  assert.equal(new Set(FEEDS.map((feed) => feed.id)).size, 48);
+  assert.equal(new Set(FEEDS.map((feed) => feed.name)).size, 48);
   assert.ok(FEEDS.every((feed) => feed.canonicalSource && feed.urls.length >= 1));
   assert.ok(FEEDS.some((feed) => feed.name === "Metrópoles"));
   assert.ok(FEEDS.some((feed) => feed.name === "Canaltech"));
@@ -22,6 +22,31 @@ test("catálogo contém 37 portais do Brasil e 13 do Mundo", () => {
   assert.ok(FEEDS.some((feed) => feed.name === "LeoDias"));
   assert.ok(FEEDS.some((feed) => feed.name === "Superinteressante"));
   assert.ok(FEEDS.some((feed) => feed.name === "Awebic"));
+  assert.ok(!FEEDS.some((feed) => feed.name === "Hypeness"));
+  assert.ok(!FEEDS.some((feed) => feed.name === "Contigo!"));
+  const misterios = FEEDS.find((feed) => feed.id === "misterios-do-mundo");
+  assert.deepEqual(misterios.sourceDomains, ["misteriosdomundo.org"]);
+  assert.equal(misterios.directUrl, "https://misteriosdomundo.org/feed/");
+  const observatorio = FEEDS.find((feed) => feed.id === "observatorio-dos-famosos");
+  assert.deepEqual(observatorio.sourceDomains, ["jc.uol.com.br"]);
+  assert.ok(observatorio.urls[0].includes("site%3Ajc.uol.com.br"));
+});
+
+test("fonte irregular acessível sem publicação recente não é marcada como falha", async () => {
+  const feed = {
+    id: "irregular",
+    name: "Fonte irregular",
+    region: "Brasil",
+    canonicalSource: true,
+    emptyIsHealthy: true,
+    urls: ["https://irregular.test/rss"],
+  };
+  const xml = `<rss><channel><item><title>Conteúdo antigo</title><link>https://irregular.test/antigo</link><pubDate>Wed, 01 Jul 2026 11:50:00 GMT</pubDate></item></channel></rss>`;
+  const result = await collectFeed(feed, new Date("2026-07-21T12:00:00Z"), async () => new Response(xml, { headers: { "Content-Type": "application/rss+xml" } }));
+  assert.equal(result.status.ok, true);
+  assert.equal(result.status.count, 0);
+  assert.equal(result.status.route, "no-new");
+  assert.equal(result.status.windowHours, 24);
 });
 
 test("reaproveita uma consulta agregada para vários portais sem misturar as fontes", async () => {

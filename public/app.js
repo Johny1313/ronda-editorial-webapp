@@ -110,6 +110,7 @@ function sourceRegion(source) {
 function sourceRouteLabel(source, compact = false) {
   if (source?.cached || source?.route === "cache") return compact ? "cache" : "cache recente";
   if (source?.fallback || source?.route === "fallback") return compact ? "fb" : "fallback";
+  if (source?.route === "no-new") return compact ? "sem novas" : "sem novas publicações";
   if (source?.ok && Number(source?.count) > 0) return compact ? "dir" : "coleta direta";
   return "";
 }
@@ -120,9 +121,9 @@ function portalCardMarkup(source) {
   const route = sourceRouteLabel(source);
   const detail = available
     ? `${Number(source.count)} ${Number(source.count) === 1 ? "conteúdo recolhido" : "conteúdos recolhidos"}${route ? ` · ${route}` : ""}`
-    : source.ok ? "Nenhuma notícia recente" : "Fonte indisponível nesta ronda";
+    : source.ok ? `Nenhuma notícia recente${source.windowHours ? ` nas últimas ${source.windowHours} horas` : ""}` : "Fonte indisponível nesta ronda";
   const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
-  return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : "Sem coleta"}</span></button>`;
+  return `<button class="portal-card ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button"><span class="portal-icon">${escapeHtml(sourceInitials(source.name))}</span><span class="portal-card-copy"><strong>${escapeHtml(source.name)}</strong><small>${escapeHtml(detail)}</small></span><span class="portal-state">${available ? "Ver notícias →" : source.ok ? "Sem novas" : "Sem coleta"}</span></button>`;
 }
 
 function renderPortalCards() {
@@ -161,8 +162,8 @@ function renderSourceHealth(message = "", warning = false) {
       const available = source.ok && Number(source.count) > 0;
       const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
       const route = sourceRouteLabel(source);
-      const title = source.error || (available ? `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${route ? ` por ${route}` : ""}${source.warning ? `. Aviso: ${source.warning}` : ""}` : `Nenhum conteúdo recente de ${source.name}`);
-      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "0" : "falhou";
+      const title = source.error || (available ? `Mostrar somente os ${source.count} conteúdos recolhidos de ${source.name}${route ? ` por ${route}` : ""}${source.warning ? `. Aviso: ${source.warning}` : ""}` : `Nenhum conteúdo recente de ${source.name}${source.windowHours ? ` nas últimas ${source.windowHours} horas` : ""}`);
+      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "sem novas" : "falhou";
       const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}` : "error";
       return `<button class="health-chip ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(title)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${escapeHtml(status)}</button>`;
     }).join("")}`;

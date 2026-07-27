@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.4.2 — PUBLICAÇÃO SEM NODE NO COMPUTADOR
+RONDA EDITORIAL v2.4.3 — PUBLICAÇÃO SEM NODE NO COMPUTADOR
 ==========================================================
 
 Use GitHub + Cloudflare Workers Builds. Esse fluxo não exige Node.js instalado

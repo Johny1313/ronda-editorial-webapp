@@ -24,13 +24,12 @@ async function mockExternalSource(request) {
         { headers: { "Content-Type": "application/rss+xml; charset=utf-8" } },
       );
     }
-    if (["portalleodias.com", "uol.com.br/splash", "fatosdesconhecidos.com.br", "canaltech.com.br/curiosidades"].some((site) => query.includes(site))) {
+    if (["portalleodias.com", "uol.com.br", "jc.uol.com.br", "fatosdesconhecidos.com.br", "canaltech.com.br", "incrivel.club", "misteriosdomundo.org", "awebic.com.br"].some((site) => query.includes(site))) {
       const portals = [
         ["UOL", "uol-splash", "Famosa comenta os bastidores de novo reality"],
         ["LeoDias", "leo-dias", "Influenciadora confirma novo relacionamento"],
         ["Quem", "quem", "Atriz fala sobre casamento e carreira"],
         ["CARAS Brasil", "caras-brasil", "Celebridade revela novidade da vida pessoal"],
-        ["Contigo!", "contigo", "Artista comenta polêmica nas redes"],
         ["TV Foco", "tv-foco", "Programa de televisão anuncia nova temporada"],
         ["Purepeople", "purepeople", "Famosos prestigiam evento em São Paulo"],
         ["Observatório dos Famosos", "observatorio", "Cantora responde rumores sobre namoro"],
@@ -38,7 +37,6 @@ async function mockExternalSource(request) {
         ["NaTelinha", "natelinha", "Reality prepara nova prova do líder"],
         ["Fatos Desconhecidos", "fatos", "Vídeo curioso viraliza nas redes sociais"],
         ["Mega Curioso", "mega-curioso", "Descoberta arqueológica surpreende cientistas"],
-        ["Hypeness", "hypeness", "Projeto criativo ganha repercussão na internet"],
         ["Incrível.club", "incrivel", "Lista de curiosidades é compartilhada por internautas"],
         ["Mistérios do Mundo", "misterios", "Fenômeno raro intriga pesquisadores"],
         ["Canaltech", "canaltech-curiosidades", "Curiosidade científica explica fenômeno digital"],
@@ -118,7 +116,7 @@ try {
   const home = await mf.dispatchFetch("http://ronda.test/");
   const html = await home.text();
   assert(home.status === 200 && html.includes("Ronda Editorial"), "Dashboard não abriu corretamente.");
-  assert(html.includes("/app.js?v=2.4.2") && html.includes("/styles.css?v=2.4.2"), "Versão dos arquivos da interface não está fixada.");
+  assert(html.includes("/app.js?v=2.4.3") && html.includes("/styles.css?v=2.4.3"), "Versão dos arquivos da interface não está fixada.");
   assert(html.includes('id="editoriaFilter"'), "Filtro de editorias não foi incorporado ao Worker.");
   assert(html.includes('data-editoria="Fofoca e Celebridades"') && html.includes('data-editoria="Reality Shows"') && html.includes('data-editoria="Curiosidades e Ciência Pop"') && html.includes('data-editoria="Luto e Obituário"'), "Novas editorias especializadas não foram incorporadas ao Worker.");
   assert(html.includes('id="carouselModal"') && html.includes('id="copyCarousel"'), "Roteiro de carrossel não foi incorporado ao Worker.");
@@ -183,8 +181,8 @@ try {
   assert(roundData.totals.items >= 10, "Ronda simulada trouxe poucos conteúdos.");
   assert(roundData.totals.socialItems >= 1, "Complemento do Bluesky não foi incorporado.");
   assert(roundData.sources.every((source) => source.ok), "Uma fonte simulada falhou.");
-  assert(roundData.sources.length === 52, "O catálogo não contém os 50 portais, o site cadastrado e o complemento Bluesky.");
-  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 38, "Catálogo Brasil e sites cadastrados incompletos.");
+  assert(roundData.sources.length === 50, "O catálogo não contém os 48 portais, o site cadastrado e o complemento Bluesky.");
+  assert(roundData.sources.filter((source) => source.region === "Brasil").length === 36, "Catálogo Brasil e sites cadastrados incompletos.");
   assert(roundData.sources.filter((source) => source.region === "Mundo").length === 13, "Catálogo Mundo incompleto.");
   assert(roundData.sources.some((source) => source.name === "Portal Local" && source.ok), "O site cadastrado não foi incorporado à ronda.");
   assert(roundData.translation?.targetLanguage === "pt-BR" && roundData.translation?.portugueseOnly, "A ronda não garantiu saída em português.");
@@ -262,7 +260,7 @@ try {
   assert(history.body.runs.some((run) => run.id === round.body.runId && run.status === "success"), "Histórico D1 não registrou a ronda.");
 
   const health = await getJson("/api/health");
-  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.4.2", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
+  assert(health.body.ready && health.body.schedulerHealthy && health.body.version === "2.4.3", "Saúde do serviço não reconheceu a ronda ou a versão publicada.");
   assert(health.body.translation?.ready && health.body.translation?.targetLanguage === "pt-BR", "Saúde não confirmou o tradutor internacional.");
   assert(health.body.intelligentReading?.ready && health.body.intelligentReading?.mode === "single-article-with-feed-fallback" && health.body.intelligentReading?.articleLimit === 1 && health.body.intelligentReading?.readingStrategy === "single-best-source-with-history" && health.body.intelligentReading?.cycleFinalization === "terminal-and-released" && health.body.intelligentReading?.nextCycleAfterTerminal === true, "Saúde não confirmou a leitura inteligente e a liberação terminal.");
   assert(health.body.backgroundMonitoring?.active && health.body.backgroundMonitoring?.browserRequired === false && health.body.backgroundMonitoring?.execution === "cloudflare-cron" && health.body.backgroundMonitoring?.customSources === 1 && health.body.backgroundMonitoring?.monitoringTerms === 1, "Saúde não confirmou a coleta em segundo plano com sites e termos.");

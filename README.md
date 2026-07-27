@@ -2,7 +2,7 @@
 
 Webapp com coleta online, painel responsivo, botão de ronda manual, agendamento a cada cinco minutos e histórico de 48 horas.
 
-**Versão 2.4.2:** corrige a apuração e a leitura inteligente. O link **Abrir para apuração** voltou a ficar visível nos cards sem conflito com os botões primários; a seleção prioriza URLs diretas do portal quando existe conteúdo utilizável; a leitura atualiza o progresso além de 18% enquanto aguarda o portal; e qualquer timeout ou bloqueio usa somente o conteúdo do feed da mesma matéria selecionada, sem trocar silenciosamente de fonte. Quando o redirecionamento revela a URL final do publisher, ela é usada no painel de apuração e o link original permanece registrado.
+**Versão 2.4.3:** atualiza o catálogo de fontes sem alterar o layout compacto. Hypeness e Contigo! foram removidos da ronda; Mistérios do Mundo passou para `misteriosdomundo.org`; Observatório dos Famosos passou a usar a seção atual do JC/UOL; Incrível.club e Observatório dos Famosos usam consultas dedicadas; Mistérios do Mundo recebe feed direto no domínio novo; e Awebic permanece em contingência compartilhada para respeitar o limite seguro de requisições. Somente itens das últimas 24 horas entram na ronda. Fontes acessíveis sem publicação recente passam a aparecer como **sem novas**, em vez de **falhou**.
 
 ## Versão GitHub recomendada
 
@@ -15,7 +15,7 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - URLs comuns usam busca por domínio no Google Notícias; URLs RSS/Atom são consultadas diretamente com fallback.
 - As rotas agregadas são compartilhadas entre portais para permanecer dentro do limite seguro de consultas externas do Worker.
 - Se uma fonte falhar temporariamente, a ronda pode reutilizar somente itens da última coleta válida que ainda estejam dentro das 24 horas, marcados como `cache`.
-- O painel usa os estados `dir` (direto), `fb` (fallback), `cache` e `falhou`.
+- O painel usa os estados `dir` (direto), `fb` (fallback), `cache`, `sem novas` e `falhou`.
 - Aba **Termos** para cadastrar até seis nomes, marcas ou assuntos de acompanhamento exclusivo.
 - Notícias encontradas por termos são armazenadas em `dedicatedMonitoring` e nunca entram nos itens ou assuntos da Ronda principal.
 - Termos pausados ou removidos deixam de ser buscados e seus resultados ficam ocultos.
@@ -23,15 +23,15 @@ Este pacote está preparado para **Cloudflare Workers Builds com GitHub**. Consu
 - Ronda manual pelo painel.
 - Ronda manual iniciada em segundo plano, com acompanhamento de progresso no painel.
 - Interface e Worker usam a mesma versão sem cache antigo; respostas antigas e novas são tratadas sem quebrar o painel.
-- 50 portais identificados individualmente, divididos em Brasil e Mundo.
+- 48 portais identificados individualmente, divididos em Brasil e Mundo.
 - Brasil — notícias gerais: G1, CNN Brasil, Folha de S.Paulo, Estadão, O Globo, Veja, Poder360, Agência Brasil, Nexo Jornal, InfoMoney, Money Times, ge, Canaltech, TecMundo, O Liberal, Metrópoles e Campo Grande News.
-- Brasil — celebridades e televisão: UOL Splash, LeoDias, Quem, Caras Brasil, Contigo!, TV Foco, Purepeople Brasil, Observatório dos Famosos, Área VIP e NaTelinha.
-- Brasil — curiosidades e ciência pop: Fatos Desconhecidos, Mega Curioso, Hypeness, Incrível.club, Mistérios do Mundo, Canaltech Curiosidades, Superinteressante, Revista Galileu, Segredos do Mundo e Awebic.
+- Brasil — celebridades e televisão: UOL Splash, LeoDias, Quem, Caras Brasil, TV Foco, Purepeople Brasil, Observatório dos Famosos, Área VIP e NaTelinha.
+- Brasil — curiosidades e ciência pop: Fatos Desconhecidos, Mega Curioso, Incrível.club, Mistérios do Mundo, Canaltech Curiosidades, Superinteressante, Revista Galileu, Segredos do Mundo e Awebic.
 - Mundo: BBC News, The Guardian, CNN, The New York Times, The Washington Post, Al Jazeera, France 24, Deutsche Welle, El País, Euronews, CBC News, ABC News Australia e Infobae.
 - Títulos, descrições e o conteúdo usado pelo roteiro das fontes do Mundo permanecem em português antes do agrupamento e do armazenamento no histórico.
 - Cache de traduções no D1: conteúdos repetidos não consomem uma nova tradução a cada ronda.
 - Proteção de idioma: se uma tradução falhar, o conteúdo afetado é omitido em vez de aparecer em inglês ou espanhol.
-- Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker.
+- Rota alternativa por Google News quando o feed principal falha, respeitando um orçamento seguro de consultas externas do Worker. Fontes de publicação irregular podem pesquisar até sete dias no Google Notícias para diagnóstico, mas somente itens das últimas 24 horas entram na ronda; ausência de publicação recente não é tratada como indisponibilidade.
 - Bluesky como complemento social; uma falha do Bluesky não interrompe os portais.
 - Agrupamento de títulos semelhantes em assuntos.
 - Classificação automática por editoria: Notícias, Política, Esportes, Entretenimento, Fofoca e Celebridades, Reality Shows, Curiosidades e Ciência Pop, Conteúdo Viral e Redes Sociais, Luto e Obituário, Segurança e Justiça, Economia, Mundo, Tecnologia e Saúde.
