@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.6.0 — YouTube integrado e isolado da Ronda
+
+- Nova aba YouTube com a mesma UX da Ronda e sem gráficos.
+- Indicadores de vídeos, assuntos, canais e decisões editoriais.
+- Cards de assuntos, lista de vídeos, ranking de canais, alertas e resultados dos termos.
+- Coleta independente na Queue `ronda-editorial-youtube-jobs`.
+- Vídeos em alta do Brasil a cada 15 minutos.
+- Um termo ativo da Ronda por rotação de 30 minutos, respeitando reserva de cota.
+- Chave protegida no secret `YOUTUBE_API_KEY`.
+- Persistência no D1, cache, quota, retry, circuit breaker e Dead Letter Queue.
+- Endpoints `/api/youtube/status`, `/api/youtube/latest` e `/api/youtube/collect`.
+- Migração `0004_youtube_integration.sql`.
+- Falhas do YouTube não alteram o status nem a velocidade da Ronda de portais.
+
 ## 2.5.2 — correção do estado da ronda e resposta mais rápida
 
 - Estado `queued` antes da Queue e `running` somente no consumidor.

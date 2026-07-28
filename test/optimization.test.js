@@ -115,6 +115,7 @@ test("publicação usa assets estáticos, fila de rondas e polling condicional",
   ]);
   assert.match(wrangler, /"assets"\s*:/);
   assert.match(wrangler, /ROUND_JOBS_QUEUE/);
+  assert.match(wrangler, /YOUTUBE_JOBS_QUEUE/);
   assert.match(wrangler, /dead_letter_queue/);
   assert.match(app, /\/api\/status/);
   assert.match(app, /If-None-Match/);
@@ -125,6 +126,8 @@ test("publicação usa assets estáticos, fila de rondas e polling condicional",
   assert.match(index, /expireStaleRuns/);
   assert.match(index, /status: "queued"/);
   assert.match(index, /scheduled_round_skipped/);
+  assert.match(index, /processYouTubeQueueMessage/);
+  assert.match(index, /\/api\/youtube\/status/);
   assert.match(index, /reused: true/);
 });
 

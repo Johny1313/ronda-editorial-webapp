@@ -8,8 +8,10 @@ const packageJson = JSON.parse(await read("package.json"));
 const packageLock = JSON.parse(await read("package-lock.json"));
 const index = await read("src/index.js");
 const collector = await read("src/collector.js");
+const youtube = await read("src/youtube.js");
 const html = await read("public/index.html");
 const app = await read("public/app.js");
+const headers = await read("public/_headers");
 const wranglerText = await read("wrangler.jsonc");
 const wrangler = JSON.parse(wranglerText);
 
@@ -23,15 +25,30 @@ assert.deepEqual(wrangler.assets?.run_worker_first, ["/api/*"]);
 assert.equal(wrangler.minify, true);
 assert.equal(wrangler.keep_names, false);
 assert.match(wranglerText, /ROUND_JOBS_QUEUE/);
+assert.match(wranglerText, /YOUTUBE_JOBS_QUEUE/);
+assert.match(wranglerText, /ronda-editorial-youtube-jobs/);
 assert.match(wranglerText, /dead_letter_queue/);
 assert.match(index, /\/api\/status/);
 assert.match(index, /\/api\/sources\/diagnostics/);
+assert.match(index, /\/api\/youtube\/status/);
+assert.match(index, /\/api\/youtube\/latest/);
+assert.match(index, /\/api\/youtube\/collect/);
+assert.match(index, /processYouTubeQueueMessage/);
 assert.match(index, /activeRunStatus/);
 assert.match(index, /expireStaleRuns/);
 assert.match(index, /status: "queued"/);
 assert.match(app, /If-None-Match/);
 assert.match(app, /document\.hidden \? 5 \* 60_000 : 60_000/);
 assert.match(collector, /runPool\(due, 5/);
+assert.match(youtube, /collectYouTubeTrending/);
+assert.match(youtube, /collectYouTubeTerm/);
+assert.match(youtube, /videos:batchGetStats/);
+assert.match(html, /id="navYouTube"/);
+assert.match(html, /id="youtubeView"/);
+assert.match(headers, /i\.ytimg\.com/);
+assert.doesNotMatch(html, /<canvas|youtube-chart|youtubeChart/i);
+assert.match(app, /loadYouTubeLatest/);
+assert.match(app, /collectYouTubeNow/);
 for (const removedId of [
   "fatos-desconhecidos", "mega-curioso", "incrivel-club", "misterios-do-mundo",
   "canaltech-curiosidades", "superinteressante", "revista-galileu",
@@ -47,6 +64,8 @@ for (const required of [
   "migrations/0001_v2_5_0.sql",
   "migrations/0002_remove_curiosity_sources.sql",
   "migrations/0003_round_state_machine.sql",
+  "migrations/0004_youtube_integration.sql",
+  "src/youtube.js",
   "public/_headers",
 ]) {
   await access(new URL(required, root));

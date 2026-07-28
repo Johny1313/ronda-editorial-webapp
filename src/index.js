@@ -36,15 +36,29 @@ import {
   touchRun,
   setMonitoringTermActive,
   updateIntelligentJob,
+  cleanupYouTubeData,
+  getLatestYouTubeCollection,
+  getLatestYouTubeTermResults,
+  getYouTubeStateValue,
+  saveYouTubeCollection,
+  saveYouTubeTermResult,
+  setYouTubeStateValue,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
+import {
+  applyYouTubeQuotaEvents,
+  collectYouTubeTerm,
+  collectYouTubeTrending,
+  defaultYouTubeQuotaState,
+  publicYouTubeQuota,
+} from "./youtube.js";
 
-const VERSION = "2.5.2";
+const VERSION = "2.6.0";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
-  "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+  "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
   "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "X-Content-Type-Options": "nosniff",
@@ -501,10 +515,233 @@ async function processRoundQueueMessage(message, env, body = {}) {
   }
 }
 
+
+const YOUTUBE_RUNTIME_STATE_KEY = "youtube_runtime";
+const YOUTUBE_QUOTA_STATE_KEY = "youtube_quota";
+const YOUTUBE_TERM_CURSOR_KEY = "youtube_term_cursor";
+
+function emptyYouTubeRuntime() {
+  return {
+    status: "idle",
+    jobId: null,
+    triggerType: null,
+    queuedAt: null,
+    startedAt: null,
+    heartbeatAt: null,
+    completedAt: null,
+    lastSuccessAt: null,
+    nextRunAt: null,
+    failureCount: 0,
+    blockedUntil: null,
+    error: null,
+  };
+}
+
+function activeYouTubeRuntime(runtime) {
+  if (!runtime || !["queued", "running"].includes(runtime.status)) return null;
+  const reference = runtime.status === "queued" ? runtime.queuedAt : runtime.heartbeatAt || runtime.startedAt;
+  const referenceMs = Date.parse(reference || "");
+  const maxAge = runtime.status === "queued" ? 2 * 60_000 : 10 * 60_000;
+  return Number.isFinite(referenceMs) && Date.now() - referenceMs <= maxAge ? runtime : null;
+}
+
+async function getYouTubeRuntime(db, { expire = true } = {}) {
+  const runtime = { ...emptyYouTubeRuntime(), ...(await getYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {})) };
+  if (!expire || !["queued", "running"].includes(runtime.status) || activeYouTubeRuntime(runtime)) return runtime;
+  const now = new Date().toISOString();
+  const expired = {
+    ...runtime,
+    status: "expired",
+    completedAt: now,
+    heartbeatAt: now,
+    error: runtime.status === "queued"
+      ? "Coleta do YouTube expirou antes de iniciar no consumidor."
+      : "Coleta do YouTube expirou por ausência de progresso.",
+  };
+  await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, expired);
+  return expired;
+}
+
+function youtubeRetryableError(error) {
+  if (error?.quota || [400, 401, 403].includes(Number(error?.status))) return false;
+  return Boolean(error?.retryable) || retryableProcessingError(error);
+}
+
+async function youtubePublicStatus(db, env) {
+  const [runtime, latest, quota, termResults] = await Promise.all([
+    getYouTubeRuntime(db),
+    getLatestYouTubeCollection(db),
+    getYouTubeStateValue(db, YOUTUBE_QUOTA_STATE_KEY, defaultYouTubeQuotaState()),
+    getLatestYouTubeTermResults(db, 12),
+  ]);
+  const active = activeYouTubeRuntime(runtime);
+  return {
+    configured: Boolean(env.YOUTUBE_API_KEY),
+    queueReady: Boolean(env.YOUTUBE_JOBS_QUEUE?.send),
+    status: active?.status || runtime.status || (latest ? "success" : "idle"),
+    running: Boolean(active),
+    jobId: active?.jobId || runtime.jobId || null,
+    queuedAt: active?.queuedAt || null,
+    startedAt: active?.startedAt || null,
+    completedAt: runtime.completedAt || null,
+    lastSuccessAt: runtime.lastSuccessAt || latest?.collectedAt || null,
+    nextRunAt: runtime.nextRunAt || null,
+    blockedUntil: runtime.blockedUntil || null,
+    failureCount: Number(runtime.failureCount) || 0,
+    error: runtime.error || null,
+    cached: Boolean(latest && runtime.status !== "success"),
+    latestCollectionId: latest?.id || null,
+    termResultCount: termResults.length,
+    quota: publicYouTubeQuota(quota),
+  };
+}
+
+async function performYouTubeCollection(env, body = {}) {
+  const db = requireDatabase(env);
+  await ensureSchema(db);
+  const lock = await acquireLock(db, "youtube-collection", 12 * 60 * 1000);
+  if (!lock) throw new HttpError(409, "Já existe uma coleta do YouTube em andamento.");
+  const now = new Date().toISOString();
+  const jobId = String(body.jobId || crypto.randomUUID());
+  const triggerType = body.triggerType === "manual" ? "manual" : "scheduled";
+  try {
+    const previousRuntime = await getYouTubeRuntime(db, { expire: false });
+    const blockedMs = Date.parse(previousRuntime.blockedUntil || "");
+    if (Number.isFinite(blockedMs) && blockedMs > Date.now()) {
+      const error = new Error(`Coleta do YouTube pausada até ${previousRuntime.blockedUntil}.`);
+      error.code = "YOUTUBE_CIRCUIT_OPEN";
+      throw error;
+    }
+    await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {
+      ...previousRuntime,
+      status: "running",
+      jobId,
+      triggerType,
+      queuedAt: body.queuedAt || previousRuntime.queuedAt || now,
+      startedAt: now,
+      heartbeatAt: now,
+      completedAt: null,
+      error: null,
+    });
+
+    const previous = await getLatestYouTubeCollection(db);
+    const region = String(env.YOUTUBE_REGION || "BR").toUpperCase();
+    const limit = Math.max(10, Math.min(50, Number(env.YOUTUBE_VIDEO_LIMIT) || 25));
+    const trending = await collectYouTubeTrending({ apiKey: env.YOUTUBE_API_KEY, region, limit, previous });
+    let quota = await getYouTubeStateValue(db, YOUTUBE_QUOTA_STATE_KEY, defaultYouTubeQuotaState());
+    quota = applyYouTubeQuotaEvents(quota, trending.quotaEvents, trending.collection.collectedAt);
+
+    let termResult = null;
+    if (body.monitorTerm) {
+      const activeTerms = await listMonitoringTerms(db, { activeOnly: true });
+      if (activeTerms.length && Number(quota.searchCalls || 0) < 80) {
+        const cursorState = await getYouTubeStateValue(db, YOUTUBE_TERM_CURSOR_KEY, { index: 0 });
+        const index = Math.max(0, Number(cursorState?.index) || 0) % activeTerms.length;
+        const selected = activeTerms[index];
+        const monitored = await collectYouTubeTerm({
+          apiKey: env.YOUTUBE_API_KEY,
+          term: selected.term,
+          termId: selected.id,
+          region,
+          hours: 24,
+          limit: 10,
+        });
+        termResult = await saveYouTubeTermResult(db, monitored.result);
+        quota = applyYouTubeQuotaEvents(quota, monitored.quotaEvents, monitored.result.collectedAt);
+        await setYouTubeStateValue(db, YOUTUBE_TERM_CURSOR_KEY, { index: (index + 1) % activeTerms.length, updatedAt: monitored.result.collectedAt });
+      }
+    }
+
+    const collection = await saveYouTubeCollection(db, trending.collection);
+    await setYouTubeStateValue(db, YOUTUBE_QUOTA_STATE_KEY, quota);
+    const completedAt = new Date().toISOString();
+    const runtime = {
+      status: "success",
+      jobId,
+      triggerType,
+      queuedAt: body.queuedAt || now,
+      startedAt: now,
+      heartbeatAt: completedAt,
+      completedAt,
+      lastSuccessAt: collection.collectedAt,
+      nextRunAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+      failureCount: 0,
+      blockedUntil: null,
+      error: null,
+      collectionId: collection.id,
+      termResultId: termResult?.id || null,
+    };
+    await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, runtime);
+    await cleanupYouTubeData(db).catch(() => null);
+    structuredLog("youtube_collection_completed", {
+      jobId,
+      triggerType,
+      videos: collection.stats?.videoCount || 0,
+      topics: collection.stats?.topicCount || 0,
+      monitoredTerm: termResult?.term || null,
+    });
+    return collection;
+  } finally {
+    await releaseLock(db, lock).catch(() => null);
+  }
+}
+
+async function processYouTubeQueueMessage(message, env, body = {}) {
+  const jobId = String(body.jobId || "").trim();
+  if (!jobId) {
+    message?.ack?.();
+    return;
+  }
+  try {
+    await performYouTubeCollection(env, body);
+    message?.ack?.();
+  } catch (error) {
+    const db = requireDatabase(env);
+    const attempts = Number(message?.attempts || 1);
+    const retryable = youtubeRetryableError(error);
+    const detail = error instanceof Error ? error.message : String(error);
+    const current = await getYouTubeRuntime(db, { expire: false }).catch(() => emptyYouTubeRuntime());
+    const failureCount = Number(current.failureCount || 0) + 1;
+    const blockedUntil = error?.quota
+      ? new Date(Date.now() + 6 * 60 * 60_000).toISOString()
+      : failureCount >= 3
+        ? new Date(Date.now() + 30 * 60_000).toISOString()
+        : null;
+    structuredLog("youtube_queue_error", { jobId, attempts, retryable, detail, code: error?.code || null });
+    if (retryable && attempts < 3 && message?.retry) {
+      await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {
+        ...current,
+        status: "queued",
+        jobId,
+        queuedAt: new Date().toISOString(),
+        heartbeatAt: new Date().toISOString(),
+        failureCount,
+        error: `Falha temporária. Nova tentativa ${attempts + 1}/3 agendada.`,
+      }).catch(() => null);
+      message.retry({ delaySeconds: 30 * attempts });
+      return;
+    }
+    const completedAt = new Date().toISOString();
+    await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {
+      ...current,
+      status: "failed",
+      jobId,
+      heartbeatAt: completedAt,
+      completedAt,
+      failureCount,
+      blockedUntil,
+      error: detail.slice(0, 500),
+      nextRunAt: blockedUntil || new Date(Date.now() + 15 * 60_000).toISOString(),
+    }).catch(() => null);
+    message?.ack?.();
+  }
+}
+
 async function processQueueBatch(batch, env) {
   for (const message of batch.messages || []) {
     const body = message?.body && typeof message.body === "object" ? message.body : {};
     if (body.type === "round") await processRoundQueueMessage(message, env, body);
+    else if (body.type === "youtube") await processYouTubeQueueMessage(message, env, body);
     else await processIntelligentQueueMessage(message, env, body);
   }
 }
@@ -677,9 +914,10 @@ async function handleApi(request, env, url, ctx) {
     const db = requireDatabase(env);
     await expireStaleRuns(db).catch(() => null);
     const dbOk = await databaseHealth(db);
-    const [latest, monitoringTerms] = await Promise.all([
+    const [latest, monitoringTerms, youtubeStatus] = await Promise.all([
       getLatestRunSummary(db, { successOnly: true }),
       listMonitoringTerms(db, { activeOnly: true }),
+      youtubePublicStatus(db, env),
     ]);
     const lastSuccessAt = latest?.completedAt ?? null;
     const ageMs = lastSuccessAt ? Date.now() - Date.parse(lastSuccessAt) : Number.POSITIVE_INFINITY;
@@ -704,6 +942,13 @@ async function handleApi(request, env, url, ctx) {
         catalogPortals: FEEDS.length,
         catalogBrazil: FEEDS.filter((feed) => feed.region === "Brasil").length,
         catalogWorld: FEEDS.filter((feed) => feed.region === "Mundo").length,
+      },
+      youtube: {
+        ...youtubeStatus,
+        scheduleMinutes: 15,
+        termRotationMinutes: 30,
+        independentQueue: true,
+        graphEnabled: false,
       },
       portalCollection: {
         strategy: "scheduled-official-feed-shared-fallback-persistent-cache",
@@ -733,7 +978,7 @@ async function handleApi(request, env, url, ctx) {
         targetLanguage: "pt-BR",
         model: TRANSLATION_MODEL,
         strategy: "cached-title-first",
-        maxNewTitlesPerRound: 48,
+        maxNewTitlesPerRound: 18,
         concurrency: 3,
       },
       intelligentReading: {
@@ -766,6 +1011,70 @@ async function handleApi(request, env, url, ctx) {
       .filter((item) => activeSourceIds.has(item.sourceId));
     const updatedAt = diagnostics.reduce((latest, item) => item.updatedAt > latest ? item.updatedAt : latest, "");
     return conditionalJson(request, { ok: true, diagnostics }, `sources-${updatedAt || "empty"}`);
+  }
+
+
+  if (url.pathname === "/api/youtube/status" && request.method === "GET") {
+    const db = requireDatabase(env);
+    const status = await youtubePublicStatus(db, env);
+    return conditionalJson(request, { ok: true, status }, `youtube-status-${status.status}-${status.jobId || "none"}-${status.lastSuccessAt || "none"}`);
+  }
+
+  if (url.pathname === "/api/youtube/latest" && request.method === "GET") {
+    const db = requireDatabase(env);
+    const [collection, termResults, status] = await Promise.all([
+      getLatestYouTubeCollection(db),
+      getLatestYouTubeTermResults(db, 12),
+      youtubePublicStatus(db, env),
+    ]);
+    return conditionalJson(request, {
+      ok: true,
+      collection,
+      termResults,
+      status,
+    }, `youtube-latest-${collection?.id || "empty"}-${termResults[0]?.id || "none"}-${status.status}`);
+  }
+
+  if (url.pathname === "/api/youtube/collect" && request.method === "POST") {
+    requireOperationAuth(request, env);
+    if (!env.YOUTUBE_API_KEY) throw new HttpError(503, "Chave da API do YouTube não configurada.", "Adicione o secret YOUTUBE_API_KEY ao Worker.");
+    const db = requireDatabase(env);
+    const runtime = await getYouTubeRuntime(db);
+    const active = activeYouTubeRuntime(runtime);
+    if (active) return json({ ok: true, queued: true, reused: true, jobId: active.jobId, status: active.status }, 202);
+    const throttle = await acquireLock(db, "youtube-manual-throttle", 60 * 1000);
+    if (!throttle) throw new HttpError(429, "Aguarde um minuto antes de executar outra coleta do YouTube.");
+    const jobId = crypto.randomUUID();
+    const queuedAt = new Date().toISOString();
+    const queued = {
+      ...runtime,
+      status: "queued",
+      jobId,
+      triggerType: "manual",
+      queuedAt,
+      startedAt: null,
+      heartbeatAt: queuedAt,
+      completedAt: null,
+      error: null,
+    };
+    await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, queued);
+    if (env.YOUTUBE_JOBS_QUEUE?.send) {
+      try {
+        await env.YOUTUBE_JOBS_QUEUE.send({ type: "youtube", jobId, triggerType: "manual", queuedAt, monitorTerm: false });
+        structuredLog("youtube_enqueued", { jobId, triggerType: "manual" });
+        return json({ ok: true, queued: true, jobId, status: "queued" }, 202);
+      } catch (error) {
+        await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {
+          ...queued,
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw new HttpError(503, "Fila do YouTube indisponível.", error instanceof Error ? error.message : String(error));
+      }
+    }
+    const collection = await performYouTubeCollection(env, { type: "youtube", jobId, triggerType: "manual", queuedAt, monitorTerm: false });
+    return json({ ok: true, queued: false, jobId, status: "success", collection });
   }
 
   if (url.pathname === "/api/monitoring-terms" && request.method === "GET") {
@@ -1026,10 +1335,14 @@ export default {
     await processQueueBatch(batch, env);
   },
 
-  async scheduled(_controller, env, ctx) {
-    const runId = crypto.randomUUID();
-    const startedAt = new Date().toISOString();
-    const task = (async () => {
+  async scheduled(controller, env, ctx) {
+    const scheduledTime = Number(controller?.scheduledTime) || Date.now();
+    const scheduledDate = new Date(scheduledTime);
+    const minute = scheduledDate.getUTCMinutes();
+
+    const roundTask = async () => {
+      const runId = crypto.randomUUID();
+      const queuedAt = new Date().toISOString();
       const db = requireDatabase(env);
       await expireStaleRuns(db).catch(() => null);
       const activeRun = freshActiveRun(await getLatestRunSummary(db).catch(() => null));
@@ -1037,18 +1350,64 @@ export default {
         structuredLog("scheduled_round_skipped", { activeRunId: activeRun.id, activeRunStartedAt: activeRun.startedAt });
         return;
       }
-      const queuedAt = startedAt;
       await queueRun(db, { id: runId, triggerType: "scheduled", queuedAt });
       if (env.ROUND_JOBS_QUEUE?.send) {
         await env.ROUND_JOBS_QUEUE.send({ type: "round", runId, triggerType: "scheduled", queuedAt });
         structuredLog("round_enqueued", { runId, triggerType: "scheduled" });
         return;
       }
-      const consumerStartedAt = new Date().toISOString();
-      await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt: consumerStartedAt });
-      await performRound(env, "scheduled", { runId, startedAt: consumerStartedAt, runStarted: true });
-    })().catch((error) => {
-      structuredLog("scheduled_round_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+      const startedAt = new Date().toISOString();
+      await markRunStarted(db, { id: runId, triggerType: "scheduled", queuedAt, startedAt });
+      await performRound(env, "scheduled", { runId, startedAt, runStarted: true });
+    };
+
+    const youtubeTask = async () => {
+      if (minute % 15 !== 0) return;
+      if (!env.YOUTUBE_API_KEY) {
+        structuredLog("youtube_scheduled_skipped", { reason: "missing_api_key" });
+        return;
+      }
+      const db = requireDatabase(env);
+      const runtime = await getYouTubeRuntime(db);
+      if (activeYouTubeRuntime(runtime)) {
+        structuredLog("youtube_scheduled_skipped", { reason: "active_job", jobId: runtime.jobId });
+        return;
+      }
+      const blockedMs = Date.parse(runtime.blockedUntil || "");
+      if (Number.isFinite(blockedMs) && blockedMs > Date.now()) {
+        structuredLog("youtube_scheduled_skipped", { reason: "circuit_open", blockedUntil: runtime.blockedUntil });
+        return;
+      }
+      const jobId = crypto.randomUUID();
+      const queuedAt = new Date().toISOString();
+      await setYouTubeStateValue(db, YOUTUBE_RUNTIME_STATE_KEY, {
+        ...runtime,
+        status: "queued",
+        jobId,
+        triggerType: "scheduled",
+        queuedAt,
+        startedAt: null,
+        heartbeatAt: queuedAt,
+        completedAt: null,
+        error: null,
+      });
+      const monitorTerm = minute % 30 === 0;
+      if (env.YOUTUBE_JOBS_QUEUE?.send) {
+        await env.YOUTUBE_JOBS_QUEUE.send({ type: "youtube", jobId, triggerType: "scheduled", queuedAt, monitorTerm });
+        structuredLog("youtube_enqueued", { jobId, triggerType: "scheduled", monitorTerm });
+        return;
+      }
+      await performYouTubeCollection(env, { type: "youtube", jobId, triggerType: "scheduled", queuedAt, monitorTerm });
+    };
+
+    const task = Promise.allSettled([roundTask(), youtubeTask()]).then((results) => {
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          structuredLog(index === 0 ? "scheduled_round_failed" : "scheduled_youtube_failed", {
+            detail: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
+      });
     });
     ctx.waitUntil(task);
   },

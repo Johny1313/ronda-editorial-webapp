@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.5.2
+## Versão 2.6.0
 
-A versão 2.5.2 corrige o ciclo da Queue, expira rondas presas e mantém o catálogo fixo de 39 portais sem canais dedicados a curiosidades.
+A versão 2.6.0 mantém as correções de estabilidade da v2.5.2 e acrescenta uma aba YouTube independente, sem gráficos e com a mesma linguagem visual da Ronda.
 
 Principais mudanças:
 
@@ -18,7 +18,12 @@ Principais mudanças:
 - endpoint leve `/api/status` e polling adaptativo no navegador;
 - migração D1 versionada e limpeza periódica, sem manutenção pesada a cada ronda;
 - retries classificados e Dead Letter Queue para rondas e leitura inteligente;
-- build validado, Worker minificado e preview para branches não produtivas.
+- build validado, Worker minificado e preview para branches não produtivas;
+- aba YouTube sem gráficos, com assuntos, vídeos, canais, alertas e resultados dos termos;
+- coleta do YouTube isolada na Queue `ronda-editorial-youtube-jobs`;
+- vídeos em alta a cada 15 minutos e rotação de um termo ativo a cada 30 minutos;
+- chave da API protegida no secret `YOUTUBE_API_KEY`;
+- quota, cache, circuit breaker e erros do YouTube separados da Ronda.
 
 
 ### Correção do processamento de rondas
@@ -66,6 +71,24 @@ agregação, classificação e gravação da ronda
         ↓
 navegador baixa /api/latest somente quando necessário
 ```
+
+O módulo YouTube usa uma terceira fila e nunca bloqueia a Ronda:
+
+```text
+Cron a cada 15 minutos ou botão Atualizar YouTube
+        ↓
+ronda-editorial-youtube-jobs
+        ↓
+videos.list mostPopular (Brasil)
+        ↓
+um termo ativo por rotação, quando houver cota
+        ↓
+estatísticas, agrupamento e decisão editorial local
+        ↓
+D1 / aba YouTube
+```
+
+A aba não possui gráficos. Ela preserva o padrão de cards, chips, filtros, indicadores e links de apuração usado pela Ronda.
 
 A leitura inteligente usa uma fila separada:
 
@@ -116,7 +139,8 @@ O `wrangler.jsonc` declara:
 - Workers AI no binding `AI`;
 - Queue de leitura inteligente;
 - Queue de rondas;
-- Dead Letter Queue para ambas;
+- Queue independente do YouTube;
+- Dead Letter Queue para as três filas;
 - Cron a cada cinco minutos;
 - logs estruturados e traces;
 - minificação antes do upload.
@@ -140,7 +164,7 @@ Branches diferentes de `main` geram preview sem promover automaticamente a vers�
 
 ## Migração do D1
 
-A aplicação possui migrações versionadas até `0003_round_state_machine.sql`. O deploy do Worker não executa migrations automaticamente. Para aplicar todas as migrações pendentes pelo terminal:
+A aplicação possui migrações versionadas até `0004_youtube_integration.sql`. O deploy do Worker não executa migrations automaticamente. Para aplicar todas as migrações pendentes pelo terminal:
 
 ```bash
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
@@ -182,6 +206,9 @@ npm run deploy:dry
 | `/api/history` | GET | Histórico das últimas 48 horas |
 | `/api/sources/diagnostics` | GET | Diagnóstico persistente de cada fonte |
 | `/api/monitoring-terms` | GET/POST | Termos dedicados |
+| `/api/youtube/status` | GET | Estado, quota e circuito do módulo YouTube |
+| `/api/youtube/latest` | GET | Última coleta, assuntos, vídeos, canais, alertas e termos |
+| `/api/youtube/collect` | POST | Enfileira atualização manual do YouTube |
 | `/api/round` | POST | Enfileira ronda manual |
 | `/api/runs/:id` | GET | Acompanha uma ronda |
 | `/api/topics/:topicId/intelligent-carousel` | POST | Inicia ou recupera roteiro inteligente |
@@ -194,7 +221,7 @@ npm run deploy:dry
 migrations/               migrações D1
 public/                   HTML, CSS e JavaScript estáticos
 scripts/                  validação da release
-src/                      Worker e módulos de negócio
+src/                      Worker, módulos de negócio e coletor YouTube
 test/                     testes automatizados
 CHANGELOG.md               histórico consolidado
 package.json               scripts e versão oficial
@@ -202,6 +229,18 @@ package-lock.json          instalação determinística sem dependências locais
 schema.sql                 referência consolidada do banco
 wrangler.jsonc             infraestrutura e deploy
 ```
+
+## Configuração do YouTube
+
+A integração exige uma chave da YouTube Data API v3 protegida como secret do Worker:
+
+```bash
+npx --yes wrangler@4.113.0 secret put YOUTUBE_API_KEY
+```
+
+No painel Cloudflare, a mesma configuração pode ser feita em **Settings → Variables and Secrets**, criando um secret chamado `YOUTUBE_API_KEY`. Nunca grave a chave no GitHub, no HTML ou em `wrangler.jsonc`.
+
+O `wrangler.jsonc` declara automaticamente a Queue `ronda-editorial-youtube-jobs` e sua Dead Letter Queue. O módulo usa região `BR`, até 25 vídeos por coleta, cache persistente e circuit breaker após falhas consecutivas. Os termos cadastrados na Ronda são reutilizados em rotação; não existe um segundo cadastro.
 
 ## Limitações reais
 

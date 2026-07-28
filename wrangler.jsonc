@@ -29,6 +29,10 @@
       {
         "binding": "ROUND_JOBS_QUEUE",
         "queue": "ronda-editorial-round-jobs"
+      },
+      {
+        "binding": "YOUTUBE_JOBS_QUEUE",
+        "queue": "ronda-editorial-youtube-jobs"
       }
     ],
     "consumers": [
@@ -49,6 +53,15 @@
         "retry_delay": 20,
         "dead_letter_queue": "ronda-editorial-round-jobs-dlq",
         "max_concurrency": 1
+      },
+      {
+        "queue": "ronda-editorial-youtube-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "retry_delay": 30,
+        "dead_letter_queue": "ronda-editorial-youtube-jobs-dlq",
+        "max_concurrency": 1
       }
     ]
   },
@@ -67,7 +80,9 @@
     }
   },
   "vars": {
-    "ENVIRONMENT": "production"
+    "ENVIRONMENT": "production",
+    "YOUTUBE_REGION": "BR",
+    "YOUTUBE_VIDEO_LIMIT": "25"
   },
   "minify": true,
   "keep_names": false

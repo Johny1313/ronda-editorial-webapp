@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.5.2">
+  <link rel="stylesheet" href="/styles.css?v=2.6.0">
 </head>
 <body>
   <main class="app">
@@ -16,6 +16,7 @@
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
         <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
+        <button class="nav" id="navYouTube" type="button"><span class="nav-icon">Y</span><span>YouTube</span></button>
         <button class="nav" id="navHistory" type="button"><span class="nav-icon">H</span><span>Histórico</span></button>
       </nav>
       <button class="nav settings" id="openSettings" type="button"><span class="nav-icon">·</span><span>Ajustes</span></button>
@@ -58,6 +59,73 @@
         <div class="dedicated-heading"><div><p class="eyebrow">Última ronda automática</p><h3>Notícias dos termos ativos</h3></div><span id="dedicatedMonitoringMeta">Nenhum resultado</span></div>
         <div class="term-filters" id="monitoringTermFilters"></div>
         <div class="dedicated-news-list" id="dedicatedNewsList"><div class="empty"><strong>Nenhum termo monitorado</strong><span>Cadastre um termo para iniciar a busca dedicada.</span></div></div>
+      </section>
+
+      <section class="youtube-view" id="youtubeView" hidden aria-labelledby="youtubeTitle">
+        <div class="management-heading youtube-heading">
+          <div><p class="eyebrow">Radar audiovisual</p><h2 id="youtubeTitle">YouTube Editorial</h2><p>Vídeos, assuntos, canais e termos monitorados em uma coleta independente da Ronda de portais.</p></div>
+          <div class="youtube-heading-actions"><button class="secondary" id="collectYouTube" type="button">↻ Atualizar YouTube</button><span class="youtube-module-status" id="youtubeModuleStatus">Verificando configuração</span></div>
+        </div>
+        <div class="background-note youtube-note"><strong>Coleta isolada</strong><span>O YouTube usa fila própria a cada 15 minutos. Uma falha nesta aba não interfere na Ronda, nos Termos ou na leitura inteligente.</span></div>
+
+        <section class="summary youtube-summary" aria-label="Resumo do YouTube">
+          <div><strong id="youtubeSummaryVideos">0</strong><span>vídeos analisados</span><small>última coleta</small></div>
+          <div><strong id="youtubeSummaryTopics">0</strong><span>assuntos ativos</span><small>agrupamento editorial</small></div>
+          <div><strong id="youtubeSummaryChannels">0</strong><span>canais distintos</span><small>amostra atual</small></div>
+          <div class="attention"><strong id="youtubeSummaryUrgent">0</strong><span>pautar agora</span><small>sinal de alta atenção</small></div>
+        </section>
+
+        <section class="controls youtube-controls" aria-label="Filtros do YouTube">
+          <label class="search"><span>⌕</span><input id="youtubeSearchInput" placeholder="Buscar assunto, vídeo ou canal" aria-label="Buscar assunto, vídeo ou canal"></label>
+          <div class="segmented" id="youtubePeriodFilter" aria-label="Período dos vídeos">
+            <button data-value="6" type="button">6h</button><button class="active" data-value="24" type="button">24h</button><button data-value="168" type="button">7 dias</button>
+          </div>
+          <div class="segmented" id="youtubeDecisionFilter" aria-label="Decisão editorial">
+            <button class="active" data-value="Todos" type="button">Todos</button><button data-value="Pautar agora" type="button">Pautar agora</button><button data-value="Acompanhar" type="button">Acompanhar</button><button data-value="Possível viral" type="button">Possível viral</button>
+          </div>
+        </section>
+
+        <section class="editoria-controls youtube-editoria-controls" aria-label="Filtrar YouTube por editoria">
+          <span>Editorias</span>
+          <div class="editoria-filter" id="youtubeEditoriaFilter">
+            <button class="active" data-youtube-editoria="Todas" type="button">Todas</button>
+            <button data-youtube-editoria="Notícias" type="button">Notícias</button>
+            <button data-youtube-editoria="Política" type="button">Política</button>
+            <button data-youtube-editoria="Esportes" type="button">Esportes</button>
+            <button data-youtube-editoria="Entretenimento" type="button">Entretenimento</button>
+            <button data-youtube-editoria="Tecnologia" type="button">Tecnologia</button>
+            <button data-youtube-editoria="Viral e Redes Sociais" type="button">Viral e Redes Sociais</button>
+          </div>
+        </section>
+
+        <div class="youtube-operational" id="youtubeOperational">
+          <span class="youtube-status-chip">Aguardando primeira coleta</span>
+        </div>
+
+        <div class="heading youtube-section-heading"><div><h2>Assuntos em destaque</h2><p>Agrupados por recorrência, velocidade, canais e atenção editorial</p></div><span class="last-update" id="youtubeLastUpdate">Sem coleta</span></div>
+        <section class="grid youtube-topic-grid" id="youtubeTopicsGrid" aria-live="polite"></section>
+
+        <div class="youtube-columns">
+          <section class="youtube-panel">
+            <div class="youtube-panel-head"><div><p class="eyebrow">Vídeos em atenção</p><h3>Publicações da coleta</h3></div><span id="youtubeVideoCount">0 vídeos</span></div>
+            <div class="youtube-video-list" id="youtubeVideoList"></div>
+          </section>
+          <section class="youtube-side-stack">
+            <article class="youtube-panel">
+              <div class="youtube-panel-head"><div><p class="eyebrow">Canais</p><h3>Quem está puxando audiência</h3></div></div>
+              <div class="youtube-ranking-list" id="youtubeChannelList"></div>
+            </article>
+            <article class="youtube-panel">
+              <div class="youtube-panel-head"><div><p class="eyebrow">Alertas</p><h3>Sinais editoriais</h3></div></div>
+              <div class="youtube-alert-list" id="youtubeAlertList"></div>
+            </article>
+          </section>
+        </div>
+
+        <section class="youtube-panel youtube-terms-panel">
+          <div class="youtube-panel-head"><div><p class="eyebrow">Termos da Ronda</p><h3>Resultados encontrados no YouTube</h3><p>Um termo ativo é consultado por vez, em rotação, para preservar a cota diária de busca.</p></div><span id="youtubeTermMeta">Nenhum termo coletado</span></div>
+          <div class="youtube-term-list" id="youtubeTermList"></div>
+        </section>
       </section>
 
       <div class="round-view" id="roundView">
@@ -146,6 +214,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.5.2" defer></script>
+  <script src="/app.js?v=2.6.0" defer></script>
 </body>
 </html>

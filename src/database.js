@@ -1,6 +1,6 @@
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.5.2";
+export const DATABASE_SCHEMA_VERSION = "2.6.0";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -107,6 +107,29 @@ const SCHEMA_STATEMENTS = [
   )`,
   "CREATE INDEX IF NOT EXISTS idx_source_state_next_check ON source_state(next_check_at)",
   "CREATE INDEX IF NOT EXISTS idx_source_state_status ON source_state(status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_collections (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    region TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    error TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_collections_completed ON youtube_collections(completed_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_term_results (
+    id TEXT PRIMARY KEY,
+    term_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_term_results_term ON youtube_term_results(term_id, collected_at DESC)",
+  `CREATE TABLE IF NOT EXISTS youtube_state (
+    state_key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `DELETE FROM source_state WHERE source_id IN (
     'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
     'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
@@ -918,12 +941,119 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
+    db.prepare("DELETE FROM youtube_collections WHERE completed_at < ?").bind(new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()),
+    db.prepare("DELETE FROM youtube_term_results WHERE collected_at < ?").bind(new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()),
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).bind(now, now),
   ]);
   return true;
+}
+
+
+export async function getYouTubeStateValue(db, key, fallback = null) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT value_json FROM youtube_state WHERE state_key = ? LIMIT 1").bind(String(key)).first();
+  return parseJsonObject(row?.value_json, fallback);
+}
+
+export async function setYouTubeStateValue(db, key, value) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO youtube_state (state_key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `).bind(String(key), JSON.stringify(value ?? null), now).run();
+  return value;
+}
+
+export async function saveYouTubeCollection(db, collection, { status = "success", error = null } = {}) {
+  await ensureSchema(db);
+  const completedAt = collection?.collectedAt || new Date().toISOString();
+  const id = collection?.id || crypto.randomUUID();
+  await db.prepare(`
+    INSERT INTO youtube_collections (id, status, region, collected_at, completed_at, payload_json, error)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      region = excluded.region,
+      collected_at = excluded.collected_at,
+      completed_at = excluded.completed_at,
+      payload_json = excluded.payload_json,
+      error = excluded.error
+  `).bind(
+    id,
+    status,
+    collection?.region || "BR",
+    completedAt,
+    completedAt,
+    JSON.stringify({ ...collection, id }),
+    error ? String(error).slice(0, 500) : null,
+  ).run();
+  return { ...collection, id };
+}
+
+export async function getLatestYouTubeCollection(db) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT payload_json FROM youtube_collections
+    WHERE status = 'success'
+    ORDER BY completed_at DESC
+    LIMIT 1
+  `).first();
+  return parseJsonObject(row?.payload_json, null);
+}
+
+export async function getYouTubeCollectionHistory(db, limit = 24) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(96, Number(limit) || 24));
+  const result = await db.prepare(`
+    SELECT payload_json FROM youtube_collections
+    WHERE status = 'success'
+    ORDER BY completed_at DESC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean).reverse();
+}
+
+export async function saveYouTubeTermResult(db, result) {
+  await ensureSchema(db);
+  const id = result?.id || crypto.randomUUID();
+  const collectedAt = result?.collectedAt || new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO youtube_term_results (id, term_id, term, collected_at, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, collected_at = excluded.collected_at
+  `).bind(id, result?.termId || "", result?.term || "", collectedAt, JSON.stringify({ ...result, id })).run();
+  return { ...result, id };
+}
+
+export async function getLatestYouTubeTermResults(db, limit = 12) {
+  await ensureSchema(db);
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
+  const result = await db.prepare(`
+    SELECT payload_json FROM youtube_term_results
+    WHERE id IN (
+      SELECT id FROM youtube_term_results AS latest
+      WHERE collected_at = (
+        SELECT MAX(collected_at) FROM youtube_term_results WHERE term_id = latest.term_id
+      )
+    )
+    ORDER BY collected_at DESC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean);
+}
+
+export async function cleanupYouTubeData(db, { collectionDays = 7, termDays = 7 } = {}) {
+  await ensureSchema(db);
+  const collectionCutoff = new Date(Date.now() - Math.max(1, Number(collectionDays) || 7) * 86_400_000).toISOString();
+  const termCutoff = new Date(Date.now() - Math.max(1, Number(termDays) || 7) * 86_400_000).toISOString();
+  await db.batch([
+    db.prepare("DELETE FROM youtube_collections WHERE completed_at < ?").bind(collectionCutoff),
+    db.prepare("DELETE FROM youtube_term_results WHERE collected_at < ?").bind(termCutoff),
+  ]);
 }
 
 export async function databaseHealth(db) {
