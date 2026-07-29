@@ -9,6 +9,11 @@ import {
   normalizeYouTubeVideo,
   publicYouTubeQuota,
 } from "../src/youtube.js";
+import {
+  compactYouTubeCollectionForStorage,
+  compactYouTubeTermResultForStorage,
+  isD1StorageLimitError,
+} from "../src/database.js";
 
 const NOW = Date.parse("2026-07-27T18:00:00Z");
 
@@ -86,4 +91,40 @@ test("controla separadamente cota de busca e cota geral", () => {
   assert.equal(quota.search.used, 1);
   assert.equal(quota.search.remaining, 99);
   assert.equal(quota.batchStats.used, 1);
+});
+
+
+test("compacta payload do YouTube antes de gravar no D1", () => {
+  const verbose = calculateYouTubeAttention(normalized.map((video) => ({
+    ...video,
+    description: "Descrição extensa ".repeat(500),
+    tags: Array.from({ length: 80 }, (_, index) => `tag-${index}`),
+  })));
+  const collection = buildYouTubeCollection(verbose, { region: "BR", collectedAt: "2026-07-27T18:00:00Z" });
+  const compact = compactYouTubeCollectionForStorage(collection);
+  assert.equal(compact.videos.length, 3);
+  assert.equal("description" in compact.videos[0], false);
+  assert.equal("tags" in compact.videos[0], false);
+  assert.ok(JSON.stringify(compact).length < JSON.stringify(collection).length / 2);
+  assert.ok(compact.topics.every((topic) => topic.videos.length <= 5));
+});
+
+test("resultado de termo armazena somente amostra compacta", () => {
+  const videos = calculateYouTubeAttention(normalized);
+  const result = compactYouTubeTermResultForStorage({
+    id: "term-1",
+    termId: "t1",
+    term: "Lula",
+    collectedAt: "2026-07-27T18:00:00Z",
+    videos: [...videos, ...videos, ...videos, ...videos],
+    summary: { videoCount: 12, views: 100, viewsPerHour: 20, comments: 5, topVideo: videos[0] },
+  });
+  assert.equal(result.videos.length, 3);
+  assert.equal(result.summary.videoCount, 12);
+  assert.equal("description" in result.summary.topVideo, false);
+});
+
+test("reconhece erro de limite de tamanho do D1", () => {
+  assert.equal(isD1StorageLimitError(new Error("D1_ERROR: Exceeded maximum DB size")), true);
+  assert.equal(isD1StorageLimitError(new Error("Network connection lost")), false);
 });

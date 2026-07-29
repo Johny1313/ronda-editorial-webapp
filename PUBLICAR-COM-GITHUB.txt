@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.6.0 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.6.1 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
@@ -22,7 +22,7 @@ CHANGELOG.md.
 ----------------------------
 Crie uma branch, por exemplo:
 
-  youtube-v2.6.0
+  youtube-v2.6.1
 
 Envie o pacote completo para essa branch. Evite Upload files em main.
 
@@ -96,7 +96,7 @@ Abra:
 
 Confirme:
 
-  version: 2.6.0
+  version: 2.6.1
   youtube.configured: true
   youtube.queueReady: true
   catalogPortals: 39
@@ -113,7 +113,7 @@ Na interface:
 
 8. PROMOVER
 -----------
-Depois do preview, abra Pull Request da branch youtube-v2.6.0 para main.
+Depois do preview, abra Pull Request da branch youtube-v2.6.1 para main.
 O merge executará o deploy de produção.
 
 9. MONITORAR
@@ -129,3 +129,10 @@ No Cloudflare, confira:
 A coleta de vídeos em alta ocorre a cada 15 minutos. Um termo ativo é consultado
 por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota ou
 API afetam somente a aba YouTube.
+
+
+Após o deploy da v2.6.1, aplique a migração:
+
+npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+
+Ela executa migrations/0005_d1_storage_guard.sql e libera espaço no D1.

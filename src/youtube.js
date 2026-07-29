@@ -66,7 +66,7 @@ async function fetchJson(url, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.6.0" },
+      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.6.1" },
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));

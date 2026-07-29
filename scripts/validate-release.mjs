@@ -43,6 +43,8 @@ assert.match(collector, /runPool\(due, 5/);
 assert.match(youtube, /collectYouTubeTrending/);
 assert.match(youtube, /collectYouTubeTerm/);
 assert.match(youtube, /videos:batchGetStats/);
+assert.match(await read("src/database.js"), /compactYouTubeCollectionForStorage/);
+assert.match(await read("src/database.js"), /emergencyDatabaseCleanup/);
 assert.match(html, /id="navYouTube"/);
 assert.match(html, /id="youtubeView"/);
 assert.match(headers, /i\.ytimg\.com/);
@@ -65,6 +67,7 @@ for (const required of [
   "migrations/0002_remove_curiosity_sources.sql",
   "migrations/0003_round_state_machine.sql",
   "migrations/0004_youtube_integration.sql",
+  "migrations/0005_d1_storage_guard.sql",
   "src/youtube.js",
   "public/_headers",
 ]) {

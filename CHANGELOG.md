@@ -1,6 +1,16 @@
 # Changelog
 
-## 2.6.0 — YouTube integrado e isolado da Ronda
+## 2.6.1 — controle de armazenamento D1
+
+- Corrige `D1_ERROR: Exceeded maximum DB size`.
+- Limita snapshots do YouTube a 48 coletas e resultados de termos a 24 registros.
+- Mantém no máximo 288 rondas finalizadas no banco principal.
+- Compacta vídeos, assuntos e canais antes da gravação, removendo descrições, tags e duplicações desnecessárias.
+- Executa limpeza emergencial e repete a gravação uma única vez quando o D1 atinge o limite.
+- Reduz o cache de traduções para 14 dias e a retenção normal de rondas para 24 horas.
+- Inclui migração `0005_d1_storage_guard.sql`.
+
+## 2.6.1 — YouTube integrado e isolado da Ronda
 
 - Nova aba YouTube com a mesma UX da Ronda e sem gráficos.
 - Indicadores de vídeos, assuntos, canais e decisões editoriais.

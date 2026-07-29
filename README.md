@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.6.0
+## Versão 2.6.1
 
-A versão 2.6.0 mantém as correções de estabilidade da v2.5.2 e acrescenta uma aba YouTube independente, sem gráficos e com a mesma linguagem visual da Ronda.
+A versão 2.6.1 mantém as correções de estabilidade da v2.5.2 e acrescenta uma aba YouTube independente, sem gráficos e com a mesma linguagem visual da Ronda.
 
 Principais mudanças:
 
@@ -49,6 +49,21 @@ Principais mudanças:
 - Awebic.
 
 O portal Hypeness já não fazia parte da versão 2.5.0. Os outros nove canais foram removidos do catálogo, das rotas de fallback e dos diagnósticos ativos. A editoria “Curiosidades e Ciência Pop” permanece disponível apenas para classificar matérias desse tema publicadas pelos portais jornalísticos gerais.
+
+## Controle de armazenamento D1
+
+A versão 2.6.1 corrige o erro `D1_ERROR: Exceeded maximum DB size`. A causa era o acúmulo de payloads JSON completos da Ronda e, principalmente, do YouTube, incluindo descrições, tags e vídeos repetidos dentro de assuntos e canais.
+
+Política atual:
+
+- 48 snapshots do YouTube, equivalentes a aproximadamente 12 horas;
+- 24 resultados recentes de termos do YouTube;
+- 288 rondas finalizadas, equivalentes a aproximadamente 24 horas;
+- cache de traduções por 14 dias;
+- limpeza antes de cada gravação do YouTube;
+- limpeza emergencial e uma repetição segura quando o D1 informar limite de tamanho.
+
+A interface continua exibindo a última coleta válida e não armazena imagens no D1; apenas as URLs das miniaturas são mantidas.
 
 ## Arquitetura
 

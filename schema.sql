@@ -126,5 +126,5 @@ CREATE TABLE IF NOT EXISTS youtube_state (
   updated_at TEXT NOT NULL
 );
 INSERT INTO app_state (key, value, updated_at)
-VALUES ('schema_version', '2.6.0', CURRENT_TIMESTAMP)
+VALUES ('schema_version', '2.6.1', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;

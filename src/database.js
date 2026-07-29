@@ -1,6 +1,6 @@
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.6.0";
+export const DATABASE_SCHEMA_VERSION = "2.6.1";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -137,6 +137,175 @@ const SCHEMA_STATEMENTS = [
   )`,
 ];
 
+const STORAGE_GUARD = Object.freeze({
+  maxRuns: 288,
+  maxYouTubeCollections: 48,
+  maxYouTubeTermResults: 24,
+});
+
+export function isD1StorageLimitError(error) {
+  const text = `${error?.message || ""} ${error?.cause?.message || ""}`.toLowerCase();
+  return text.includes("exceeded maximum db size") || text.includes("maximum database size") || text.includes("maximum account storage");
+}
+
+async function emergencyCleanupRaw(db) {
+  const now = new Date().toISOString();
+  const translationCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const statements = [
+    `DELETE FROM youtube_collections
+     WHERE id NOT IN (
+       SELECT id FROM youtube_collections
+       ORDER BY completed_at DESC
+       LIMIT ${STORAGE_GUARD.maxYouTubeCollections}
+     )`,
+    `DELETE FROM youtube_term_results
+     WHERE id NOT IN (
+       SELECT id FROM youtube_term_results
+       ORDER BY collected_at DESC
+       LIMIT ${STORAGE_GUARD.maxYouTubeTermResults}
+     )`,
+    `DELETE FROM runs
+     WHERE status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status NOT IN ('queued', 'running')
+         ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
+         LIMIT ${STORAGE_GUARD.maxRuns}
+       )`,
+    `DELETE FROM intelligent_carousels WHERE expires_at < '${now}'`,
+    `DELETE FROM intelligent_jobs WHERE expires_at < '${now}'`,
+    `DELETE FROM article_read_cache WHERE expires_at < '${now}'`,
+    `DELETE FROM translation_cache WHERE updated_at < '${translationCutoff}'`,
+    `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
+  ];
+  for (const statement of statements) {
+    try { await db.prepare(statement).run(); } catch {}
+  }
+}
+
+export async function emergencyDatabaseCleanup(db) {
+  if (!db) return false;
+  await emergencyCleanupRaw(db);
+  return true;
+}
+
+function compactYouTubeVideo(video, { includeScores = true } = {}) {
+  if (!video || typeof video !== "object") return null;
+  const output = {
+    id: video.id || null,
+    rank: Number(video.rank) || 0,
+    title: String(video.title || "Sem título").slice(0, 300),
+    channel: String(video.channel || "Canal não informado").slice(0, 160),
+    channelId: String(video.channelId || "").slice(0, 120),
+    publishedAt: video.publishedAt || null,
+    ageHours: Number(video.ageHours) || 0,
+    views: Number(video.views) || 0,
+    likes: Number(video.likes) || 0,
+    comments: Number(video.comments) || 0,
+    viewsPerHour: Number(video.viewsPerHour) || 0,
+    engagementRate: Number(video.engagementRate) || 0,
+    commentRate: Number(video.commentRate) || 0,
+    thumbnail: String(video.thumbnail || "").slice(0, 500),
+    durationSeconds: Number(video.durationSeconds) || 0,
+    url: String(video.url || "").slice(0, 500),
+    attentionIndex: Number(video.attentionIndex) || 0,
+    reasons: Array.isArray(video.reasons) ? video.reasons.slice(0, 4).map((value) => String(value).slice(0, 120)) : [],
+    decision: video.decision || null,
+    decisionLevel: video.decisionLevel || null,
+    decisionReason: video.decisionReason || null,
+    movement: video.movement || null,
+    movementLabel: video.movementLabel || null,
+    deltaIndex: Number(video.deltaIndex) || 0,
+  };
+  if (includeScores) {
+    output.viewsScore = Number(video.viewsScore) || 0;
+    output.speedScore = Number(video.speedScore) || 0;
+    output.engagementScore = Number(video.engagementScore) || 0;
+    output.commentScore = Number(video.commentScore) || 0;
+    output.recencyScore = Number(video.recencyScore) || 0;
+  }
+  return output;
+}
+
+export function compactYouTubeCollectionForStorage(collection) {
+  if (!collection || typeof collection !== "object") return collection;
+  const videos = (collection.videos || []).map((video) => compactYouTubeVideo(video)).filter(Boolean).slice(0, 30);
+  const videoById = new Map(videos.map((video) => [video.id, video]));
+  const topics = (collection.topics || []).slice(0, 24).map((topic) => ({
+    id: topic.id || null,
+    rank: Number(topic.rank) || 0,
+    label: String(topic.label || "").slice(0, 220),
+    editoria: topic.editoria || "Viral e Redes Sociais",
+    attentionIndex: Number(topic.attentionIndex) || 0,
+    videoCount: Number(topic.videoCount) || 0,
+    channelCount: Number(topic.channelCount) || 0,
+    channels: Array.isArray(topic.channels) ? topic.channels.slice(0, 8).map((value) => String(value).slice(0, 160)) : [],
+    views: Number(topic.views) || 0,
+    viewsPerHour: Number(topic.viewsPerHour) || 0,
+    comments: Number(topic.comments) || 0,
+    firstPublishedAt: topic.firstPublishedAt || null,
+    latestPublishedAt: topic.latestPublishedAt || null,
+    decision: topic.decision || null,
+    decisionLevel: topic.decisionLevel || null,
+    decisionReason: topic.decisionReason || null,
+    movement: topic.movement || null,
+    movementLabel: topic.movementLabel || null,
+    deltaIndex: Number(topic.deltaIndex) || 0,
+    videos: (topic.videos || []).slice(0, 5).map((video) => {
+      const known = videoById.get(video.id);
+      return known ? compactYouTubeVideo(known, { includeScores: false }) : compactYouTubeVideo(video, { includeScores: false });
+    }).filter(Boolean),
+  }));
+  const channels = (collection.channels || []).slice(0, 12).map((channel) => ({
+    id: channel.id || null,
+    rank: Number(channel.rank) || 0,
+    channel: String(channel.channel || "").slice(0, 160),
+    videoCount: Number(channel.videoCount) || 0,
+    views: Number(channel.views) || 0,
+    viewsPerHour: Number(channel.viewsPerHour) || 0,
+    comments: Number(channel.comments) || 0,
+    attentionIndex: Number(channel.attentionIndex) || 0,
+    topVideo: channel.topVideo ? {
+      id: channel.topVideo.id || null,
+      title: String(channel.topVideo.title || "").slice(0, 300),
+      url: String(channel.topVideo.url || "").slice(0, 500),
+    } : null,
+  }));
+  return {
+    id: collection.id || null,
+    collectedAt: collection.collectedAt || null,
+    region: collection.region || "BR",
+    cached: Boolean(collection.cached),
+    videos,
+    topics,
+    channels,
+    alerts: Array.isArray(collection.alerts) ? collection.alerts.slice(0, 20) : [],
+    stats: collection.stats || {},
+  };
+}
+
+export function compactYouTubeTermResultForStorage(result) {
+  if (!result || typeof result !== "object") return result;
+  const videos = (result.videos || []).slice(0, 3).map((video) => compactYouTubeVideo(video, { includeScores: false })).filter(Boolean);
+  const topVideo = result.summary?.topVideo ? compactYouTubeVideo(result.summary.topVideo, { includeScores: false }) : videos[0] || null;
+  return {
+    id: result.id || null,
+    termId: result.termId || "",
+    term: String(result.term || "").slice(0, 160),
+    collectedAt: result.collectedAt || null,
+    region: result.region || "BR",
+    windowHours: Number(result.windowHours) || 24,
+    videos,
+    summary: {
+      videoCount: Number(result.summary?.videoCount) || videos.length,
+      views: Number(result.summary?.views) || 0,
+      viewsPerHour: Number(result.summary?.viewsPerHour) || 0,
+      comments: Number(result.summary?.comments) || 0,
+      topVideo,
+    },
+  };
+}
+
 async function currentSchemaVersion(db) {
   try {
     const row = await db.prepare("SELECT value FROM app_state WHERE key = 'schema_version' LIMIT 1").first();
@@ -164,17 +333,26 @@ async function ensureRunStateColumns(db) {
 export async function ensureSchema(db) {
   if (!db) throw new Error("Binding D1 'DB' não configurado.");
   if (initializedBindings.has(db)) return;
-  const version = await currentSchemaVersion(db);
-  if (version !== DATABASE_SCHEMA_VERSION) {
-    for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
-  }
-  await ensureRunStateColumns(db);
-  if (version !== DATABASE_SCHEMA_VERSION) {
-    const now = new Date().toISOString();
-    await db.prepare(`
-      INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', ?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).bind(DATABASE_SCHEMA_VERSION, now).run();
+  const initialize = async () => {
+    const version = await currentSchemaVersion(db);
+    if (version !== DATABASE_SCHEMA_VERSION) {
+      for (const statement of SCHEMA_STATEMENTS) await db.prepare(statement).run();
+    }
+    await ensureRunStateColumns(db);
+    if (version !== DATABASE_SCHEMA_VERSION) {
+      const now = new Date().toISOString();
+      await db.prepare(`
+        INSERT INTO app_state (key, value, updated_at) VALUES ('schema_version', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).bind(DATABASE_SCHEMA_VERSION, now).run();
+    }
+  };
+  try {
+    await initialize();
+  } catch (error) {
+    if (!isD1StorageLimitError(error)) throw error;
+    await emergencyCleanupRaw(db);
+    await initialize();
   }
   initializedBindings.add(db);
 }
@@ -373,43 +551,46 @@ export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   const totals = safePayload.totals ?? {};
   const status = safePayload.ok ? "success" : "failed";
   const payloadJson = JSON.stringify(safePayload);
-  await db.batch([
-    db
-      .prepare(`
-        INSERT INTO runs (
-          id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
-          items_count, topics_count, sources_count, social_items_count, error, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          trigger_type = excluded.trigger_type,
-          status = excluded.status,
-          queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
-          started_at = excluded.started_at,
-          heartbeat_at = excluded.heartbeat_at,
-          completed_at = excluded.completed_at,
-          items_count = excluded.items_count,
-          topics_count = excluded.topics_count,
-          sources_count = excluded.sources_count,
-          social_items_count = excluded.social_items_count,
-          error = excluded.error,
-          payload_json = excluded.payload_json
-      `)
-      .bind(
-        id,
-        triggerType,
-        status,
-        startedAt,
-        startedAt,
-        completedAt,
-        completedAt,
-        Number(totals.items) || 0,
-        Number(totals.topics) || 0,
-        Number(totals.sources) || 0,
-        Number(totals.socialItems) || 0,
-        safePayload.error || null,
-        payloadJson,
-      ),
-  ]);
+  const write = () => db.prepare(`
+    INSERT INTO runs (
+      id, trigger_type, status, queued_at, started_at, heartbeat_at, completed_at,
+      items_count, topics_count, sources_count, social_items_count, error, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      trigger_type = excluded.trigger_type,
+      status = excluded.status,
+      queued_at = COALESCE(NULLIF(runs.queued_at, ''), excluded.queued_at),
+      started_at = excluded.started_at,
+      heartbeat_at = excluded.heartbeat_at,
+      completed_at = excluded.completed_at,
+      items_count = excluded.items_count,
+      topics_count = excluded.topics_count,
+      sources_count = excluded.sources_count,
+      social_items_count = excluded.social_items_count,
+      error = excluded.error,
+      payload_json = excluded.payload_json
+  `).bind(
+    id,
+    triggerType,
+    status,
+    startedAt,
+    startedAt,
+    completedAt,
+    completedAt,
+    Number(totals.items) || 0,
+    Number(totals.topics) || 0,
+    Number(totals.sources) || 0,
+    Number(totals.socialItems) || 0,
+    safePayload.error || null,
+    payloadJson,
+  ).run();
+  try {
+    await write();
+  } catch (error) {
+    if (!isD1StorageLimitError(error)) throw error;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
   return { id, status, completedAt };
 }
 
@@ -932,17 +1113,18 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
   const lastMs = Date.parse(row?.value || "");
   if (Number.isFinite(lastMs) && nowMs - lastMs < Math.max(1, Number(intervalHours) || 12) * 60 * 60 * 1000) return false;
   const now = new Date(nowMs).toISOString();
-  const retentionCutoff = new Date(nowMs - 48 * 60 * 60 * 1000).toISOString();
-  const translationCutoff = new Date(nowMs - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const retentionCutoff = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+  const translationCutoff = new Date(nowMs - 14 * 24 * 60 * 60 * 1000).toISOString();
   await db.batch([
     db.prepare("DELETE FROM runs WHERE status IN ('success', 'failed', 'expired') AND NULLIF(completed_at, '') < ?").bind(retentionCutoff),
+    db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRuns})`),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
-    db.prepare("DELETE FROM youtube_collections WHERE completed_at < ?").bind(new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()),
-    db.prepare("DELETE FROM youtube_term_results WHERE collected_at < ?").bind(new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString()),
+    db.prepare(`DELETE FROM youtube_collections WHERE id NOT IN (SELECT id FROM youtube_collections ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeCollections})`),
+    db.prepare(`DELETE FROM youtube_term_results WHERE id NOT IN (SELECT id FROM youtube_term_results ORDER BY collected_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeTermResults})`),
     db.prepare(`
       INSERT INTO app_state (key, value, updated_at) VALUES ('last_maintenance_at', ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -970,9 +1152,11 @@ export async function setYouTubeStateValue(db, key, value) {
 
 export async function saveYouTubeCollection(db, collection, { status = "success", error = null } = {}) {
   await ensureSchema(db);
-  const completedAt = collection?.collectedAt || new Date().toISOString();
-  const id = collection?.id || crypto.randomUUID();
-  await db.prepare(`
+  await emergencyCleanupRaw(db);
+  const compact = compactYouTubeCollectionForStorage(collection);
+  const completedAt = compact?.collectedAt || new Date().toISOString();
+  const id = compact?.id || crypto.randomUUID();
+  const write = () => db.prepare(`
     INSERT INTO youtube_collections (id, status, region, collected_at, completed_at, payload_json, error)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -985,13 +1169,20 @@ export async function saveYouTubeCollection(db, collection, { status = "success"
   `).bind(
     id,
     status,
-    collection?.region || "BR",
+    compact?.region || "BR",
     completedAt,
     completedAt,
-    JSON.stringify({ ...collection, id }),
+    JSON.stringify({ ...compact, id }),
     error ? String(error).slice(0, 500) : null,
   ).run();
-  return { ...collection, id };
+  try {
+    await write();
+  } catch (writeError) {
+    if (!isD1StorageLimitError(writeError)) throw writeError;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
+  return { ...compact, id };
 }
 
 export async function getLatestYouTubeCollection(db) {
@@ -1019,14 +1210,23 @@ export async function getYouTubeCollectionHistory(db, limit = 24) {
 
 export async function saveYouTubeTermResult(db, result) {
   await ensureSchema(db);
-  const id = result?.id || crypto.randomUUID();
-  const collectedAt = result?.collectedAt || new Date().toISOString();
-  await db.prepare(`
+  await emergencyCleanupRaw(db);
+  const compact = compactYouTubeTermResultForStorage(result);
+  const id = compact?.id || crypto.randomUUID();
+  const collectedAt = compact?.collectedAt || new Date().toISOString();
+  const write = () => db.prepare(`
     INSERT INTO youtube_term_results (id, term_id, term, collected_at, payload_json)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, collected_at = excluded.collected_at
-  `).bind(id, result?.termId || "", result?.term || "", collectedAt, JSON.stringify({ ...result, id })).run();
-  return { ...result, id };
+  `).bind(id, compact?.termId || "", compact?.term || "", collectedAt, JSON.stringify({ ...compact, id })).run();
+  try {
+    await write();
+  } catch (writeError) {
+    if (!isD1StorageLimitError(writeError)) throw writeError;
+    await emergencyCleanupRaw(db);
+    await write();
+  }
+  return { ...compact, id };
 }
 
 export async function getLatestYouTubeTermResults(db, limit = 12) {
@@ -1046,14 +1246,9 @@ export async function getLatestYouTubeTermResults(db, limit = 12) {
   return (result?.results || []).map((row) => parseJsonObject(row.payload_json, null)).filter(Boolean);
 }
 
-export async function cleanupYouTubeData(db, { collectionDays = 7, termDays = 7 } = {}) {
+export async function cleanupYouTubeData(db) {
   await ensureSchema(db);
-  const collectionCutoff = new Date(Date.now() - Math.max(1, Number(collectionDays) || 7) * 86_400_000).toISOString();
-  const termCutoff = new Date(Date.now() - Math.max(1, Number(termDays) || 7) * 86_400_000).toISOString();
-  await db.batch([
-    db.prepare("DELETE FROM youtube_collections WHERE completed_at < ?").bind(collectionCutoff),
-    db.prepare("DELETE FROM youtube_term_results WHERE collected_at < ?").bind(termCutoff),
-  ]);
+  await emergencyCleanupRaw(db);
 }
 
 export async function databaseHealth(db) {
