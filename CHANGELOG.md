@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.7.0 — perfis editoriais e carrosséis flexíveis
+
+- Cadastro e login por e-mail e senha com PBKDF2 e sessões `HttpOnly`.
+- Nova aba Perfil, mantendo a linguagem visual da Ronda.
+- Biblioteca de até 8 textos/posts, limitada a 5.000 caracteres por exemplo e 30.000 por perfil.
+- Análise de tom, ritmo, títulos, subtítulos, estrutura, vocabulário e CTA com fallback heurístico.
+- O estilo não altera a apuração: o roteiro continua baseado em uma única matéria e no mapa de fatos validado.
+- Quantidade de carrossel configurável de 3 a 15 slides, mantendo 7 como padrão.
+- Preferência padrão salva por usuário e seletor disponível em cada geração.
+- Cache separado por quantidade de slides e versão do perfil de escrita.
+- Limpeza periódica de sessões expiradas.
+- Migração `0006_user_profiles_and_flexible_carousels.sql`.
+- Corrige duplicação acidental de fontes vencidas no pool da ronda e torna o cache temporal determinístico.
+
 ## 2.6.1 — controle de armazenamento D1
 
 - Corrige `D1_ERROR: Exceeded maximum DB size`.
@@ -10,7 +24,7 @@
 - Reduz o cache de traduções para 14 dias e a retenção normal de rondas para 24 horas.
 - Inclui migração `0005_d1_storage_guard.sql`.
 
-## 2.6.1 — YouTube integrado e isolado da Ronda
+## 2.6.0 — YouTube integrado e isolado da Ronda
 
 - Nova aba YouTube com a mesma UX da Ronda e sem gráficos.
 - Indicadores de vídeos, assuntos, canais e decisões editoriais.

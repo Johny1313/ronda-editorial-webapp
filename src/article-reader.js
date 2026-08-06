@@ -15,7 +15,7 @@ const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 14_000;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "facts-v3-direct-url-heartbeat";
+const CAROUSEL_PROMPT_VERSION = "facts-v4-flexible-slides-writing-profile";
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -27,15 +27,26 @@ const AGGREGATOR_HOSTS = new Set([
 
 const NOISE_PATTERN = /(ad-|ads|advert|anuncio|banner|breadcrumb|cookie|coment|comments|footer|header|menu|nav|newsletter|paywall|popup|promo|publicidade|recommend|related|share|sidebar|social|subscribe|widget)/i;
 const NOISE_SENTENCE = /(assine|aceite os cookies|continuar lendo|conteúdo patrocinado|leia também|mais lidas|publicidade|receba nossa newsletter|siga-nos|todos os direitos reservados)/i;
-const EXPECTED_SLIDES = [
-  [1, "Título principal"],
-  [2, "Contexto"],
-  [3, "Informação principal"],
-  [4, "Detalhamento"],
-  [5, "Consequência"],
-  [6, "Conclusão"],
-  [7, "CTA"],
-];
+export const MIN_CAROUSEL_SLIDES = 3;
+export const MAX_CAROUSEL_SLIDES = 15;
+export const DEFAULT_CAROUSEL_SLIDES = 7;
+
+export function carouselSlidePlan(value = DEFAULT_CAROUSEL_SLIDES) {
+  const requested = Number(value);
+  const count = Number.isInteger(requested)
+    ? Math.max(MIN_CAROUSEL_SLIDES, Math.min(MAX_CAROUSEL_SLIDES, requested))
+    : DEFAULT_CAROUSEL_SLIDES;
+  let roles;
+  if (count === 3) roles = ["Título principal", "Informação principal", "CTA"];
+  else if (count === 4) roles = ["Título principal", "Contexto", "Informação principal", "CTA"];
+  else if (count === 5) roles = ["Título principal", "Contexto", "Informação principal", "Consequência", "CTA"];
+  else if (count === 6) roles = ["Título principal", "Contexto", "Informação principal", "Detalhamento", "Conclusão", "CTA"];
+  else {
+    const details = Array.from({ length: count - 6 }, (_, index) => count === 7 ? "Detalhamento" : `Detalhamento ${index + 1}`);
+    roles = ["Título principal", "Contexto", "Informação principal", ...details, "Consequência", "Conclusão", "CTA"];
+  }
+  return roles.map((role, index) => [index + 1, role]);
+}
 
 function compact(value, limit = 300) {
   const text = plainText(value);
@@ -724,7 +735,7 @@ function fallbackFactsFromArticle(article, limit = 8) {
   return output;
 }
 
-function fallbackAnalysis(topic, articles, socialItems) {
+function fallbackAnalysis(topic, articles, socialItems, slideCount = DEFAULT_CAROUSEL_SLIDES) {
   const combined = articles.map((article) => `${article.title}. ${article.content}`).join("\n\n");
   const list = sentences(combined);
   const headline = compact(articles[0]?.title || topic?.title || "Assunto em acompanhamento", 110);
@@ -737,19 +748,23 @@ function fallbackAnalysis(topic, articles, socialItems) {
     : firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta/i, "O conteúdo coletado ainda não detalha uma repercussão consolidada.");
   const entities = heuristicEntities(`${headline}\n${combined}`);
   const facts = fallbackFactsFromArticle(articles[0]);
-  const slides = [
-    { number: 1, role: "Título principal", title: headline, subtitle: compact(whatHappened, 260) },
-    { number: 2, role: "Contexto", title: "Entenda o cenário", subtitle: context },
-    { number: 3, role: "Informação principal", title: "O que aconteceu", subtitle: whatHappened },
-    { number: 4, role: "Detalhamento", title: "Os principais detalhes", subtitle: details },
-    { number: 5, role: "Consequência", title: "Qual é o impacto", subtitle: impact },
-    { number: 6, role: "Conclusão", title: "O que fica da notícia", subtitle: compact(repercussion, 360) },
-    { number: 7, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte a matéria original e acompanhe as próximas atualizações." },
-  ].map((slide, index) => ({
+  const plan = carouselSlidePlan(slideCount);
+  const detailSentences = list.slice(3).filter(Boolean);
+  const slideForRole = (number, role, index) => {
+    const detail = detailSentences[index % Math.max(1, detailSentences.length)] || details;
+    if (role === "Título principal") return { number, role, title: headline, subtitle: compact(whatHappened, 260) };
+    if (role === "Contexto") return { number, role, title: "Entenda o cenário", subtitle: context };
+    if (role === "Informação principal") return { number, role, title: "O que aconteceu", subtitle: whatHappened };
+    if (role.startsWith("Detalhamento")) return { number, role, title: role === "Detalhamento" ? "Os principais detalhes" : `Detalhe ${role.split(" ").at(-1)}`, subtitle: compact(detail, 380) };
+    if (role === "Consequência") return { number, role, title: "Qual é o impacto", subtitle: impact };
+    if (role === "Conclusão") return { number, role, title: "O que fica da notícia", subtitle: compact(repercussion, 360) };
+    return { number, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte a matéria original e acompanhe as próximas atualizações." };
+  };
+  const slides = plan.map(([number, role], index) => slideForRole(number, role, index)).map((slide, index) => ({
     ...slide,
     body: slide.subtitle,
-    evidenceIds: facts[index === 6 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))]?.id
-      ? [facts[index === 6 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))].id]
+    evidenceIds: facts[index === plan.length - 1 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))]?.id
+      ? [facts[index === plan.length - 1 ? Math.max(0, facts.length - 1) : Math.min(index, Math.max(0, facts.length - 1))].id]
       : [],
   }));
   return {
@@ -812,28 +827,30 @@ const FACT_ANALYSIS_SCHEMA = {
   required: ["questions", "entities", "facts"],
 };
 
-const CAROUSEL_SCHEMA = {
-  type: "object",
-  properties: {
-    slides: {
-      type: "array",
-      minItems: 7,
-      maxItems: 7,
-      items: {
-        type: "object",
-        properties: {
-          number: { type: "integer" },
-          role: { type: "string" },
-          title: { type: "string" },
-          subtitle: { type: "string" },
-          evidenceIds: { type: "array", items: { type: "string" } },
+function carouselSchema(slideCount) {
+  return {
+    type: "object",
+    properties: {
+      slides: {
+        type: "array",
+        minItems: slideCount,
+        maxItems: slideCount,
+        items: {
+          type: "object",
+          properties: {
+            number: { type: "integer" },
+            role: { type: "string" },
+            title: { type: "string" },
+            subtitle: { type: "string" },
+            evidenceIds: { type: "array", items: { type: "string" } },
+          },
+          required: ["number", "role", "title", "subtitle", "evidenceIds"],
         },
-        required: ["number", "role", "title", "subtitle", "evidenceIds"],
       },
     },
-  },
-  required: ["slides"],
-};
+    required: ["slides"],
+  };
+}
 
 function normalizeList(value, limit = 10) {
   const output = [];
@@ -913,27 +930,28 @@ function normalizeFactAnalysis(value, fallback, article) {
   return { questions, entities, facts };
 }
 
-function normalizeSlides(value, fallback, facts) {
+function normalizeSlides(value, fallback, facts, slideCount = DEFAULT_CAROUSEL_SLIDES) {
   const source = value && typeof value === "object" ? value : {};
   const rawSlides = Array.isArray(source.slides) ? source.slides : [];
-  const slides = EXPECTED_SLIDES.map(([number, role], index) => {
+  const plan = carouselSlidePlan(slideCount);
+  return plan.map(([number, role], index) => {
+    const fallbackSlide = fallback.slides[index] || fallback.slides.at(-1) || {};
     const subtitle = editorialClip(
-      rawSlides[index]?.subtitle || rawSlides[index]?.body || fallback.slides[index]?.subtitle || fallback.slides[index]?.body || "",
+      rawSlides[index]?.subtitle || rawSlides[index]?.body || fallbackSlide.subtitle || fallbackSlide.body || "",
       MAX_SLIDE_SUBTITLE_CHARS,
     );
     const requestedEvidence = normalizeList(rawSlides[index]?.evidenceIds, 4);
     const evidenceIds = requestedEvidence.filter((id) => facts.some((fact) => fact.id === id));
-    const fallbackEvidence = fallback.slides[index]?.evidenceIds?.filter((id) => facts.some((fact) => fact.id === id)) || [];
+    const fallbackEvidence = fallbackSlide.evidenceIds?.filter((id) => facts.some((fact) => fact.id === id)) || [];
     return {
       number,
       role,
-      title: editorialClip(rawSlides[index]?.title || fallback.slides[index]?.title || role, MAX_SLIDE_TITLE_CHARS),
+      title: editorialClip(rawSlides[index]?.title || fallbackSlide.title || role, MAX_SLIDE_TITLE_CHARS),
       subtitle,
       body: subtitle,
       evidenceIds: evidenceIds.length ? evidenceIds : fallbackEvidence.length ? fallbackEvidence : facts[0]?.id ? [facts[0].id] : [],
     };
   });
-  return slides;
 }
 
 function validateSlides(slides, fallbackSlides, facts, article) {
@@ -1025,33 +1043,41 @@ async function runAiFactAnalysis(ai, model, topic, article, quality) {
   return safeJsonParse(response?.response ?? response?.result ?? response);
 }
 
-function carouselPrompt(topic, factAnalysis, quality) {
+function carouselPrompt(topic, factAnalysis, quality, slideCount, writingStyle = null) {
+  const plan = carouselSlidePlan(slideCount);
+  const styleText = writingStyle?.prompt || writingStyle?.instructions || "";
   return [
     `ASSUNTO: ${compact(topic?.title, 180)}`,
     `EDITORIA: ${topic?.editoria || "Notícias"}`,
     `QUALIDADE: ${quality.label}`,
+    `QUANTIDADE: ${slideCount} slides`,
+    `ESTRUTURA OBRIGATÓRIA:
+${plan.map(([number, role]) => `${number}. ${role}`).join("\n")}`,
     `MAPA DE FATOS VALIDADO:
 ${JSON.stringify(factAnalysis.facts)}`,
     `RESPOSTAS EDITORIAIS VALIDADAS:
 ${JSON.stringify(factAnalysis.questions)}`,
-    "Escreva exatamente sete slides: 1 título principal; 2 contexto; 3 informação principal; 4 detalhamento; 5 consequência; 6 conclusão; 7 CTA.",
+    styleText ? `PERFIL DE ESCRITA DO USUÁRIO:
+${String(styleText).slice(0, 3_500)}` : null,
+    `Escreva exatamente ${slideCount} slides, seguindo a ordem e os papéis acima.`,
     `Limites obrigatórios: título com até ${MAX_SLIDE_TITLE_CHARS} caracteres e subtítulo com até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres. Use no máximo duas frases por subtítulo.`,
-    "Cada slide deve trazer uma ideia diferente e indicar em evidenceIds os fatos utilizados. Não crie nomes, números, datas ou consequências fora do mapa. O CTA não pode acrescentar fatos.",
-    "Não use hashtags, emojis, sensacionalismo nem comentários fora do JSON. Depois do slide 7, encerre a geração.",
-  ].join("\n\n").slice(0, MAX_PROMPT_CHARS);
+    "O perfil de escrita orienta apenas forma, ritmo e vocabulário. Fatos, números, nomes e datas devem vir exclusivamente do mapa validado.",
+    "Cada slide deve trazer uma ideia diferente e indicar em evidenceIds os fatos utilizados. O CTA não pode acrescentar fatos.",
+    `Não use hashtags, emojis, sensacionalismo nem comentários fora do JSON. Depois do slide ${slideCount}, encerre a geração.`,
+  ].filter(Boolean).join("\n\n").slice(0, MAX_PROMPT_CHARS);
 }
 
-async function runAiCarouselGeneration(ai, model, topic, factAnalysis, quality) {
+async function runAiCarouselGeneration(ai, model, topic, factAnalysis, quality, slideCount, writingStyle = null) {
   const response = await withTimeout(ai.run(model, {
     messages: [
       {
         role: "system",
-        content: "Você é um redator de carrosséis jornalísticos em português do Brasil. Trabalhe somente com o mapa de fatos validado de UMA matéria. Produza exatamente sete slides concisos, factuais e não repetitivos. Cada slide deve conter apenas título, subtítulo e evidenceIds. Não use conhecimento externo. Retorne somente o JSON solicitado e encerre após o sétimo slide.",
+        content: `Você é um redator de carrosséis jornalísticos em português do Brasil. Trabalhe somente com o mapa de fatos validado de UMA matéria. Produza exatamente ${slideCount} slides concisos, factuais e não repetitivos. O perfil de escrita fornecido pode orientar tom e ritmo, mas nunca substituir a apuração. Cada slide deve conter apenas título, subtítulo e evidenceIds. Não use conhecimento externo. Retorne somente o JSON solicitado e encerre após o slide ${slideCount}.`,
       },
-      { role: "user", content: carouselPrompt(topic, factAnalysis, quality) },
+      { role: "user", content: carouselPrompt(topic, factAnalysis, quality, slideCount, writingStyle) },
     ],
-    response_format: { type: "json_schema", json_schema: CAROUSEL_SCHEMA },
-    max_tokens: 1_600,
+    response_format: { type: "json_schema", json_schema: carouselSchema(slideCount) },
+    max_tokens: Math.min(3_200, 900 + slideCount * 170),
     temperature: 0.12,
     top_p: 0.82,
   }), AI_ANALYSIS_TIMEOUT_MS, "A redação do carrossel excedeu o tempo limite");
@@ -1063,11 +1089,12 @@ function publicArticleRecord(article) {
   return record;
 }
 
-export function intelligentCarouselCacheKey(runId, topic) {
+export function intelligentCarouselCacheKey(runId, topic, { slideCount = DEFAULT_CAROUSEL_SLIDES, styleKey = "default" } = {}) {
   const selected = singlePortalItem(topic);
   const item = selected?.item;
+  const count = carouselSlidePlan(slideCount).length;
   const sourceFingerprint = [item?.url, item?.title, item?.publishedAt, item?.content, item?.description].filter(Boolean).join("|");
-  return `smart-v6-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${sourceFingerprint}`)}`;
+  return `smart-v7-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${count}|${styleKey || "default"}|${sourceFingerprint}`)}`;
 }
 
 export async function buildIntelligentCarousel(topic, {
@@ -1080,7 +1107,11 @@ export async function buildIntelligentCarousel(topic, {
   progressHeartbeatMs = ARTICLE_PROGRESS_HEARTBEAT_MS,
   sourceStats = null,
   readCache = null,
+  slideCount = DEFAULT_CAROUSEL_SLIDES,
+  writingStyle = null,
+  styleKey = "default",
 } = {}) {
+  const requestedSlideCount = carouselSlidePlan(slideCount).length;
   const selection = singlePortalItem(topic, sourceStats);
   const selectedItem = selection?.item;
   if (!selectedItem) throw new Error("Este assunto não possui conteúdo de portal armazenado na ronda.");
@@ -1142,7 +1173,7 @@ export async function buildIntelligentCarousel(topic, {
     throw new Error("O conteúdo disponível possui apenas título ou informação insuficiente. O carrossel foi bloqueado para evitar inferências sem evidência.");
   }
   const socialItems = [];
-  const fallback = fallbackAnalysis(topic, collected, socialItems);
+  const fallback = fallbackAnalysis(topic, collected, socialItems, requestedSlideCount);
   await reportProgress(onProgress, 70, "analysis", "Extraindo fatos e evidências da matéria selecionada.");
 
   let factAnalysis = {
@@ -1158,9 +1189,9 @@ export async function buildIntelligentCarousel(topic, {
       const generatedFacts = await runAiFactAnalysis(ai, model, topic, collected[0], quality);
       if (!generatedFacts) throw new Error("A IA não retornou um mapa de fatos válido");
       factAnalysis = normalizeFactAnalysis(generatedFacts, fallback, collected[0]);
-      await reportProgress(onProgress, 82, "analysis", "Redigindo sete slides somente com os fatos validados.");
-      const generatedSlides = await runAiCarouselGeneration(ai, model, topic, factAnalysis, quality);
-      if (!generatedSlides) throw new Error("A IA não retornou os sete slides em JSON válido");
+      await reportProgress(onProgress, 82, "analysis", `Redigindo ${requestedSlideCount} slides somente com os fatos validados.`);
+      const generatedSlides = await runAiCarouselGeneration(ai, model, topic, factAnalysis, quality, requestedSlideCount, writingStyle);
+      if (!generatedSlides) throw new Error(`A IA não retornou os ${requestedSlideCount} slides em JSON válido`);
       slideSource = generatedSlides;
       analysisMode = "ai";
     } catch (error) {
@@ -1173,8 +1204,8 @@ export async function buildIntelligentCarousel(topic, {
       slideSource = { slides: fallback.slides };
     }
   }
-  const normalizedFallbackSlides = normalizeSlides({ slides: fallback.slides }, fallback, factAnalysis.facts);
-  const normalizedSlides = normalizeSlides(slideSource, fallback, factAnalysis.facts);
+  const normalizedFallbackSlides = normalizeSlides({ slides: fallback.slides }, fallback, factAnalysis.facts, requestedSlideCount);
+  const normalizedSlides = normalizeSlides(slideSource, fallback, factAnalysis.facts, requestedSlideCount);
   const validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
   const editorialGate = {
     status: quality.copyAllowed && validated.report.passed ? "ready" : "review-required",
@@ -1224,8 +1255,10 @@ export async function buildIntelligentCarousel(topic, {
     analysisMode,
     model: analysisMode === "ai" ? model : null,
     aiError,
-    voiceTone: "Jornalístico, factual e explicativo",
-    postModel: "Instagram · 7 slides · título + subtítulo",
+    voiceTone: writingStyle?.profile?.tone || writingStyle?.tone || "Jornalístico, factual e explicativo",
+    postModel: `Instagram · ${requestedSlideCount} slides · título + subtítulo`,
+    slideCount: requestedSlideCount,
+    writingProfile: writingStyle ? { active: true, updatedAt: writingStyle.updatedAt || null, sampleCount: Number(writingStyle.sampleCount) || 0, mode: writingStyle.profile?.mode || writingStyle.mode || "custom" } : { active: false },
     promptVersion: CAROUSEL_PROMPT_VERSION,
     cycle: {
       status: "completed",
@@ -1269,6 +1302,6 @@ export async function buildIntelligentCarousel(topic, {
     editorialGate,
     verificationLinks,
     disclaimer,
-    cacheKey: intelligentCarouselCacheKey("generated", topic),
+    cacheKey: intelligentCarouselCacheKey("generated", topic, { slideCount: requestedSlideCount, styleKey }),
   };
 }

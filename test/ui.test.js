@@ -41,3 +41,22 @@ test("aba YouTube mantém a UX da Ronda e não usa gráficos", async () => {
   assert.match(app, /collectYouTubeNow/);
   assert.match(css, /\.youtube-card/);
 });
+
+test("perfil editorial permite cadastro, exemplos de escrita e slides flexíveis", async () => {
+  const [html, app, css] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="navProfile"/);
+  assert.match(html, /id="profileView"/);
+  assert.match(html, /id="registerEmail"/);
+  assert.match(html, /id="writingSampleForm"/);
+  assert.match(html, /id="carouselSlideCount"/);
+  assert.match(app, /\/api\/auth\/\$\{mode\}/);
+  assert.match(app, /\/api\/profile\/samples/);
+  assert.match(app, /slideCountOptions/);
+  assert.match(app, /slideCount/);
+  assert.match(css, /\.profile-workspace-grid/);
+  assert.match(css, /\.carousel-setup/);
+});

@@ -309,3 +309,87 @@ test("mantém progresso ativo e usa fallback somente da mesma matéria", async (
   assert.ok(progress.some((event) => event.progress > 18 && event.progress < 60));
   assert.ok(progress.some((event) => event.progress === 60));
 });
+
+test("gera quantidade flexível de slides preservando 7 como padrão", async () => {
+  const topic = {
+    id: "topic-flexivel",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [{
+      id: "a",
+      kind: "portal",
+      title: "Plano de mobilidade urbana avança",
+      content: `${longParagraph} ${longParagraph}`,
+      contentSource: "feed-content",
+      sourceName: "Portal A",
+      publishedAt: "2026-07-24T10:00:00Z",
+      url: "https://portal-a.test/flexivel",
+    }],
+  };
+  const fetcher = async () => new Response(articleHtml(topic.title), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  const compact = await buildIntelligentCarousel(topic, { fetcher, slideCount: 3 });
+  const extended = await buildIntelligentCarousel(topic, { fetcher, slideCount: 12 });
+  const standard = await buildIntelligentCarousel(topic, { fetcher });
+  assert.equal(compact.slides.length, 3);
+  assert.equal(compact.slides.at(-1).role, "CTA");
+  assert.equal(extended.slides.length, 12);
+  assert.equal(extended.slideCount, 12);
+  assert.equal(standard.slides.length, 7);
+  assert.match(extended.postModel, /12 slides/);
+});
+
+test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () => {
+  const topic = {
+    id: "topic-estilo",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [{
+      id: "a",
+      kind: "portal",
+      title: "Plano de mobilidade urbana avança",
+      content: `${longParagraph} ${longParagraph}`,
+      contentSource: "feed-content",
+      sourceName: "Portal A",
+      publishedAt: "2026-07-24T10:00:00Z",
+      url: "https://portal-a.test/estilo",
+    }],
+  };
+  const prompts = [];
+  const ai = {
+    run: async (_model, input) => {
+      prompts.push(input.messages.map((message) => message.content).join("\n"));
+      if (prompts.length === 1) {
+        return { response: {
+          questions: { whatHappened: longParagraph, who: "Prefeitura", where: "cidade", when: "2026", impact: longParagraph, repercussion: longParagraph },
+          entities: { people: [], companies: [], places: [], dates: ["2026"], themes: ["política"], keywords: ["mobilidade"] },
+          facts: [{ claim: "A prefeitura apresentou um plano de mobilidade urbana.", evidence: "A prefeitura apresentou um plano nacional de mobilidade urbana para reorganizar o transporte público", confidence: "high" }],
+        } };
+      }
+      return { response: { slides: Array.from({ length: 5 }, (_, index) => ({
+        number: index + 1,
+        role: index === 4 ? "CTA" : "Informação",
+        title: `Slide ${index + 1}`,
+        subtitle: "A prefeitura apresentou um plano de mobilidade urbana para reorganizar o transporte público.",
+        evidenceIds: ["fact-1"],
+      })) } };
+    },
+  };
+  const result = await buildIntelligentCarousel(topic, {
+    ai,
+    slideCount: 5,
+    writingStyle: {
+      prompt: "TOM: Conversacional e direto\nTÍTULOS: Ganchos curtos",
+      profile: { tone: "Conversacional e direto", mode: "heuristic" },
+      sampleCount: 3,
+      updatedAt: "2026-08-05T12:00:00Z",
+    },
+    styleKey: "user-1:style-1",
+    fetcher: async () => new Response(articleHtml(topic.title), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }),
+  });
+  assert.equal(result.slides.length, 5);
+  assert.equal(result.writingProfile.active, true);
+  assert.equal(result.writingProfile.sampleCount, 3);
+  assert.match(prompts[1], /PERFIL DE ESCRITA DO USUÁRIO/);
+  assert.match(prompts[1], /Conversacional e direto/);
+  assert.match(prompts[1], /Fatos, números, nomes e datas devem vir exclusivamente/i);
+});

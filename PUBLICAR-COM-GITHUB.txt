@@ -1,10 +1,9 @@
-RONDA EDITORIAL v2.6.1 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.7.0 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
 --------
-Publicar a Ronda com a nova aba YouTube em uma branch de preview antes de
-promover para produção. O YouTube usa uma fila própria e não interfere na Ronda.
+Publicar a Ronda com perfis editoriais, exemplos de escrita e carrosséis flexíveis em uma branch de preview antes de promover para produção. O YouTube continua em fila própria.
 
 1. SUBSTITUIR O PROJETO
 -----------------------
@@ -13,7 +12,10 @@ Substitua o conteúdo antigo pelo conteúdo completo deste pacote. Preserve:
   .github/workflows/ci.yml
   package-lock.json
   migrations/0004_youtube_integration.sql
+  migrations/0005_d1_storage_guard.sql
+  migrations/0006_user_profiles_and_flexible_carousels.sql
   src/youtube.js
+  src/profile.js
 
 Remova a pasta antiga dist e arquivos ALTERACOES-v*.txt. O histórico está em
 CHANGELOG.md.
@@ -22,7 +24,7 @@ CHANGELOG.md.
 ----------------------------
 Crie uma branch, por exemplo:
 
-  youtube-v2.6.1
+  perfil-v2.7.0
 
 Envie o pacote completo para essa branch. Evite Upload files em main.
 
@@ -78,11 +80,12 @@ Após o deploy, execute uma vez:
 
   npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
-A migração nova é:
+As migrações mais recentes são:
 
-  0004_youtube_integration.sql
+  0005_d1_storage_guard.sql
+  0006_user_profiles_and_flexible_carousels.sql
 
-Ela cria as tabelas de coletas, resultados de termos, quota e estado do YouTube.
+A migração 0006 cria usuários, sessões, exemplos de escrita e guias de estilo.
 
 7. VALIDAR O PREVIEW
 --------------------
@@ -96,7 +99,7 @@ Abra:
 
 Confirme:
 
-  version: 2.6.1
+  version: 2.7.0
   youtube.configured: true
   youtube.queueReady: true
   catalogPortals: 39
@@ -113,7 +116,7 @@ Na interface:
 
 8. PROMOVER
 -----------
-Depois do preview, abra Pull Request da branch youtube-v2.6.1 para main.
+Depois do preview, abra Pull Request da branch perfil-v2.7.0 para main.
 O merge executará o deploy de produção.
 
 9. MONITORAR
@@ -131,8 +134,22 @@ por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota
 API afetam somente a aba YouTube.
 
 
-Após o deploy da v2.6.1, aplique a migração:
+Após o deploy da v2.7.0, aplique as migrações pendentes:
 
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
-Ela executa migrations/0005_d1_storage_guard.sql e libera espaço no D1.
+O Wrangler aplicará 0005 e 0006 quando ainda estiverem pendentes. A 0006 cria os perfis editoriais e as preferências de slides.
+
+
+10. VALIDAR PERFIL E SLIDES FLEXÍVEIS
+-------------------------------------
+1. Abra a aba Perfil e crie uma conta com e-mail e senha.
+2. Adicione um texto de pelo menos 40 caracteres.
+3. Clique em Atualizar estilo.
+4. Escolha o padrão de slides entre 3 e 15.
+5. Abra um assunto da Ronda e selecione uma quantidade diferente.
+6. Confirme que o servidor devolve exatamente a quantidade escolhida.
+7. Saia e entre novamente para validar a sessão.
+
+A versão 2.7.0 não exige novo binding no Cloudflare. Os perfis usam o mesmo D1.
+Não há confirmação de e-mail nem recuperação automática de senha nesta versão.

@@ -323,7 +323,8 @@ export async function decodeFeedResponse(response) {
 }
 
 function cachedItemsFromState(sourceState, feed, cutoff, maxAgeHours = 72) {
-  const minimum = Math.max(cutoff.getTime(), Date.now() - Math.max(24, Number(maxAgeHours) || 72) * 60 * 60 * 1000);
+  const referenceTime = cutoff.getTime() + 24 * 60 * 60 * 1000;
+  const minimum = Math.max(cutoff.getTime(), referenceTime - Math.max(24, Number(maxAgeHours) || 72) * 60 * 60 * 1000);
   return uniqueItems((Array.isArray(sourceState?.items) ? sourceState.items : [])
     .filter((item) => {
       const timestamp = Date.parse(item?.publishedAt);

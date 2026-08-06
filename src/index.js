@@ -43,8 +43,47 @@ import {
   saveYouTubeCollection,
   saveYouTubeTermResult,
   setYouTubeStateValue,
+  createEditorialUser,
+  getEditorialUserByEmailKey,
+  getEditorialUserById,
+  createUserSession,
+  getUserBySessionHash,
+  deleteUserSession,
+  updateUserDefaultSlideCount,
+  listWritingSamples,
+  getWritingSampleStats,
+  createWritingSample,
+  deleteWritingSample,
+  getWritingProfile,
+  invalidateWritingProfile,
+  saveWritingProfile,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
+import {
+  DEFAULT_SLIDE_COUNT,
+  MAX_SLIDE_COUNT,
+  MAX_STYLE_SAMPLE_CHARS,
+  MAX_STYLE_SAMPLES,
+  MAX_STYLE_TOTAL_CHARS,
+  MIN_SLIDE_COUNT,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_DAYS,
+  analyzeWritingStyle,
+  clearSessionCookie,
+  hashPassword,
+  normalizeDisplayName,
+  normalizeEmail,
+  normalizeStyleSample,
+  parseCookies,
+  randomToken,
+  sessionCookie,
+  sha256Hex,
+  validateEmail,
+  validatePassword,
+  validateSlideCount,
+  verifyPassword,
+  writingStylePrompt,
+} from "./profile.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import {
   applyYouTubeQuotaEvents,
@@ -54,7 +93,7 @@ import {
   publicYouTubeQuota,
 } from "./youtube.js";
 
-const VERSION = "2.6.1";
+const VERSION = "2.7.0";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -130,6 +169,58 @@ function validatedMonitoringTerm(body) {
 function requireDatabase(env) {
   if (!env.DB) throw new HttpError(503, "Banco D1 não configurado.", "Crie um banco D1 e adicione ao Worker um binding chamado DB.");
   return env.DB;
+}
+
+function secureCookieForRequest(request) {
+  try { return new URL(request.url).protocol === "https:"; } catch { return true; }
+}
+
+async function sessionContext(request, env) {
+  const token = parseCookies(request.headers.get("Cookie"))[SESSION_COOKIE_NAME];
+  if (!token) return { token: null, tokenHash: null, user: null };
+  const tokenHash = await sha256Hex(token);
+  const user = await getUserBySessionHash(requireDatabase(env), tokenHash).catch(() => null);
+  return { token, tokenHash, user };
+}
+
+async function optionalEditorialUser(request, env) {
+  return (await sessionContext(request, env)).user;
+}
+
+async function requireEditorialUser(request, env) {
+  const context = await sessionContext(request, env);
+  if (!context.user) throw new HttpError(401, "Entre no seu perfil editorial para continuar.");
+  return context;
+}
+
+function publicWritingProfile(value) {
+  if (!value?.profile) return null;
+  return {
+    ...value.profile,
+    sampleCount: Number(value.sampleCount) || 0,
+    updatedAt: value.updatedAt || null,
+  };
+}
+
+async function profilePayload(db, user) {
+  const [samples, stats, writingProfile] = await Promise.all([
+    listWritingSamples(db, user.id),
+    getWritingSampleStats(db, user.id),
+    getWritingProfile(db, user.id),
+  ]);
+  return {
+    authenticated: true,
+    user,
+    samples,
+    writingProfile: publicWritingProfile(writingProfile),
+    limits: {
+      maximumSamples: MAX_STYLE_SAMPLES,
+      maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
+      maximumTotalCharacters: MAX_STYLE_TOTAL_CHARS,
+      usedCharacters: stats.totalChars,
+      slideCount: { minimum: MIN_SLIDE_COUNT, maximum: MAX_SLIDE_COUNT, default: DEFAULT_SLIDE_COUNT },
+    },
+  };
 }
 
 const CURRENT_PORTAL_IDS = new Set(FEEDS.map((feed) => feed.id));
@@ -294,7 +385,7 @@ function publicIntelligentJob(job) {
   };
 }
 
-async function processIntelligentCarouselJob(env, job, topic) {
+async function processIntelligentCarouselJob(env, job, topic, options = {}) {
   const db = requireDatabase(env);
   const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 12 * 60 * 1000);
   if (!jobLock) return null;
@@ -315,6 +406,12 @@ async function processIntelligentCarouselJob(env, job, topic) {
     } catch (error) {
       console.error("Histórico de leitura indisponível; seleção seguirá sem esse sinal", error);
     }
+    const slideCount = validateSlideCount(options.slideCount, DEFAULT_SLIDE_COUNT);
+    const profileRecord = options.writingProfile?.profile ? options.writingProfile : null;
+    const writingStyle = profileRecord ? {
+      ...profileRecord,
+      prompt: writingStylePrompt(profileRecord.profile),
+    } : null;
     const data = await buildIntelligentCarousel(topic, {
       ai: articleAnalysisAi(env),
       model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
@@ -326,6 +423,9 @@ async function processIntelligentCarouselJob(env, job, topic) {
         set: (cacheKey, payload) => saveArticleReadCache(db, cacheKey, payload, 12),
       },
       onProgress: createProgressReporter(db, job.jobId, jobLock),
+      slideCount,
+      writingStyle,
+      styleKey: options.styleKey || "default",
     });
     const selectedSource = data?.reading?.selectedSource;
     if (selectedSource?.liveAttempted) {
@@ -346,6 +446,8 @@ async function processIntelligentCarouselJob(env, job, topic) {
       runId: job.runId,
       topicId: job.topicId,
       topicTitle: topic.title,
+      requestedSlideCount: slideCount,
+      profileApplied: Boolean(profileRecord),
       cycle: {
         ...(data.cycle || {}),
         status: "completed",
@@ -428,7 +530,12 @@ async function processIntelligentQueueMessage(message, env, body = {}) {
       return;
     }
     const topic = await resolveTopicForIntelligentJob(env, job);
-    await processIntelligentCarouselJob(env, job, topic);
+    await processIntelligentCarouselJob(env, job, topic, {
+      slideCount: body.slideCount,
+      writingProfile: body.writingProfile || null,
+      styleKey: body.styleKey || "default",
+      userId: body.userId || null,
+    });
     message?.ack?.();
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -868,6 +975,134 @@ async function selfTest() {
 }
 
 async function handleApi(request, env, url, ctx) {
+  if (url.pathname === "/api/auth/register" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    let email;
+    let password;
+    try {
+      email = validateEmail(body.email);
+      password = validatePassword(body.password);
+    } catch (error) {
+      throw new HttpError(400, error.message);
+    }
+    let defaultSlideCount;
+    try { defaultSlideCount = validateSlideCount(body.defaultSlideCount, DEFAULT_SLIDE_COUNT); }
+    catch (error) { throw new HttpError(400, error.message); }
+    const emailKey = normalizeEmail(email);
+    const db = requireDatabase(env);
+    if (await getEditorialUserByEmailKey(db, emailKey)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
+    const credentials = await hashPassword(password);
+    let user;
+    try {
+      user = await createEditorialUser(db, {
+        email,
+        emailKey,
+        displayName: normalizeDisplayName(body.displayName, email),
+        passwordHash: credentials.hash,
+        passwordSalt: credentials.salt,
+        passwordIterations: credentials.iterations,
+        defaultSlideCount,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (/unique|constraint/i.test(detail)) throw new HttpError(409, "Já existe um perfil com este e-mail.");
+      throw error;
+    }
+    const token = randomToken();
+    await createUserSession(db, { tokenHash: await sha256Hex(token), userId: user.id, ttlDays: SESSION_TTL_DAYS });
+    return json({ ok: true, ...(await profilePayload(db, user)) }, 201, {
+      "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
+    });
+  }
+
+  if (url.pathname === "/api/auth/login" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const emailKey = normalizeEmail(body.email);
+    const db = requireDatabase(env);
+    const record = emailKey ? await getEditorialUserByEmailKey(db, emailKey) : null;
+    const valid = record ? await verifyPassword(String(body.password || ""), record) : false;
+    if (!record || !valid) throw new HttpError(401, "E-mail ou senha inválidos.");
+    const token = randomToken();
+    await createUserSession(db, { tokenHash: await sha256Hex(token), userId: record.id, ttlDays: SESSION_TTL_DAYS });
+    const user = await getEditorialUserById(db, record.id);
+    return json({ ok: true, ...(await profilePayload(db, user)) }, 200, {
+      "Set-Cookie": sessionCookie(token, { secure: secureCookieForRequest(request) }),
+    });
+  }
+
+  if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+    const context = await sessionContext(request, env);
+    if (context.tokenHash) await deleteUserSession(requireDatabase(env), context.tokenHash).catch(() => null);
+    return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie({ secure: secureCookieForRequest(request) }) });
+  }
+
+  if ((url.pathname === "/api/auth/me" || url.pathname === "/api/profile") && request.method === "GET") {
+    const user = await optionalEditorialUser(request, env);
+    if (!user) return json({
+      ok: true,
+      authenticated: false,
+      limits: {
+        maximumSamples: MAX_STYLE_SAMPLES,
+        maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
+        maximumTotalCharacters: MAX_STYLE_TOTAL_CHARS,
+        slideCount: { minimum: MIN_SLIDE_COUNT, maximum: MAX_SLIDE_COUNT, default: DEFAULT_SLIDE_COUNT },
+      },
+    });
+    return json({ ok: true, ...(await profilePayload(requireDatabase(env), user)) });
+  }
+
+  if (url.pathname === "/api/profile/preferences" && request.method === "PATCH") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    let slideCount;
+    try { slideCount = validateSlideCount(body.defaultSlideCount); }
+    catch (error) { throw new HttpError(400, error.message); }
+    await updateUserDefaultSlideCount(requireDatabase(env), user.id, slideCount);
+    const refreshed = await getEditorialUserById(requireDatabase(env), user.id);
+    return json({ ok: true, user: refreshed });
+  }
+
+  if (url.pathname === "/api/profile/samples" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    let sample;
+    try { sample = normalizeStyleSample(body); }
+    catch (error) { throw new HttpError(400, error.message); }
+    try {
+      const created = await createWritingSample(requireDatabase(env), user.id, sample);
+      await invalidateWritingProfile(requireDatabase(env), user.id);
+      const payload = await profilePayload(requireDatabase(env), user);
+      return json({ ok: true, sample: created, ...payload }, 201);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (/unique|constraint/i.test(detail)) throw new HttpError(409, "Este texto já foi adicionado ao perfil.");
+      if (/no máximo|até .* caracteres/i.test(detail)) throw new HttpError(409, detail);
+      throw error;
+    }
+  }
+
+  const writingSampleRoute = /^\/api\/profile\/samples\/([a-z0-9-]{8,80})$/i.exec(url.pathname);
+  if (writingSampleRoute && request.method === "DELETE") {
+    const { user } = await requireEditorialUser(request, env);
+    const removed = await deleteWritingSample(requireDatabase(env), user.id, writingSampleRoute[1]);
+    if (!removed) throw new HttpError(404, "Texto não encontrado neste perfil.");
+    await invalidateWritingProfile(requireDatabase(env), user.id);
+    return json({ ok: true, ...(await profilePayload(requireDatabase(env), user)) });
+  }
+
+  if (url.pathname === "/api/profile/style/rebuild" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const db = requireDatabase(env);
+    const samples = await listWritingSamples(db, user.id);
+    if (!samples.length) throw new HttpError(409, "Adicione pelo menos um texto antes de atualizar o perfil de escrita.");
+    const profile = await analyzeWritingStyle(samples, {
+      ai: articleAnalysisAi(env),
+      model: env.STYLE_ANALYSIS_MODEL || env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
+    });
+    const saved = await saveWritingProfile(db, user.id, profile, samples.length);
+    return json({ ok: true, writingProfile: publicWritingProfile(saved), ...(await profilePayload(db, user)) });
+  }
+
   if (url.pathname === "/api/self-test" && request.method === "GET") {
     const logic = await selfTest();
     const db = requireDatabase(env);
@@ -1181,11 +1416,17 @@ async function handleApi(request, env, url, ctx) {
 
   const intelligentCarouselRoute = /^\/api\/topics\/([a-z0-9-]{6,100})\/intelligent-carousel$/i.exec(url.pathname);
   if (intelligentCarouselRoute && request.method === "POST") {
-    if (env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
-      throw new HttpError(401, "Chave de operação inválida para usar a leitura inteligente.");
-    }
     const body = await request.json().catch(() => ({}));
     const db = requireDatabase(env);
+    const user = await optionalEditorialUser(request, env);
+    if (!user && env.MANUAL_ROUND_TOKEN && !secureEqual(request.headers.get("X-Round-Token"), env.MANUAL_ROUND_TOKEN)) {
+      throw new HttpError(401, "Entre no perfil editorial ou informe a chave de operação para usar a leitura inteligente.");
+    }
+    let slideCount;
+    try { slideCount = validateSlideCount(body?.slideCount ?? user?.defaultSlideCount ?? DEFAULT_SLIDE_COUNT); }
+    catch (error) { throw new HttpError(400, error.message); }
+    const writingProfile = user ? await getWritingProfile(db, user.id) : null;
+    const styleKey = writingProfile?.updatedAt ? `${user.id}:${writingProfile.updatedAt}` : user ? `${user.id}:default` : "default";
     let runId = String(body?.runId || "").trim();
     let payload;
     if (runId) {
@@ -1200,7 +1441,7 @@ async function handleApi(request, env, url, ctx) {
     const topicId = intelligentCarouselRoute[1];
     const topic = payload.topics.find((item) => item?.id === topicId);
     if (!topic) throw new HttpError(404, "Assunto não encontrado nesta ronda.");
-    const cacheKey = intelligentCarouselCacheKey(runId, topic);
+    const cacheKey = intelligentCarouselCacheKey(runId, topic, { slideCount, styleKey });
     if (!body?.force) {
       const cached = await getIntelligentCarousel(db, cacheKey);
       if (cached) return json({ ok: true, cached: true, status: "succeeded", data: cached });
@@ -1223,6 +1464,10 @@ async function handleApi(request, env, url, ctx) {
             jobId: queued.job.jobId,
             runId: queued.job.runId,
             topicId: queued.job.topicId,
+            slideCount,
+            userId: user?.id || null,
+            writingProfile,
+            styleKey,
           });
           queued.job = await updateIntelligentJob(db, {
             jobId: queued.job.jobId,
@@ -1242,7 +1487,7 @@ async function handleApi(request, env, url, ctx) {
           throw new HttpError(503, "Fila de leitura indisponível.", detail);
         }
       } else {
-        const data = await processIntelligentCarouselJob(env, queued.job, topic);
+        const data = await processIntelligentCarouselJob(env, queued.job, topic, { slideCount, writingProfile, styleKey, userId: user?.id || null });
         if (data) return json({ ok: true, cached: false, status: "succeeded", data });
         throw new HttpError(503, "A leitura inteligente não foi concluída.", "Configure o binding INTELLIGENT_JOBS_QUEUE para processamento assíncrono estável.");
       }
@@ -1253,6 +1498,7 @@ async function handleApi(request, env, url, ctx) {
       status: queued.job.status,
       job: publicIntelligentJob(queued.job),
       pollAfterMs: 1_200,
+      configuration: { slideCount, profileApplied: Boolean(writingProfile), profileUpdatedAt: writingProfile?.updatedAt || null },
     }, 202);
   }
 

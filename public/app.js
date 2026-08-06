@@ -33,6 +33,10 @@ const state = {
   youtubeDecision: "Todos",
   youtubeEditoria: "Todas",
   youtubeLoading: false,
+  profile: null,
+  profileLoading: false,
+  activeSlideCount: 7,
+  pendingCarouselTopicId: null,
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -46,6 +50,7 @@ const roundView = document.getElementById("roundView");
 const sourcesView = document.getElementById("sourcesView");
 const monitoringView = document.getElementById("monitoringView");
 const youtubeView = document.getElementById("youtubeView");
+const profileView = document.getElementById("profileView");
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
@@ -92,13 +97,14 @@ async function parseApiResponse(response) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { cache: "no-cache", ...options });
+  const response = await fetch(path, { cache: "no-cache", credentials: "same-origin", ...options });
   return (await parseApiResponse(response)).payload;
 }
 
 async function conditionalApi(path, etag = "") {
   const response = await fetch(path, {
     cache: "no-cache",
+    credentials: "same-origin",
     headers: etag ? { "If-None-Match": etag } : {},
   });
   return parseApiResponse(response);
@@ -240,10 +246,12 @@ function showView(view) {
   sourcesView.hidden = view !== "sources";
   monitoringView.hidden = view !== "monitoring";
   youtubeView.hidden = view !== "youtube";
+  profileView.hidden = view !== "profile";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
   document.getElementById("navYouTube").classList.toggle("active", view === "youtube");
+  document.getElementById("navProfile").classList.toggle("active", view === "profile");
   if (view === "sources") renderPortalCards();
   if (view === "monitoring") {
     loadMonitoringTerms();
@@ -252,6 +260,7 @@ function showView(view) {
   if (view === "youtube") {
     loadYouTubeLatest({ force: !state.youtubeData });
   }
+  if (view === "profile") loadProfile({ force: true });
 }
 
 function operationHeaders() {
@@ -798,6 +807,200 @@ function entityLine(label, values) {
   return `${label}: ${list.length ? list.join(", ") : "Não identificado"}`;
 }
 
+
+function slideCountOptions(selected = 7) {
+  const current = Number(selected) || 7;
+  return Array.from({ length: 13 }, (_, index) => index + 3)
+    .map((count) => `<option value="${count}" ${count === current ? "selected" : ""}>${count} slides</option>`)
+    .join("");
+}
+
+function initializeSlideCountSelectors() {
+  const defaultCount = Number(state.profile?.user?.defaultSlideCount) || 7;
+  for (const id of ["registerSlideCount", "profileDefaultSlideCount", "carouselSlideCount"]) {
+    const select = document.getElementById(id);
+    if (select) select.innerHTML = slideCountOptions(id === "carouselSlideCount" ? state.activeSlideCount || defaultCount : defaultCount);
+  }
+}
+
+function profileStyleMarkup(profile) {
+  if (!profile) return '<div class="empty"><strong>Perfil ainda não treinado</strong><span>Adicione exemplos e clique em Atualizar estilo.</span></div>';
+  const chips = [...(profile.vocabulary || []).slice(0, 8), ...(profile.avoid || []).slice(0, 5).map((item) => `Evitar: ${item}`)];
+  return `<div class="style-summary-grid">
+    <article><small>Tom e ritmo</small><p><strong>${escapeHtml(profile.tone || "Não definido")}</strong><br>${escapeHtml(profile.rhythm || "")}</p></article>
+    <article><small>Títulos</small><p>${escapeHtml(profile.titleStyle || "Não definido")}</p></article>
+    <article><small>Subtítulos</small><p>${escapeHtml(profile.subtitleStyle || "Não definido")}</p></article>
+    <article><small>Estrutura</small><p>${escapeHtml(profile.structure || "Não definida")}</p></article>
+    <article><small>CTA</small><p>${escapeHtml(profile.ctaStyle || "Não definido")}</p></article>
+    ${chips.length ? `<div class="style-chip-list">${chips.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+    <div class="profile-training-note ready">Estilo atualizado ${profile.updatedAt ? relativeTime(profile.updatedAt) : "agora"} · ${Number(profile.sampleCount) || 0} exemplo${Number(profile.sampleCount) === 1 ? "" : "s"} usado${Number(profile.sampleCount) === 1 ? "" : "s"}.</div>
+  </div>`;
+}
+
+function renderProfile() {
+  const payload = state.profile || { authenticated: false };
+  const loggedIn = Boolean(payload.authenticated && payload.user);
+  document.getElementById("profileLoggedOut").hidden = loggedIn;
+  document.getElementById("profileLoggedIn").hidden = !loggedIn;
+  const status = document.getElementById("profileSessionStatus");
+  status.textContent = loggedIn ? "Perfil conectado" : "Perfil não conectado";
+  status.classList.toggle("active", loggedIn);
+  initializeSlideCountSelectors();
+  if (!loggedIn) return;
+  const user = payload.user;
+  document.getElementById("profileUserName").textContent = user.displayName || "Perfil editorial";
+  document.getElementById("profileUserEmail").textContent = user.email || "";
+  document.getElementById("profileDefaultSlideCount").value = String(Number(user.defaultSlideCount) || 7);
+  const samples = Array.isArray(payload.samples) ? payload.samples : [];
+  const limits = payload.limits || {};
+  document.getElementById("profileSampleUsage").textContent = `${samples.length}/${Number(limits.maximumSamples) || 8} textos · ${Number(limits.usedCharacters || 0).toLocaleString("pt-BR")}/${Number(limits.maximumTotalCharacters || 30000).toLocaleString("pt-BR")} caracteres`;
+  document.getElementById("writingSampleList").innerHTML = samples.length ? samples.map((sample) => `<article class="writing-sample-item"><div><strong>${escapeHtml(sample.title)}</strong><p>${escapeHtml(sample.sourceType)} · ${Number(sample.charCount) || 0} caracteres · ${escapeHtml(relativeTime(sample.createdAt))}</p></div><button class="danger-button" data-writing-sample-delete="${escapeHtml(sample.id)}" type="button">Remover</button></article>`).join("") : '<div class="empty"><strong>Nenhum exemplo adicionado</strong><span>Envie textos que representem o estilo que deseja reproduzir.</span></div>';
+  document.getElementById("writingProfileSummary").innerHTML = profileStyleMarkup(payload.writingProfile);
+}
+
+async function loadProfile({ force = false } = {}) {
+  if (state.profileLoading) return state.profile;
+  if (state.profile && !force) return state.profile;
+  state.profileLoading = true;
+  try {
+    state.profile = await api(`/api/profile?t=${Date.now()}`);
+    renderProfile();
+    return state.profile;
+  } catch (error) {
+    document.getElementById("profileSessionStatus").textContent = "Perfil indisponível";
+    document.getElementById("loginMessage").textContent = error.message;
+    return null;
+  } finally {
+    state.profileLoading = false;
+  }
+}
+
+async function submitProfileAuth(event, mode) {
+  event.preventDefault();
+  const register = mode === "register";
+  const message = document.getElementById(register ? "registerMessage" : "loginMessage");
+  message.textContent = register ? "Criando perfil…" : "Entrando…";
+  const body = register ? {
+    displayName: document.getElementById("registerName").value,
+    email: document.getElementById("registerEmail").value,
+    password: document.getElementById("registerPassword").value,
+    defaultSlideCount: Number(document.getElementById("registerSlideCount").value) || 7,
+  } : {
+    email: document.getElementById("loginEmail").value,
+    password: document.getElementById("loginPassword").value,
+  };
+  try {
+    state.profile = await api(`/api/auth/${mode}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    event.currentTarget.reset();
+    message.textContent = "";
+    renderProfile();
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+async function logoutProfile() {
+  await api("/api/auth/logout", { method: "POST" }).catch(() => null);
+  state.profile = { authenticated: false };
+  state.smartCarousels.clear();
+  renderProfile();
+}
+
+async function updateDefaultSlideCount(event) {
+  const count = Number(event.target.value) || 7;
+  try {
+    const response = await api("/api/profile/preferences", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ defaultSlideCount: count }) });
+    if (state.profile?.user && response?.user) state.profile.user = response.user;
+    state.activeSlideCount = count;
+    initializeSlideCountSelectors();
+  } catch (error) {
+    document.getElementById("writingProfileMessage").textContent = error.message;
+  }
+}
+
+async function submitWritingSample(event) {
+  event.preventDefault();
+  const message = document.getElementById("writingSampleMessage");
+  message.textContent = "Salvando exemplo…";
+  try {
+    state.profile = await api("/api/profile/samples", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: document.getElementById("writingSampleTitle").value,
+        sourceType: document.getElementById("writingSampleType").value,
+        content: document.getElementById("writingSampleContent").value,
+      }),
+    });
+    event.currentTarget.reset();
+    document.getElementById("writingSampleCounter").textContent = "0/5.000 caracteres";
+    message.textContent = "Texto adicionado. Atualize o estilo para aplicar este exemplo aos próximos carrosséis.";
+    renderProfile();
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+async function removeWritingSample(sampleId) {
+  const message = document.getElementById("writingSampleMessage");
+  message.textContent = "Removendo exemplo…";
+  try {
+    state.profile = await api(`/api/profile/samples/${encodeURIComponent(sampleId)}`, { method: "DELETE" });
+    message.textContent = "Texto removido. Atualize o estilo para recalcular o perfil.";
+    renderProfile();
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+async function rebuildWritingStyle() {
+  const button = document.getElementById("rebuildWritingStyle");
+  const message = document.getElementById("writingProfileMessage");
+  button.disabled = true;
+  message.textContent = "Analisando tom, ritmo e estrutura dos exemplos…";
+  try {
+    state.profile = await api("/api/profile/style/rebuild", { method: "POST" });
+    state.smartCarousels.clear();
+    message.textContent = "Perfil de escrita atualizado e pronto para os próximos carrosséis.";
+    renderProfile();
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadWritingSampleFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const message = document.getElementById("writingSampleMessage");
+  if (file.size > 100_000) {
+    message.textContent = "O arquivo é grande demais. Use um arquivo de texto com até 100 KB.";
+    event.target.value = "";
+    return;
+  }
+  try {
+    const text = await file.text();
+    const maximum = Number(state.profile?.limits?.maximumCharactersPerSample) || 5_000;
+    const content = text.slice(0, maximum);
+    document.getElementById("writingSampleContent").value = content;
+    if (!document.getElementById("writingSampleTitle").value) document.getElementById("writingSampleTitle").value = file.name.replace(/\.[^.]+$/, "").slice(0, 120);
+    document.getElementById("writingSampleCounter").textContent = `${content.length.toLocaleString("pt-BR")}/${maximum.toLocaleString("pt-BR")} caracteres`;
+    message.textContent = text.length > maximum ? `O arquivo foi limitado aos primeiros ${maximum.toLocaleString("pt-BR")} caracteres.` : "Arquivo carregado. Revise o conteúdo antes de salvar.";
+  } catch {
+    message.textContent = "Não foi possível ler este arquivo como texto.";
+  }
+}
+
+function updateCarouselProfileStatus() {
+  const profile = state.profile?.writingProfile;
+  const loggedIn = Boolean(state.profile?.authenticated);
+  document.getElementById("carouselProfileStatus").textContent = profile ? profile.tone || "Perfil personalizado" : "Padrão jornalístico";
+  document.getElementById("carouselProfileDetail").textContent = profile
+    ? `${Number(profile.sampleCount) || 0} exemplos · atualizado ${profile.updatedAt ? relativeTime(profile.updatedAt) : "agora"}`
+    : loggedIn ? "Adicione exemplos e atualize o estilo na aba Perfil." : "Entre no Perfil para adaptar o estilo.";
+}
+
 function carouselAsText(topic, carousel) {
   const slides = Array.isArray(carousel?.slides) ? carousel.slides : [];
   const verificationLinks = Array.isArray(carousel?.verificationLinks) && carousel.verificationLinks.length
@@ -861,8 +1064,9 @@ function carouselAsText(topic, carousel) {
   ].join("\n").trim();
 }
 
-function carouselCacheKey(topicId) {
-  return `${state.data?.runId || state.lastRunId || "latest"}:${topicId}`;
+function carouselCacheKey(topicId, slideCount = state.activeSlideCount || 7) {
+  const styleKey = state.profile?.writingProfile?.updatedAt || (state.profile?.authenticated ? "profile-default" : "default");
+  return `${state.data?.runId || state.lastRunId || "latest"}:${topicId}:${Number(slideCount) || 7}:${styleKey}`;
 }
 
 function setCarouselLoading(loading, message = "", options = {}) {
@@ -947,13 +1151,17 @@ function updateEditedSlide(target) {
 
 function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("carouselLoading").hidden = true;
+  document.getElementById("carouselSetup").classList.add("generated");
+  document.getElementById("generateCarousel").textContent = "Gerar novamente";
+  document.getElementById("carouselSlideCount").value = String(Number(carousel.slideCount) || (carousel.slides || []).length || state.activeSlideCount || 7);
   document.getElementById("carouselTitle").textContent = topic.title;
   state.activeCarousel = {
     ...carousel,
     slides: (carousel.slides || []).map((slide) => ({ ...slide, evidenceIds: [...(slide.evidenceIds || [])] })),
   };
   const reading = carousel.reading || {};
-  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
+  const profileLabel = carousel.writingProfile?.active ? `Perfil personalizado · ${Number(carousel.writingProfile.sampleCount) || 0} exemplos` : "Padrão jornalístico";
+  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
   const selectedSource = reading.selectedSource || (reading.sources || [])[0] || {};
@@ -1007,15 +1215,18 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("copyCarousel").disabled = !gate.copyAllowed || !cycleReleased;
 }
 
-async function showCarousel(topicId, { force = false } = {}) {
+async function showCarousel(topicId, { force = false, generate = false } = {}) {
   const topic = (state.data?.topics || []).find((item) => item.id === topicId);
   if (!topic) {
     setStatus("warn", "Assunto indisponível", "Atualize a ronda e tente novamente.");
     return;
   }
-  const requestSerial = state.carouselRequestSerial + 1;
-  state.carouselRequestSerial = requestSerial;
+  if (!state.profile) await loadProfile().catch(() => null);
   state.activeTopicId = topicId;
+  state.pendingCarouselTopicId = topicId;
+  state.activeSlideCount = Number(state.profile?.user?.defaultSlideCount) || state.activeSlideCount || 7;
+  document.getElementById("carouselSlideCount").innerHTML = slideCountOptions(state.activeSlideCount);
+  updateCarouselProfileStatus();
   document.getElementById("carouselTitle").textContent = topic.title;
   document.getElementById("carouselMeta").innerHTML = "";
   document.getElementById("carouselReading").hidden = true;
@@ -1026,23 +1237,47 @@ async function showCarousel(topicId, { force = false } = {}) {
   document.getElementById("carouselSources").innerHTML = "";
   document.getElementById("carouselDisclaimer").textContent = "";
   document.getElementById("copyCarouselMessage").textContent = "";
+  document.getElementById("carouselLoading").hidden = true;
+  document.getElementById("carouselSetup").classList.remove("generated");
+  document.getElementById("generateCarousel").textContent = "Gerar roteiro";
+  document.getElementById("copyCarousel").disabled = true;
   state.carouselText = "";
   state.activeCarousel = null;
   openModal("carouselModal");
+  if (force || generate) await generateActiveCarousel({ force });
+}
 
-  const key = carouselCacheKey(topicId);
+async function generateActiveCarousel({ force = false } = {}) {
+  const topicId = state.pendingCarouselTopicId || state.activeTopicId;
+  const topic = (state.data?.topics || []).find((item) => item.id === topicId);
+  if (!topic) return;
+  const slideCount = Number(document.getElementById("carouselSlideCount").value) || 7;
+  state.activeSlideCount = slideCount;
+  const requestSerial = state.carouselRequestSerial + 1;
+  state.carouselRequestSerial = requestSerial;
+  const key = carouselCacheKey(topicId, slideCount);
   const cached = !force ? state.smartCarousels.get(key) : null;
   if (cached) {
     renderIntelligentCarousel(topic, cached);
     return;
   }
-  setCarouselLoading(true, "Selecionando uma única matéria e preparando o roteiro.", { progress: 1 });
+  document.getElementById("carouselMeta").innerHTML = "";
+  document.getElementById("carouselReading").hidden = true;
+  document.getElementById("carouselEvidence").hidden = true;
+  document.getElementById("carouselAnalysis").hidden = true;
+  document.getElementById("carouselEntities").hidden = true;
+  document.getElementById("carouselSlides").innerHTML = "";
+  document.getElementById("carouselSources").innerHTML = "";
+  document.getElementById("carouselDisclaimer").textContent = "";
+  state.carouselText = "";
+  state.activeCarousel = null;
+  setCarouselLoading(true, `Selecionando uma matéria e preparando ${slideCount} slides.`, { progress: 1 });
   const token = operationToken();
   try {
     const response = await api(`/api/topics/${encodeURIComponent(topicId)}/intelligent-carousel`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(token ? { "X-Round-Token": token } : {}) },
-      body: JSON.stringify({ runId: state.data?.runId || state.lastRunId || null, force }),
+      body: JSON.stringify({ runId: state.data?.runId || state.lastRunId || null, force, slideCount }),
     });
     if (requestSerial !== state.carouselRequestSerial) return;
     let data = response?.data;
@@ -1051,13 +1286,13 @@ async function showCarousel(topicId, { force = false } = {}) {
       data = await waitForIntelligentJob(response.job.jobId, requestSerial, response.pollAfterMs);
     }
     if (requestSerial !== state.carouselRequestSerial || !data) return;
-    if (!data.slides?.length) throw new Error("O servidor não retornou os sete slides esperados.");
+    if (data.slides?.length !== slideCount) throw new Error(`O servidor não retornou os ${slideCount} slides esperados.`);
     state.smartCarousels.set(key, data);
     renderIntelligentCarousel(topic, data);
   } catch (error) {
     if (requestSerial !== state.carouselRequestSerial) return;
     if (error.status === 401) {
-      document.getElementById("tokenMessage").textContent = "Informe a chave do Worker para usar a leitura inteligente.";
+      document.getElementById("tokenMessage").textContent = "Entre no Perfil ou informe a chave do Worker para usar a leitura inteligente.";
     }
     setCarouselLoading(false, error.message, { retry: true });
     document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração manual</p><h3>Abra as notícias originais</h3></div></div><div class="carousel-source-list">${topicVerificationLinks(topic).map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
@@ -1147,6 +1382,8 @@ async function pollStatus({ force = false } = {}) {
 
 async function startApplication() {
   render();
+  initializeSlideCountSelectors();
+  loadProfile().catch(() => null);
   document.getElementById("operationToken").value = operationToken();
   const healthy = await checkHealth();
   if (!healthy) return;
@@ -1197,8 +1434,10 @@ document.getElementById("carouselSlides").addEventListener("input", (event) => {
 });
 document.getElementById("carouselLoading").addEventListener("click", (event) => {
   const button = event.target.closest("[data-retry-carousel]");
-  if (button && state.activeTopicId) showCarousel(state.activeTopicId, { force: true });
+  if (button && state.activeTopicId) generateActiveCarousel({ force: true });
 });
+document.getElementById("generateCarousel").addEventListener("click", () => generateActiveCarousel({ force: Boolean(state.activeCarousel) }));
+document.getElementById("carouselSlideCount").addEventListener("change", (event) => { state.activeSlideCount = Number(event.target.value) || 7; });
 document.getElementById("monitoringTermForm").addEventListener("submit", submitMonitoringTerm);
 document.getElementById("monitoringTermsList").addEventListener("click", (event) => {
   const toggle = event.target.closest("[data-term-toggle]");
@@ -1233,6 +1472,18 @@ document.getElementById("youtubeEditoriaFilter").addEventListener("click", (even
   event.currentTarget.querySelectorAll("[data-youtube-editoria]").forEach((item) => item.classList.toggle("active", item === button));
   renderYouTube();
 });
+document.getElementById("loginForm").addEventListener("submit", (event) => submitProfileAuth(event, "login"));
+document.getElementById("registerForm").addEventListener("submit", (event) => submitProfileAuth(event, "register"));
+document.getElementById("logoutProfile").addEventListener("click", logoutProfile);
+document.getElementById("profileDefaultSlideCount").addEventListener("change", updateDefaultSlideCount);
+document.getElementById("writingSampleForm").addEventListener("submit", submitWritingSample);
+document.getElementById("writingSampleFile").addEventListener("change", loadWritingSampleFile);
+document.getElementById("writingSampleContent").addEventListener("input", (event) => { document.getElementById("writingSampleCounter").textContent = `${event.target.value.length.toLocaleString("pt-BR")}/${(Number(state.profile?.limits?.maximumCharactersPerSample) || 5_000).toLocaleString("pt-BR")} caracteres`; });
+document.getElementById("writingSampleList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-writing-sample-delete]");
+  if (button) removeWritingSample(button.dataset.writingSampleDelete);
+});
+document.getElementById("rebuildWritingStyle").addEventListener("click", rebuildWritingStyle);
 document.getElementById("settingsButton").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("openSettings").addEventListener("click", () => openModal("settingsModal"));
 document.getElementById("navHistory").addEventListener("click", showHistory);
@@ -1248,6 +1499,7 @@ document.getElementById("historyBack").addEventListener("click", () => {
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navYouTube").addEventListener("click", () => { showView("youtube"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("navProfile").addEventListener("click", () => { showView("profile"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navRound").addEventListener("click", () => { showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));
 document.getElementById("showAllSources").addEventListener("click", () => filterByPortal(null));

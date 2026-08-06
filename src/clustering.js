@@ -145,13 +145,13 @@ function carouselTone(editoria, priority) {
 }
 
 function carouselModel(topic, normalizedText) {
-  if (topic.priority === "Pautar agora") return "Instagram · Plantão em 7 slides";
-  if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Instagram · Serviço em 7 slides";
-  if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Instagram · Explicativo em 7 slides";
-  if (["Luto e Obituário", "Segurança e Justiça"].includes(topic.editoria)) return "Instagram · Contexto factual em 7 slides";
-  if (["Esportes", "Entretenimento", "Fofoca e Celebridades", "Reality Shows", "Conteúdo Viral e Redes Sociais"].includes(topic.editoria)) return "Instagram · Destaques em 7 slides";
-  if (topic.editoria === "Curiosidades e Ciência Pop") return "Instagram · Curiosidade explicada em 7 slides";
-  return "Instagram · 7 slides";
+  if (topic.priority === "Pautar agora") return "Instagram · Plantão editorial";
+  if (/\b(alerta|prazo|calendario|inscricao|como|servico|transito|previsao)\b/.test(normalizedText)) return "Instagram · Serviço editorial";
+  if ((topic.sourceNames?.length || topic.sourceCount || 0) >= 3 || (topic.items?.length || topic.itemCount || 0) >= 3) return "Instagram · Explicativo";
+  if (["Luto e Obituário", "Segurança e Justiça"].includes(topic.editoria)) return "Instagram · Contexto factual";
+  if (["Esportes", "Entretenimento", "Fofoca e Celebridades", "Reality Shows", "Conteúdo Viral e Redes Sociais"].includes(topic.editoria)) return "Instagram · Destaques";
+  if (topic.editoria === "Curiosidades e Ciência Pop") return "Instagram · Curiosidade explicada";
+  return "Instagram · Carrossel editorial";
 }
 
 function buildVerificationLinks(items = []) {

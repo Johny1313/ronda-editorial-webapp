@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.6.1
+## Versão 2.7.0
 
-A versão 2.6.1 mantém as correções de estabilidade da v2.5.2 e acrescenta uma aba YouTube independente, sem gráficos e com a mesma linguagem visual da Ronda.
+A versão 2.7.0 mantém a coleta otimizada e a aba YouTube, acrescentando perfis editoriais por e-mail, biblioteca compacta de exemplos de escrita e carrosséis com quantidade flexível de slides.
 
 Principais mudanças:
 
@@ -25,6 +25,21 @@ Principais mudanças:
 - chave da API protegida no secret `YOUTUBE_API_KEY`;
 - quota, cache, circuit breaker e erros do YouTube separados da Ronda.
 
+
+### Perfil editorial e carrossel flexível
+
+- cadastro e login por e-mail e senha, com senha protegida por PBKDF2 e sessão em cookie `HttpOnly`;
+- aba **Perfil** para enviar textos, posts, legendas, roteiros e artigos que representem o estilo desejado;
+- arquivos TXT, MD, CSV e JSON são lidos no navegador; somente o texto normalizado é enviado;
+- até 8 exemplos, 5.000 caracteres por exemplo e 30.000 caracteres por perfil, preservando o limite do D1;
+- o Workers AI transforma os exemplos em um guia compacto de tom, ritmo, títulos, subtítulos, estrutura e CTA;
+- se a IA não responder, um analisador local gera um guia heurístico;
+- o perfil orienta somente a forma da escrita: todos os fatos continuam vindo de uma única matéria selecionada e validada;
+- cada usuário escolhe um padrão de 3 a 15 slides; o padrão inicial continua sendo 7;
+- a quantidade também pode ser alterada individualmente antes de gerar cada carrossel;
+- cache de carrossel separado por usuário, perfil de escrita e quantidade de slides.
+
+Esta funcionalidade adapta o estilo por instruções e exemplos. Ela não realiza fine-tuning permanente do modelo. A versão atual não envia e-mail de confirmação nem oferece recuperação automática de senha.
 
 ### Correção do processamento de rondas
 
@@ -52,7 +67,7 @@ O portal Hypeness já não fazia parte da versão 2.5.0. Os outros nove canais f
 
 ## Controle de armazenamento D1
 
-A versão 2.6.1 corrige o erro `D1_ERROR: Exceeded maximum DB size`. A causa era o acúmulo de payloads JSON completos da Ronda e, principalmente, do YouTube, incluindo descrições, tags e vídeos repetidos dentro de assuntos e canais.
+A política de armazenamento iniciada na versão 2.6.1 corrige o erro `D1_ERROR: Exceeded maximum DB size`. A causa era o acúmulo de payloads JSON completos da Ronda e, principalmente, do YouTube, incluindo descrições, tags e vídeos repetidos dentro de assuntos e canais.
 
 Política atual:
 

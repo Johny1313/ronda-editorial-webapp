@@ -1,6 +1,7 @@
+import { DEFAULT_SLIDE_COUNT, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.6.1";
+export const DATABASE_SCHEMA_VERSION = "2.7.0";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -130,6 +131,47 @@ const SCHEMA_STATEMENTS = [
     value_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    email_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_iterations INTEGER NOT NULL,
+    default_slide_count INTEGER NOT NULL DEFAULT 7,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_users_email_key ON users(email_key)",
+  `CREATE TABLE IF NOT EXISTS user_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, expires_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)",
+  `CREATE TABLE IF NOT EXISTS writing_samples (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    char_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user_id, content_hash)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_writing_samples_user ON writing_samples(user_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS writing_profiles (
+    user_id TEXT PRIMARY KEY,
+    profile_json TEXT NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
   `DELETE FROM source_state WHERE source_id IN (
     'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
     'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
@@ -177,6 +219,7 @@ async function emergencyCleanupRaw(db) {
     `DELETE FROM article_read_cache WHERE expires_at < '${now}'`,
     `DELETE FROM translation_cache WHERE updated_at < '${translationCutoff}'`,
     `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
+    `DELETE FROM user_sessions WHERE expires_at < '${now}'`,
   ];
   for (const statement of statements) {
     try { await db.prepare(statement).run(); } catch {}
@@ -1119,6 +1162,7 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
     db.prepare("DELETE FROM runs WHERE status IN ('success', 'failed', 'expired') AND NULLIF(completed_at, '') < ?").bind(retentionCutoff),
     db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRuns})`),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
+    db.prepare("DELETE FROM user_sessions WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
@@ -1280,4 +1324,181 @@ export async function databaseSelfTest(db) {
     await releaseLock(db, lock);
     await db.prepare("DELETE FROM runs WHERE id = ?").bind(id).run();
   }
+}
+
+
+function publicUserRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    defaultSlideCount: validateSlideCount(row.default_slide_count, DEFAULT_SLIDE_COUNT),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function createEditorialUser(db, {
+  id = crypto.randomUUID(), email, emailKey, displayName, passwordHash, passwordSalt,
+  passwordIterations, defaultSlideCount = DEFAULT_SLIDE_COUNT,
+} = {}) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO users (
+      id, email, email_key, display_name, password_hash, password_salt,
+      password_iterations, default_slide_count, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, email, emailKey, displayName, passwordHash, passwordSalt,
+    Number(passwordIterations) || 120000, validateSlideCount(defaultSlideCount), now, now,
+  ).run();
+  return { id, email, displayName, defaultSlideCount: validateSlideCount(defaultSlideCount), createdAt: now, updatedAt: now };
+}
+
+export async function getEditorialUserByEmailKey(db, emailKey) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM users WHERE email_key = ? LIMIT 1").bind(emailKey).first();
+  if (!row) return null;
+  return {
+    ...publicUserRow(row),
+    passwordHash: row.password_hash,
+    passwordSalt: row.password_salt,
+    passwordIterations: Number(row.password_iterations) || 120000,
+  };
+}
+
+export async function getEditorialUserById(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(userId).first();
+  return publicUserRow(row);
+}
+
+export async function createUserSession(db, { tokenHash, userId, ttlDays = 30 } = {}) {
+  await ensureSchema(db);
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + Math.max(1, Number(ttlDays) || 30) * 24 * 60 * 60 * 1000).toISOString();
+  await db.prepare(`
+    INSERT INTO user_sessions (token_hash, user_id, created_at, last_seen_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(tokenHash, userId, now, now, expiresAt).run();
+  return { createdAt: now, expiresAt };
+}
+
+export async function getUserBySessionHash(db, tokenHash) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT u.*, s.expires_at AS session_expires_at
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.expires_at > ?
+    LIMIT 1
+  `).bind(tokenHash, new Date().toISOString()).first();
+  if (!row) return null;
+  db.prepare("UPDATE user_sessions SET last_seen_at = ? WHERE token_hash = ?")
+    .bind(new Date().toISOString(), tokenHash).run().catch(() => null);
+  return { ...publicUserRow(row), sessionExpiresAt: row.session_expires_at };
+}
+
+export async function deleteUserSession(db, tokenHash) {
+  await ensureSchema(db);
+  await db.prepare("DELETE FROM user_sessions WHERE token_hash = ?").bind(tokenHash).run();
+  return true;
+}
+
+export async function updateUserDefaultSlideCount(db, userId, slideCount) {
+  await ensureSchema(db);
+  const count = validateSlideCount(slideCount);
+  const updatedAt = new Date().toISOString();
+  await db.prepare("UPDATE users SET default_slide_count = ?, updated_at = ? WHERE id = ?")
+    .bind(count, updatedAt, userId).run();
+  return { defaultSlideCount: count, updatedAt };
+}
+
+function parseWritingSample(row) {
+  return row ? {
+    id: row.id,
+    title: row.title,
+    sourceType: row.source_type,
+    content: row.content,
+    charCount: Number(row.char_count) || String(row.content || "").length,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null;
+}
+
+export async function listWritingSamples(db, userId, limit = MAX_STYLE_SAMPLES) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT * FROM writing_samples WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+  `).bind(userId, Math.max(1, Math.min(MAX_STYLE_SAMPLES, Number(limit) || MAX_STYLE_SAMPLES))).all();
+  return (result?.results || []).map(parseWritingSample);
+}
+
+export async function getWritingSampleStats(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT COUNT(*) AS sample_count, COALESCE(SUM(char_count), 0) AS total_chars
+    FROM writing_samples WHERE user_id = ?
+  `).bind(userId).first();
+  return { sampleCount: Number(row?.sample_count) || 0, totalChars: Number(row?.total_chars) || 0 };
+}
+
+export async function createWritingSample(db, userId, sample) {
+  await ensureSchema(db);
+  const stats = await getWritingSampleStats(db, userId);
+  if (stats.sampleCount >= MAX_STYLE_SAMPLES) throw new Error(`O perfil aceita no máximo ${MAX_STYLE_SAMPLES} textos.`);
+  if (stats.totalChars + sample.charCount > MAX_STYLE_TOTAL_CHARS) throw new Error(`O perfil aceita até ${MAX_STYLE_TOTAL_CHARS.toLocaleString("pt-BR")} caracteres somados.`);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO writing_samples (
+      id, user_id, title, source_type, content, content_hash, char_count, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, userId, sample.title, sample.sourceType, sample.content, sample.contentHash, sample.charCount, now, now).run();
+  return { id, ...sample, createdAt: now, updatedAt: now };
+}
+
+export async function deleteWritingSample(db, userId, sampleId) {
+  await ensureSchema(db);
+  const result = await db.prepare("DELETE FROM writing_samples WHERE id = ? AND user_id = ?")
+    .bind(sampleId, userId).run();
+  return Number(result?.meta?.changes) > 0;
+}
+
+
+export async function invalidateWritingProfile(db, userId) {
+  await ensureSchema(db);
+  await db.prepare("DELETE FROM writing_profiles WHERE user_id = ?").bind(userId).run();
+  return true;
+}
+
+export async function getWritingProfile(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM writing_profiles WHERE user_id = ? LIMIT 1").bind(userId).first();
+  if (!row?.profile_json) return null;
+  try {
+    return {
+      profile: JSON.parse(row.profile_json),
+      sampleCount: Number(row.sample_count) || 0,
+      updatedAt: row.updated_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveWritingProfile(db, userId, profile, sampleCount) {
+  await ensureSchema(db);
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO writing_profiles (user_id, profile_json, sample_count, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      profile_json = excluded.profile_json,
+      sample_count = excluded.sample_count,
+      updated_at = excluded.updated_at
+  `).bind(userId, JSON.stringify(profile), Math.max(0, Number(sampleCount) || 0), updatedAt).run();
+  return { profile, sampleCount: Math.max(0, Number(sampleCount) || 0), updatedAt };
 }
