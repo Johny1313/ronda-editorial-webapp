@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.7.2 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.7.3 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
@@ -24,7 +24,7 @@ CHANGELOG.md.
 ----------------------------
 Crie uma branch, por exemplo:
 
-  perfil-v2.7.2
+  perfil-v2.7.3
 
 Envie o pacote completo para essa branch. Evite Upload files em main.
 
@@ -99,7 +99,7 @@ Abra:
 
 Confirme:
 
-  version: 2.7.2
+  version: 2.7.3
   youtube.configured: true
   youtube.queueReady: true
   catalogPortals: 39
@@ -116,7 +116,7 @@ Na interface:
 
 8. PROMOVER
 -----------
-Depois do preview, abra Pull Request da branch perfil-v2.7.2 para main.
+Depois do preview, abra Pull Request da branch perfil-v2.7.3 para main.
 O merge executará o deploy de produção.
 
 9. MONITORAR
@@ -134,7 +134,7 @@ por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota
 API afetam somente a aba YouTube.
 
 
-Após o deploy da v2.7.2, aplique as migrações pendentes:
+Após o deploy da v2.7.3, aplique as migrações pendentes:
 
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
@@ -151,5 +151,5 @@ O Wrangler aplicará 0005 e 0006 quando ainda estiverem pendentes. A 0006 cria o
 6. Confirme que o servidor devolve exatamente a quantidade escolhida.
 7. Saia e entre novamente para validar a sessão.
 
-A versão 2.7.2 não exige novo binding no Cloudflare. Os perfis usam o mesmo D1.
+A versão 2.7.3 não exige novo binding no Cloudflare. Os perfis usam o mesmo D1.
 Não há confirmação de e-mail nem recuperação automática de senha nesta versão.

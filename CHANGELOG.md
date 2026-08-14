@@ -1,6 +1,16 @@
 # Changelog
 
-## 2.7.2 — YouTube somente em canais de notícias
+## 2.7.3 — correção da busca YouTube somente notícias
+
+- Corrige regressão que zerava resultados por comparação exata do nome do canal.
+- `mostPopular` passa a solicitar explicitamente a categoria News & Politics.
+- Busca por termos também usa a categoria News & Politics.
+- Identificação de veículos aceita aliases seguros e canais jornalísticos com marcadores fortes.
+- Mantém bloqueio de creators genéricos, games, react e canais de cortes.
+- Quando a amostra atual não contém nenhum canal jornalístico aprovado, preserva o último snapshot válido em cache em vez de substituir a aba por zero resultados.
+- Preserva `categoryId` ao enriquecer resultados de `search.list` com estatísticas.
+
+## 2.7.3 — YouTube somente em canais de notícias
 
 - Aba YouTube restrita a uma lista fixa de veículos jornalísticos.
 - Canais de creators, entretenimento e comentários independentes são descartados da coleta.

@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.7.2
+## Versão 2.7.3
 
-A versão 2.7.2 mantém perfis editoriais, carrosséis flexíveis e o banco separado do YouTube. A aba YouTube passa a monitorar somente uma lista fixa de canais jornalísticos aprovados; conteúdos de creators, entretenimento e canais independentes fora da lista são descartados antes dos rankings e agrupamentos.
+A versão 2.7.3 mantém perfis editoriais, carrosséis flexíveis e o banco separado do YouTube. A aba YouTube passa a monitorar somente uma lista fixa de canais jornalísticos aprovados; conteúdos de creators, entretenimento e canais independentes fora da lista são descartados antes dos rankings e agrupamentos.
 
 Principais mudanças:
 
@@ -278,3 +278,7 @@ O `wrangler.jsonc` declara automaticamente a Queue `ronda-editorial-youtube-jobs
 ## Limitações reais
 
 Portais externos podem alterar feeds, bloquear automação ou limitar requisições. O sistema reduz o impacto com rotas alternativas, backoff e snapshots, mas não garante leitura completa de páginas protegidas por paywall ou sistemas antirobô. Em qualquer roteiro, os links originais permanecem disponíveis para revisão editorial.
+
+## Ajuste YouTube 2.7.3
+
+A coleta YouTube usa a categoria `News & Politics` como primeiro filtro e, em seguida, valida o canal por identidade jornalística. A comparação não depende mais de igualdade literal do nome do canal: aliases conhecidos e marcadores fortes de redação são aceitos. Se uma amostra atual não trouxer nenhum canal aprovado, o último snapshot jornalístico válido permanece disponível em cache em vez de ser substituído por uma coleção vazia.

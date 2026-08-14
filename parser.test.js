@@ -1,0 +1,73 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { decodeEntities, parseFeed, plainText, stableHash } from "../src/parser.js";
+
+test("decodifica entidades e remove HTML", () => {
+  assert.equal(decodeEntities("A &amp; B &#33;"), "A & B !");
+  assert.equal(plainText("<![CDATA[<b>Texto</b> &amp; mais]]>"), "Texto & mais");
+});
+
+test("lê RSS 2.0 e respeita a janela de 24 horas", () => {
+  const now = new Date("2026-07-22T12:00:00Z");
+  const xml = `<rss><channel>
+    <item><title>Matéria &amp; teste</title><link>https://example.com/a</link><pubDate>Wed, 22 Jul 2026 11:00:00 GMT</pubDate><description><![CDATA[<p>Resumo</p>]]></description></item>
+    <item><title>Antiga</title><link>https://example.com/old</link><pubDate>Mon, 20 Jul 2026 11:00:00 GMT</pubDate></item>
+  </channel></rss>`;
+  const items = parseFeed(xml, { id: "fonte", name: "Fonte" }, new Date(now.getTime() - 86_400_000));
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Matéria & teste");
+  assert.equal(items[0].description, "Resumo");
+  assert.equal(items[0].content, "Resumo");
+  assert.equal(items[0].contentSource, "feed-description");
+  assert.equal(items[0].url, "https://example.com/a");
+});
+
+test("lê Atom com link em atributo href", () => {
+  const xml = `<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Entrada Atom</title><link rel="alternate" href="https://example.com/atom"/><updated>2026-07-22T11:30:00Z</updated><summary>Resumo Atom</summary></entry></feed>`;
+  const items = parseFeed(xml, { id: "atom", name: "Atom" }, new Date("2026-07-21T12:00:00Z"));
+  assert.equal(items.length, 1);
+  assert.equal(items[0].url, "https://example.com/atom");
+  assert.match(items[0].id, /^rss-atom-/);
+});
+
+test("mantém o nome canônico e a região do portal em feeds agregados", () => {
+  const xml = `<rss><channel><item><title>Notícia internacional</title><link>https://example.com/world</link><pubDate>Wed, 22 Jul 2026 11:30:00 GMT</pubDate><source>Nome variável do agregador</source></item></channel></rss>`;
+  const items = parseFeed(xml, { id: "bbc", name: "BBC News", region: "Mundo", canonicalSource: true }, new Date("2026-07-21T12:00:00Z"));
+  assert.equal(items[0].sourceName, "BBC News");
+  assert.equal(items[0].collectorName, "BBC News");
+  assert.equal(items[0].region, "Mundo");
+});
+
+test("hash é estável", () => {
+  assert.equal(stableHash("https://example.com"), stableHash("https://example.com"));
+  assert.notEqual(stableHash("a"), stableHash("b"));
+});
+
+
+test("preserva conteúdo amplo entregue pelo feed", () => {
+  const body = "A notícia apresenta detalhes suficientes sobre o fato, os envolvidos, o local, a data, o impacto e os próximos passos. ".repeat(12);
+  const xml = `<rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item><title>Notícia detalhada</title><link>https://example.com/full</link><pubDate>Wed, 22 Jul 2026 11:00:00 GMT</pubDate><description>Resumo curto</description><content:encoded><![CDATA[<p>${body}</p>]]></content:encoded></item></channel></rss>`;
+  const items = parseFeed(xml, { id: "full", name: "Fonte" }, new Date("2026-07-21T12:00:00Z"));
+  assert.equal(items.length, 1);
+  assert.equal(items[0].contentSource, "feed-content");
+  assert.ok(items[0].contentWordCount > 100);
+  assert.match(items[0].content, /próximos passos/);
+});
+
+test("separa portais agregados pelo domínio declarado no Google News", () => {
+  const xml = `<rss><channel>
+    <item><title>Artista anuncia novidade</title><link>https://news.google.com/rss/articles/a</link><pubDate>Wed, 22 Jul 2026 11:30:00 GMT</pubDate><source url="https://portalleodias.com">Nome editorial variável</source></item>
+    <item><title>Atriz comenta carreira</title><link>https://news.google.com/rss/articles/b</link><pubDate>Wed, 22 Jul 2026 11:20:00 GMT</pubDate><source url="https://revistaquem.globo.com">Outro nome</source></item>
+  </channel></rss>`;
+  const cutoff = new Date("2026-07-21T12:00:00Z");
+  const leo = parseFeed(xml, { id: "leo", name: "LeoDias", canonicalSource: true, sourceDomains: ["portalleodias.com"] }, cutoff);
+  const quem = parseFeed(xml, { id: "quem", name: "Quem", canonicalSource: true, sourceDomains: ["revistaquem.globo.com"] }, cutoff);
+  assert.equal(leo.length, 1);
+  assert.equal(leo[0].sourceName, "LeoDias");
+  assert.equal(leo[0].publisherHomepageUrl, "https://portalleodias.com");
+  assert.equal(leo[0].publisherDomain, "portalleodias.com");
+  assert.equal(leo[0].aggregatorUrl, true);
+  assert.equal(leo[0].directPublisherUrl, false);
+  assert.equal(quem.length, 1);
+  assert.equal(quem[0].sourceName, "Quem");
+});
