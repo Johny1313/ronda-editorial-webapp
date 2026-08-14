@@ -1,4 +1,38 @@
+## 2.7.6 — carrossel baseado obrigatoriamente em matéria publicada
+
+- O carrossel só é gerado depois de abrir e extrair o texto principal de pelo menos um portal que publicou a matéria.
+- Feed, resumo, título e descrição não substituem mais a leitura do site.
+- Até três fontes do mesmo assunto podem ser tentadas para encontrar uma matéria legível; apenas uma matéria lida é usada no roteiro.
+- A IA não cria fatos: fatos/evidências são extraídos deterministicamente do texto da matéria; Workers AI atua somente na redação dos slides.
+- Cada slide é validado contra as evidências e números existentes na matéria. Conteúdo não sustentado volta para uma redação determinística baseada no texto fonte.
+- Se nenhum portal puder ser lido, a geração termina com diagnóstico explícito em vez de produzir carrossel por contingência.
+- Cache só é aceito quando contém texto principal previamente extraído de uma página de portal verificada.
+- Erro de matéria indisponível não entra em loop de retry da Queue, reduzindo espera desnecessária.
+
 # Changelog
+
+## 2.7.5 — carrossel rápido e conclusão garantida
+
+- Reduz de duas chamadas sequenciais de Workers AI para uma única geração estruturada de fatos + roteiro.
+- Timeout da leitura direta reduzido e fallback imediato para o conteúdo da própria matéria.
+- Caminho rápido quando o feed já contém texto amplo, evitando download redundante do portal.
+- Timeout da IA limitado; se exceder, o roteiro é finalizado automaticamente pelo modo factual de contingência.
+- Menos gravações de progresso no D1 e fila de leitura com concorrência 3.
+- Polling do navegador limitado a 75 segundos e jobs sem progresso expiram em 2 minutos.
+- Logs `intelligent_job_completed` registram duração total, leitura, IA, fast-path e número de slides.
+- Mantém perfil editorial, quantidade flexível de slides e apuração baseada em uma única matéria.
+
+## 2.7.4 — resiliência e diagnóstico da Ronda
+
+- Preserva a última ronda válida quando uma nova tentativa falha.
+- Mantém os diagnósticos reais dos portais em tentativas encerradas após retries.
+- Diferencia coleta `complete`, `partial` e `failed`.
+- Coleta parcial continua sendo publicada quando há dados úteis, mesmo se parte do processamento complementar falhar.
+- `/api/status` informa a última tentativa com resumo de fontes, cache, degradação e falhas.
+- `/api/runs/:id` expõe diagnóstico compacto sem devolver o payload editorial completo.
+- O painel mostra a última tentativa problemática sem substituir os dados válidos por zeros.
+- Chips de fontes passam a representar a tentativa mais recente enquanto os cards preservam a última ronda válida.
+- Logs finais incluem totais de fontes com conteúdo, degradadas e falhas por código.
 
 ## 2.7.3 — correção da busca YouTube somente notícias
 

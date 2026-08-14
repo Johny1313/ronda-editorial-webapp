@@ -4,6 +4,7 @@ const DEFAULT_LIMIT = 25;
 const REQUEST_TIMEOUT_MS = 8_000;
 
 export const YOUTUBE_CHANNEL_SCOPE = "news_only";
+export const YOUTUBE_NEWS_CATEGORY_ID = "25";
 export const APPROVED_YOUTUBE_NEWS_CHANNELS = Object.freeze([
   "g1",
   "GloboNews",
@@ -30,7 +31,13 @@ export const APPROVED_YOUTUBE_NEWS_CHANNELS = Object.freeze([
   "Money Times",
   "ge",
   "Canaltech",
-  "Canal Rural"
+  "Canal Rural",
+  "TV Brasil",
+  "TV Cultura",
+  "Jornal da Record",
+  "R7",
+  "Terra",
+  "Gazeta do Povo"
 ]);
 
 function normalizedChannelName(value) {
@@ -45,10 +52,58 @@ const APPROVED_YOUTUBE_NEWS_CHANNEL_KEYS = new Set(
   APPROVED_YOUTUBE_NEWS_CHANNELS.map(normalizedChannelName)
 );
 
+const APPROVED_YOUTUBE_NEWS_ALIASES = Object.freeze([
+  "globonews", "globo news",
+  "cnn brasil",
+  "band jornalismo", "bandnews", "band news",
+  "sbt news",
+  "record news", "jornal da record",
+  "jovem pan news", "jp news",
+  "uol noticias",
+  "folha de s paulo", "folha de sao paulo",
+  "estadao",
+  "o globo",
+  "poder360", "poder 360",
+  "bbc news brasil",
+  "metropoles",
+  "agencia brasil",
+  "infomoney", "info money",
+  "money times",
+  "canal rural",
+  "canaltech",
+  "tv brasil",
+  "tv cultura",
+  "gazeta do povo"
+].map(normalizedChannelName));
+
+const NEWS_CHANNEL_MARKERS = Object.freeze([
+  "news", "noticias", "jornal", "jornalismo", "agencia", "bandnews", "globonews"
+]);
+
+const NEWS_CHANNEL_EXCLUSION_MARKERS = Object.freeze([
+  "cortes", "corte", "react", "reacao", "fan", "fã", "parodia", "humor", "game", "games", "gaming"
+].map(normalizedChannelName));
+
+function matchesApprovedNewsAlias(key) {
+  if (!key) return false;
+  if (APPROVED_YOUTUBE_NEWS_CHANNEL_KEYS.has(key)) return true;
+  if (["g1", "ge", "cbn", "uol", "veja", "r7", "terra"].includes(key)) return true;
+  return APPROVED_YOUTUBE_NEWS_ALIASES.some((alias) =>
+    key === alias || key.startsWith(`${alias} `) || key.endsWith(` ${alias}`)
+  );
+}
+
+function looksLikeNewsroomChannel(key) {
+  if (!key || NEWS_CHANNEL_EXCLUSION_MARKERS.some((marker) => key.includes(marker))) return false;
+  return NEWS_CHANNEL_MARKERS.some((marker) => key.includes(marker));
+}
+
 export function isApprovedYouTubeNewsChannel(value) {
   const title = typeof value === "string" ? value : value?.channel || value?.snippet?.channelTitle || "";
   const key = normalizedChannelName(title);
-  return Boolean(key && APPROVED_YOUTUBE_NEWS_CHANNEL_KEYS.has(key));
+  if (matchesApprovedNewsAlias(key)) return true;
+  const categoryId = String(typeof value === "object" ? value?.categoryId || value?.snippet?.categoryId || "" : "");
+  return categoryId === YOUTUBE_NEWS_CATEGORY_ID && looksLikeNewsroomChannel(key);
 }
 
 export function filterYouTubeNewsVideos(videos = []) {
@@ -118,7 +173,7 @@ async function fetchJson(url, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.6.1" },
+      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.7.6" },
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -429,14 +484,32 @@ export async function collectYouTubeTrending({ apiKey, region = DEFAULT_REGION, 
     part: "snippet,statistics,contentDetails",
     chart: "mostPopular",
     regionCode: String(region || DEFAULT_REGION).toUpperCase(),
+    videoCategoryId: YOUTUBE_NEWS_CATEGORY_ID,
     maxResults: 50,
     hl: "pt-BR",
   });
-  const videos = filterYouTubeNewsVideos(
-    (payload.items || []).map((item, index) => normalizeYouTubeVideo(item, index, nowMs))
-  ).slice(0, outputLimit);
+  const sample = (payload.items || []).map((item, index) => normalizeYouTubeVideo(item, index, nowMs));
+  const videos = filterYouTubeNewsVideos(sample).slice(0, outputLimit);
+  if (!videos.length) {
+    const previousNews = restrictYouTubeCollectionToNews(previous);
+    if (previousNews?.videos?.length) {
+      return {
+        collection: {
+          ...previousNews,
+          id: crypto.randomUUID(),
+          collectedAt: new Date(nowMs).toISOString(),
+          cached: true,
+          cacheReason: "Nenhum canal jornalístico aprovado apareceu na amostra atual de News & Politics.",
+          filterStats: { sampleCount: sample.length, approvedCount: 0 },
+        },
+        quotaEvents: [{ endpoint: "videos.list", bucket: "general", units: 1, calls: 1 }],
+      };
+    }
+  }
+  const collection = buildYouTubeCollection(videos, { region: String(region || DEFAULT_REGION).toUpperCase(), previous, collectedAt: new Date(nowMs).toISOString() });
+  collection.filterStats = { sampleCount: sample.length, approvedCount: videos.length };
   return {
-    collection: buildYouTubeCollection(videos, { region: String(region || DEFAULT_REGION).toUpperCase(), previous, collectedAt: new Date(nowMs).toISOString() }),
+    collection,
     quotaEvents: [{ endpoint: "videos.list", bucket: "general", units: 1, calls: 1 }],
   };
 }
@@ -449,8 +522,12 @@ function mergeSearchWithStats(searchItems, statsItems, nowMs) {
     return normalizeYouTubeVideo({
       id,
       snippet: {
+        ...(stat.snippet || {}),
         ...(searchItem.snippet || {}),
-        publishedAt: searchItem.snippet?.publishedAt || stat.snippet?.publishTime,
+        categoryId: stat.snippet?.categoryId || searchItem.snippet?.categoryId || "",
+        channelId: searchItem.snippet?.channelId || stat.snippet?.channelId || "",
+        channelTitle: searchItem.snippet?.channelTitle || stat.snippet?.channelTitle || "",
+        publishedAt: searchItem.snippet?.publishedAt || stat.snippet?.publishedAt || stat.snippet?.publishTime,
       },
       statistics: stat.statistics || {},
       contentDetails: stat.contentDetails || {},
@@ -468,6 +545,7 @@ export async function collectYouTubeTerm({ apiKey, term, termId, region = DEFAUL
     relevanceLanguage: "pt",
     safeSearch: "moderate",
     order: "date",
+    videoCategoryId: YOUTUBE_NEWS_CATEGORY_ID,
     publishedAfter,
     maxResults: clamp(Math.max(Number(limit) * 4, 20), 1, 50),
   });

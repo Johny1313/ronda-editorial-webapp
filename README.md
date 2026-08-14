@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.7.3
+## Versão 2.7.6
 
-A versão 2.7.3 mantém perfis editoriais, carrosséis flexíveis e o banco separado do YouTube. A aba YouTube passa a monitorar somente uma lista fixa de canais jornalísticos aprovados; conteúdos de creators, entretenimento e canais independentes fora da lista são descartados antes dos rankings e agrupamentos.
+A versão 2.7.6 mantém a Ronda resiliente, perfis editoriais, carrosséis flexíveis e YouTube separado. A geração de carrossel agora exige a leitura real de pelo menos uma matéria publicada por um portal: feed, resumo ou título não bastam. Os fatos/evidências são extraídos do texto lido; a IA atua somente na redação dos slides e não pode criar fatos.
 
 Principais mudanças:
 
@@ -123,19 +123,25 @@ O banco `YOUTUBE_DB` é isolado do `DB`; uma falha ou crescimento do YouTube nã
 
 A aba não possui gráficos. Ela preserva o padrão de cards, chips, filtros, indicadores e links de apuração usado pela Ronda.
 
-A leitura inteligente usa uma fila separada:
+A leitura inteligente usa uma fila separada e exige apuração em uma página publicada:
 
 ```text
 assunto selecionado
         ↓
 ronda-editorial-intelligent-jobs
         ↓
-leitura de uma única matéria
+tenta até 3 portais do assunto
         ↓
-mapa de fatos e evidências
+abre e extrai o texto principal de 1 matéria publicada
         ↓
-roteiro de sete slides em português
+extrai evidências diretamente do texto
+        ↓
+Workers AI apenas redige com essas evidências
+        ↓
+roteiro de 3 a 15 slides em português
 ```
+
+Se nenhum portal puder ser aberto e lido, o carrossel não é gerado. Feed, título e resumo nunca substituem a matéria publicada.
 
 ## Frequência das fontes
 

@@ -765,6 +765,50 @@ function enrichStatus(status, sourceState, feed) {
   };
 }
 
+
+export function summarizePortalStatuses(statuses = []) {
+  const portals = (Array.isArray(statuses) ? statuses : []).filter((source) => source?.region !== "Rede");
+  const issues = portals.filter((source) => !source?.ok || source?.degraded || source?.warning);
+  const failures = portals.filter((source) => !source?.ok);
+  const degraded = portals.filter((source) => source?.degraded || source?.warning);
+  const cached = portals.filter((source) => source?.cached || source?.route === "cache");
+  const withContent = portals.filter((source) => source?.ok && Number(source?.count) > 0);
+  const noNew = portals.filter((source) => source?.ok && Number(source?.count) === 0 && !source?.cached);
+  const byCode = {};
+  for (const source of issues) {
+    const code = source?.errorCode
+      || (Number(source?.httpStatus) ? `http-${Number(source.httpStatus)}` : null)
+      || (source?.degraded ? "degraded-cache" : "unknown");
+    byCode[code] = (Number(byCode[code]) || 0) + 1;
+  }
+  return {
+    total: portals.length,
+    withContent: withContent.length,
+    healthy: Math.max(0, portals.length - failures.length),
+    failed: failures.length,
+    degraded: degraded.length,
+    cached: cached.length,
+    noNew: noNew.length,
+    complete: failures.length === 0 && degraded.length === 0,
+    byCode,
+    issues: issues.slice(0, 12).map((source) => ({
+      id: source?.id || null,
+      name: source?.name || "Fonte",
+      region: source?.region || "Brasil",
+      ok: Boolean(source?.ok),
+      count: Number(source?.count) || 0,
+      cached: Boolean(source?.cached),
+      degraded: Boolean(source?.degraded),
+      route: source?.route || null,
+      httpStatus: source?.httpStatus == null ? null : Number(source.httpStatus),
+      errorCode: source?.errorCode || null,
+      detail: String(source?.warning || source?.error || "").slice(0, 220) || null,
+      lastAttemptAt: source?.lastAttemptAt || null,
+      lastSuccessAt: source?.lastSuccessAt || null,
+    })),
+  };
+}
+
 export async function collectRound({
   fetcher = fetch,
   now = new Date(),
@@ -825,17 +869,21 @@ export async function collectRound({
 
   const portalItems = uniqueItems(resilientPortalResults.flatMap((result) => result.items), 435);
   const portalStatuses = resilientPortalResults.map((result) => result.status);
+  const portalDiagnostics = summarizePortalStatuses(portalStatuses);
 
   const dedicatedMonitoring = await collectDedicatedMonitoring(monitoringTerms, cutoff, fetcher);
 
   if (!portalItems.length) {
     return {
       ok: false,
+      collectionStatus: "failed",
+      degraded: true,
       collectedAt: collectedAt.toISOString(),
       windowHours: 24,
       durationMs: Date.now() - startedAt,
       error: "Nenhuma fonte respondeu com conteúdo válido nas últimas 24 horas.",
       sources: portalStatuses,
+      diagnostics: { portals: portalDiagnostics },
       totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: dedicatedMonitoring.items.length },
       items: [],
       topics: [],
@@ -858,12 +906,16 @@ export async function collectRound({
   const sourceCount = new Set(allItems.map((item) => item.sourceName).filter(Boolean)).size;
   const socialItems = allItems.filter((item) => item.kind === "social").length;
 
+  const collectionStatus = portalDiagnostics.complete ? "complete" : "partial";
   return {
     ok: true,
+    collectionStatus,
+    degraded: collectionStatus === "partial",
     collectedAt: collectedAt.toISOString(),
     windowHours: 24,
     durationMs: Date.now() - startedAt,
     sources: [...portalStatuses, social.status],
+    diagnostics: { portals: portalDiagnostics },
     totals: {
       items: allItems.length,
       topics: topics.length,

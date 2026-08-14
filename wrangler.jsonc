@@ -47,7 +47,7 @@
         "max_retries": 3,
         "retry_delay": 15,
         "dead_letter_queue": "ronda-editorial-intelligent-jobs-dlq",
-        "max_concurrency": 2
+        "max_concurrency": 3
       },
       {
         "queue": "ronda-editorial-round-jobs",

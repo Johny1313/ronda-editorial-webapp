@@ -24,6 +24,8 @@ const state = {
   statusEtag: "",
   latestEtag: "",
   serverRunning: false,
+  attemptDiagnostics: null,
+  lastAttemptId: null,
   youtubeData: null,
   youtubeStatus: null,
   youtubeEtag: "",
@@ -82,6 +84,26 @@ function setStatus(type, label, sub) {
   liveDot.className = `live ${type || ""}`;
   statusLabel.textContent = label;
   statusSub.textContent = sub;
+}
+
+function roundDiagnosticsSummary(diagnostics) {
+  const portals = diagnostics?.portals || diagnostics || {};
+  const total = Number(portals.total) || 0;
+  const withContent = Number(portals.withContent) || 0;
+  const failed = Number(portals.failed) || 0;
+  const degraded = Number(portals.degraded) || 0;
+  const cached = Number(portals.cached) || 0;
+  if (!total) return "A tentativa não trouxe diagnóstico por fonte.";
+  const parts = [`${withContent}/${total} fontes com conteúdo`];
+  if (cached) parts.push(`${cached} em cache`);
+  if (degraded) parts.push(`${degraded} degradadas`);
+  if (failed) parts.push(`${failed} falharam`);
+  return parts.join(" · ");
+}
+
+function lastValidRoundLabel() {
+  const value = state.data?.collectedAt || state.data?.storedAt || state.health?.lastSuccessAt;
+  return value ? `Última ronda válida ${relativeTime(value)}` : "Nenhuma ronda válida disponível";
 }
 
 async function parseApiResponse(response) {
@@ -202,14 +224,18 @@ function renderSourceHealth(message = "", warning = false) {
     holder.innerHTML = `<span class="health-message ${warning ? "warn" : ""}">${escapeHtml(message)}</span>`;
     return;
   }
-  const sources = state.data?.sources || [];
+  const attemptSources = Array.isArray(state.attemptDiagnostics?.sources) ? state.attemptDiagnostics.sources : [];
+  const sources = attemptSources.length ? attemptSources : state.data?.sources || [];
   if (!sources.length) {
     holder.innerHTML = '<span class="health-label">Fontes ainda não consultadas</span>';
     return;
   }
   const portals = sources.filter((source) => sourceRegion(source) !== "Rede");
   const okCount = portals.filter((source) => source.ok && Number(source.count) > 0).length;
-  holder.innerHTML = `<span class="health-label">Portais ${okCount}/${portals.length}</span>${["Brasil", "Mundo", "Rede"].map((region) => {
+  const attemptLabel = attemptSources.length
+    ? `Última tentativa ${okCount}/${portals.length} · dados da ronda válida preservados`
+    : `Portais ${okCount}/${portals.length}`;
+  holder.innerHTML = `<span class="health-label">${escapeHtml(attemptLabel)}</span>${["Brasil", "Mundo", "Rede"].map((region) => {
     const regionalSources = sources.filter((source) => sourceRegion(source) === region);
     if (!regionalSources.length) return "";
     return `<span class="health-region">${escapeHtml(region)}</span>${regionalSources.map((source) => {
@@ -597,6 +623,8 @@ function applyRound(payload) {
   if (!payload?.ok || !Array.isArray(payload.topics)) return;
   state.data = payload;
   state.lastRunId = payload.runId || state.lastRunId;
+  state.attemptDiagnostics = null;
+  state.lastAttemptId = null;
   state.expanded.clear();
   document.getElementById("lastUpdate").textContent = `Última coleta: ${formatDate(payload.collectedAt)}`;
   renderSourceHealth();
@@ -646,7 +674,11 @@ async function waitForRun(runId) {
       const payload = await api(`/api/runs/${encodeURIComponent(runId)}`);
       const run = payload?.run;
       if (run?.status === "success") return run;
-      if (["failed", "expired"].includes(run?.status)) throw new Error(run.error || "A ronda foi encerrada antes da conclusão.");
+      if (["failed", "expired"].includes(run?.status)) {
+        const error = new Error(run.error || "A ronda foi encerrada antes da conclusão.");
+        error.run = run;
+        throw error;
+      }
       const queued = run?.status === "queued";
       setStatus("", queued ? "Ronda na fila" : "Ronda em andamento", queued ? "Aguardando o consumidor da Cloudflare" : `Coletando fontes… ${Math.min(99, 5 + attempt * 3)}%`);
     } catch (error) {
@@ -688,7 +720,11 @@ async function executeRound(automatic = false) {
     const completed = await loadLatest();
     if (!completed?.ok) throw new Error("A ronda terminou, mas o resultado ainda não foi carregado.");
     const completedAt = completed.collectedAt || completed.storedAt || new Date().toISOString();
-    setStatus("ok", "Ronda concluída", `Coleta finalizada às ${new Date(completedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`);
+    if (completed.collectionStatus === "partial" || completed.degraded) {
+      setStatus("warn", "Ronda concluída parcialmente", `${roundDiagnosticsSummary(completed.diagnostics)} · dados disponíveis`);
+    } else {
+      setStatus("ok", "Ronda concluída", `Coleta finalizada às ${new Date(completedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`);
+    }
   } catch (error) {
     if (error.status === 401) {
       document.getElementById("tokenMessage").textContent = "Chave incorreta. Confira a variável MANUAL_ROUND_TOKEN.";
@@ -696,8 +732,17 @@ async function executeRound(automatic = false) {
     }
     const locked = error.status === 409 || error.status === 429;
     const pending = error.message.startsWith("A ronda continua no servidor");
-    setStatus(locked || pending ? "warn" : "error", pending ? "Ronda ainda em andamento" : locked ? "Ronda já em andamento" : "Falha ao executar a ronda", error.message);
-    if (!pending) renderSourceHealth(error.message, locked);
+    const failedRun = error.run && ["failed", "expired"].includes(error.run.status) ? error.run : null;
+    if (failedRun?.diagnostics) {
+      await loadLatest({ quiet: true, force: true });
+      state.attemptDiagnostics = failedRun.diagnostics;
+      state.lastAttemptId = failedRun.id || null;
+      setStatus("warn", "Última tentativa falhou", `${roundDiagnosticsSummary(failedRun.diagnostics)} · ${lastValidRoundLabel()}`);
+      renderSourceHealth();
+    } else {
+      setStatus(locked || pending ? "warn" : "error", pending ? "Ronda ainda em andamento" : locked ? "Ronda já em andamento" : "Falha ao executar a ronda", error.message);
+      if (!pending) renderSourceHealth(error.message, locked);
+    }
   } finally {
     state.running = false;
     runButton.disabled = false;
@@ -1013,11 +1058,12 @@ function carouselAsText(topic, carousel) {
   return [
     `ROTEIRO DE CARROSSEL — ${topic.editoria || "Notícias"}`,
     "LEITURA INTELIGENTE — UMA MATÉRIA POR SUGESTÃO",
-    `Modo: ${carousel?.analysisMode === "ai" ? "Workers AI" : "Análise automática de contingência"}`,
+    `Modo: ${String(carousel?.analysisMode || "").startsWith("ai-") ? "Workers AI apenas na redação" : "Extração direta da matéria"}`,
     `Qualidade: ${reading.qualityLabel || "Conteúdo disponível"}`,
     `Fonte selecionada: ${reading.selectedSource?.sourceName || reading.sources?.[0]?.sourceName || "Não informada"}`,
-    `Leitura direta: ${Number(reading.liveSuccessful) ? "sim" : "não"}`,
-    `Fallback da mesma matéria: ${Number(reading.fallbackSources) ? "sim" : "não"}`,
+    `Matéria de portal verificada: ${reading.publisherVerified ? "sim" : "não"}`,
+    `Tentativas de leitura: ${Number(reading.requested) || 0}`,
+    `Fatos criados pela IA: ${reading.factsGeneratedByAi ? "sim" : "não"}`,
     `Ciclo encerrado: ${reading.cycleComplete ? "sim" : "não"}`,
     `Sistema liberado para novo ciclo: ${carousel?.cycle?.nextCycleAllowed || reading.nextCycleAllowed ? "sim" : "não"}`,
     `Palavras analisadas: ${Number(reading.totalWords) || 0}`,
@@ -1093,11 +1139,11 @@ function setCarouselJobProgress(job = {}) {
   });
 }
 
-async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1_200) {
-  const deadline = Date.now() + 180_000;
+async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 900) {
+  const deadline = Date.now() + 75_000;
   while (Date.now() < deadline) {
     if (requestSerial !== state.carouselRequestSerial) return null;
-    await wait(Math.max(700, Number(pollAfterMs) || 1_200));
+    await wait(Math.max(650, Number(pollAfterMs) || 900));
     if (requestSerial !== state.carouselRequestSerial) return null;
     const response = await api(`/api/intelligent-jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`);
     const job = response?.job || {};
@@ -1108,7 +1154,7 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 1_200) 
     }
     setCarouselJobProgress(job);
   }
-  throw new Error("A leitura ultrapassou três minutos. O processamento pode continuar na fila; feche e abra novamente este assunto para consultar o resultado.");
+  throw new Error("A geração ultrapassou 75 segundos. O ciclo foi considerado lento demais; tente novamente para iniciar uma tarefa limpa.");
 }
 
 function questionCard(label, value) {
@@ -1161,19 +1207,19 @@ function renderIntelligentCarousel(topic, carousel) {
   };
   const reading = carousel.reading || {};
   const profileLabel = carousel.writingProfile?.active ? `Perfil personalizado · ${Number(carousel.writingProfile.sampleCount) || 0} exemplos` : "Padrão jornalístico";
-  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${carousel.analysisMode === "ai" ? "Workers AI" : "Contingência automática"}</strong></span>`;
+  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${String(carousel.analysisMode || "").startsWith("ai-") ? "Workers AI · apenas redação" : "Extração direta da matéria"}</strong></span>`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
   const selectedSource = reading.selectedSource || (reading.sources || [])[0] || {};
-  const modeLabel = selectedSource.readMode === "full-article-cache" ? "Texto em cache" : Number(reading.liveSuccessful) ? "Texto da matéria" : "Fallback do feed";
+  const modeLabel = selectedSource.readMode === "full-article-cache" ? "Matéria já extraída · cache" : "Matéria lida no portal";
   const selection = selectedSource.selection || {};
   const cycleReleased = Boolean(carousel.cycle?.released && carousel.cycle?.nextCycleAllowed && reading.cycleComplete);
-  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Leitura de uma matéria</p><h3>Uma fonte por sugestão, com encerramento automático</h3></div><span>${cycleReleased ? "Ciclo liberado" : `${Number(reading.successful) || 0}/1 matéria`}</span></div><div class="reading-stats"><span><small>Fonte selecionada</small><strong>${escapeHtml(selectedSource.sourceName || "Não informada")}</strong></span><span><small>Modo de leitura</small><strong>${escapeHtml(modeLabel)}</strong></span><span><small>Palavras analisadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Seleção</small><strong>${selection.score ? `${Number(selection.score)} pontos · ${Number(selection.candidatesEvaluated) || 1} avaliadas` : "Melhor fonte disponível"}</strong></span><span class="cycle-release"><small>Ciclo</small><strong>${cycleReleased ? "Encerrado · próximo ciclo liberado" : "Finalização pendente"}</strong></span></div>`;
+  readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>O roteiro só existe depois de ler uma matéria publicada</h3></div><span>${reading.publisherVerified ? "Fonte verificada" : "Sem fonte verificada"}</span></div><div class="reading-stats"><span><small>Fonte selecionada</small><strong>${escapeHtml(selectedSource.sourceName || "Não informada")}</strong></span><span><small>Modo de leitura</small><strong>${escapeHtml(modeLabel)}</strong></span><span><small>Palavras analisadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Seleção</small><strong>${selection.score ? `${Number(selection.score)} pontos · ${Number(selection.candidatesEvaluated) || 1} avaliadas` : "Melhor fonte disponível"}</strong></span><span class="cycle-release"><small>Ciclo</small><strong>${cycleReleased ? "Encerrado · próximo ciclo liberado" : "Finalização pendente"}</strong></span></div>`;
 
   const evidenceHolder = document.getElementById("carouselEvidence");
   const facts = Array.isArray(carousel.facts) ? carousel.facts : [];
   evidenceHolder.hidden = false;
-  evidenceHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Rastreabilidade factual</p><h3>Mapa de fatos e evidências</h3></div><span>${facts.length} ${facts.length === 1 ? "fato validado" : "fatos validados"}</span></div><div class="evidence-list">${facts.length ? facts.map((fact) => `<article id="evidence-${escapeHtml(fact.id)}"><div><strong>${escapeHtml(fact.claim)}</strong><small>Confiança ${escapeHtml(confidenceLabel(fact.confidence))}</small></div><p>${escapeHtml(fact.evidence)}</p></article>`).join("") : "<p>Nenhuma evidência estruturada foi retornada.</p>"}</div>`;
+  evidenceHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Rastreabilidade da matéria</p><h3>Informações e evidências extraídas do site</h3></div><span>${facts.length} ${facts.length === 1 ? "evidência extraída" : "evidências extraídas"}</span></div><div class="evidence-list">${facts.length ? facts.map((fact) => `<article id="evidence-${escapeHtml(fact.id)}"><div><strong>${escapeHtml(fact.claim)}</strong><small>Confiança ${escapeHtml(confidenceLabel(fact.confidence))}</small></div><p>${escapeHtml(fact.evidence)}</p></article>`).join("") : "<p>Nenhuma evidência estruturada foi retornada.</p>"}</div>`;
 
   const questions = carousel.questions || {};
   const analysisHolder = document.getElementById("carouselAnalysis");
@@ -1345,6 +1391,13 @@ async function pollStatus({ force = false } = {}) {
         const reference = queued ? status.activeRunQueuedAt : status.activeRunStartedAt;
         const started = reference ? relativeTime(reference) : "agora";
         setStatus("", queued ? "Ronda na fila" : "Ronda em andamento", queued ? `Aguardando consumidor · enviada ${started}` : `Coletando fontes · iniciado ${started}`);
+      } else if (status?.lastAttempt?.status && ["failed", "expired"].includes(status.lastAttempt.status)) {
+        if (status.lastAttempt.id !== state.lastAttemptId) {
+          state.lastAttemptId = status.lastAttempt.id || null;
+          state.attemptDiagnostics = status.lastAttempt.diagnostics || null;
+          renderSourceHealth();
+        }
+        setStatus("warn", status.lastAttempt.status === "expired" ? "Última tentativa expirou" : "Última tentativa falhou", `${roundDiagnosticsSummary(status.lastAttempt.diagnostics)} · ${lastValidRoundLabel()}`);
       } else if (status?.lastRunId && status.lastRunId !== state.lastRunId) {
         await loadLatest({ quiet: true });
         const completedAt = status.lastSuccessAt || state.data?.collectedAt;

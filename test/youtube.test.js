@@ -96,6 +96,14 @@ test("aceita somente canais jornalísticos aprovados", () => {
   assert.deepEqual(filterYouTubeNewsVideos(mixed).map((video) => video.channel), ["CNN Brasil", "Band Jornalismo"]);
 });
 
+
+test("aceita aliases jornalísticos e categoria News & Politics sem liberar creators genéricos", () => {
+  assert.equal(isApprovedYouTubeNewsChannel({ channel: "CNN Brasil Ao Vivo", categoryId: "25" }), true);
+  assert.equal(isApprovedYouTubeNewsChannel({ channel: "Jornal da Cidade", categoryId: "25" }), true);
+  assert.equal(isApprovedYouTubeNewsChannel({ channel: "Canal de Games News", categoryId: "25" }), false);
+  assert.equal(isApprovedYouTubeNewsChannel({ channel: "Opinião do João", categoryId: "25" }), false);
+});
+
 test("filtra snapshots antigos e resultados de termos para news only", () => {
   const mixed = calculateYouTubeAttention([
     { ...normalized[0], channel: "CNN Brasil", channelId: "cnn" },

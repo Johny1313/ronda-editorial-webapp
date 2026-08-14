@@ -60,3 +60,13 @@ test("perfil editorial permite cadastro, exemplos de escrita e slides flexíveis
   assert.match(css, /\.profile-workspace-grid/);
   assert.match(css, /\.carousel-setup/);
 });
+
+
+test("painel preserva a última ronda válida e mostra diagnóstico da tentativa com falha", async () => {
+  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(app, /attemptDiagnostics/);
+  assert.match(app, /Última tentativa falhou/);
+  assert.match(app, /dados da ronda válida preservados/);
+  assert.match(app, /roundDiagnosticsSummary/);
+  assert.match(app, /lastValidRoundLabel/);
+});

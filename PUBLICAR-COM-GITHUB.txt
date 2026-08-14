@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.7.3 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.7.6 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
@@ -24,7 +24,7 @@ CHANGELOG.md.
 ----------------------------
 Crie uma branch, por exemplo:
 
-  perfil-v2.7.3
+  release-v2.7.6
 
 Envie o pacote completo para essa branch. Evite Upload files em main.
 
@@ -49,6 +49,7 @@ O wrangler.jsonc declara:
   INTELLIGENT_JOBS_QUEUE     leitura inteligente
   ROUND_JOBS_QUEUE           rondas de portais
   YOUTUBE_JOBS_QUEUE         coleta independente do YouTube
+  YOUTUBE_DB                 banco D1 separado do YouTube
 
 Filas:
 
@@ -99,7 +100,7 @@ Abra:
 
 Confirme:
 
-  version: 2.7.3
+  version: 2.7.6
   youtube.configured: true
   youtube.queueReady: true
   catalogPortals: 39
@@ -116,7 +117,7 @@ Na interface:
 
 8. PROMOVER
 -----------
-Depois do preview, abra Pull Request da branch perfil-v2.7.3 para main.
+Depois do preview, abra Pull Request da branch release-v2.7.6 para main.
 O merge executará o deploy de produção.
 
 9. MONITORAR
@@ -134,7 +135,7 @@ por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota
 API afetam somente a aba YouTube.
 
 
-Após o deploy da v2.7.3, aplique as migrações pendentes:
+Após o deploy da v2.7.6, aplique as migrações pendentes:
 
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
@@ -151,5 +152,14 @@ O Wrangler aplicará 0005 e 0006 quando ainda estiverem pendentes. A 0006 cria o
 6. Confirme que o servidor devolve exatamente a quantidade escolhida.
 7. Saia e entre novamente para validar a sessão.
 
-A versão 2.7.3 não exige novo binding no Cloudflare. Os perfis usam o mesmo D1.
+A versão 2.7.6 não exige novo binding nem nova migration. Os perfis continuam no DB principal e o YouTube permanece no YOUTUBE_DB.
 Não há confirmação de e-mail nem recuperação automática de senha nesta versão.
+
+11. VALIDAR APURAÇÃO OBRIGATÓRIA DO CARROSSEL
+----------------------------------------------
+1. Abra um assunto com link de portal e gere o carrossel.
+2. Confirme em "Apuração obrigatória" que a fonte aparece como verificada.
+3. Confirme que "Fatos criados pela IA" aparece como não no texto copiado.
+4. Teste um portal bloqueado: o sistema pode tentar até 3 fontes do mesmo assunto.
+5. Se nenhum site puder ser lido, a geração deve falhar com diagnóstico; não deve usar feed, título ou resumo para fabricar um roteiro.
+

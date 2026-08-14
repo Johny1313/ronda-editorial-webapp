@@ -1,6 +1,6 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
 import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
-import { collectRound, FEEDS } from "./collector.js";
+import { collectRound, FEEDS, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
   createIntelligentJob,
@@ -98,8 +98,8 @@ import {
   restrictYouTubeTermResultToNews,
 } from "./youtube.js";
 
-const VERSION = "2.7.3";
-const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
+const VERSION = "2.7.6";
+const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
   "Content-Security-Policy": "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https://i.ytimg.com https://*.ytimg.com; object-src 'none'; script-src 'self'; style-src 'self'",
@@ -146,6 +146,74 @@ function freshActiveRun(run, { queuedMaxAgeMs = 2 * 60 * 1000, runningMaxAgeMs =
   const referenceMs = Date.parse(reference || "");
   const maximum = run.status === "queued" ? queuedMaxAgeMs : runningMaxAgeMs;
   return Number.isFinite(referenceMs) && Date.now() - referenceMs <= maximum ? run : null;
+}
+
+function compactRoundDiagnosticSources(sources = []) {
+  return (Array.isArray(sources) ? sources : [])
+    .filter((source) => source?.region !== "Rede")
+    .map((source) => ({
+      id: source?.id || null,
+      name: source?.name || "Fonte",
+      region: source?.region || "Brasil",
+      ok: Boolean(source?.ok),
+      count: Number(source?.count) || 0,
+      cached: Boolean(source?.cached),
+      degraded: Boolean(source?.degraded),
+      route: source?.route || null,
+      httpStatus: source?.httpStatus == null ? null : Number(source.httpStatus),
+      errorCode: source?.errorCode || null,
+      error: String(source?.warning || source?.error || "").slice(0, 220) || null,
+      lastAttemptAt: source?.lastAttemptAt || null,
+      lastSuccessAt: source?.lastSuccessAt || null,
+      nextCheckAt: source?.nextCheckAt || null,
+    }));
+}
+
+function roundDiagnosticPayload(payload = {}) {
+  const sources = compactRoundDiagnosticSources(payload?.sources);
+  const portals = payload?.diagnostics?.portals || summarizePortalStatuses(sources);
+  return {
+    collectionStatus: payload?.collectionStatus || (payload?.ok ? (portals?.complete ? "complete" : "partial") : "failed"),
+    portals,
+    sources,
+    attemptedAt: payload?.attemptedAt || payload?.collectedAt || null,
+    detail: payload?.detail || null,
+  };
+}
+
+function terminalRoundFailurePayload(error, { startedAt } = {}) {
+  const sourcePayload = error?.roundPayload && typeof error.roundPayload === "object" && !Array.isArray(error.roundPayload)
+    ? error.roundPayload
+    : null;
+  const now = new Date().toISOString();
+  const base = sourcePayload || {};
+  const diagnostics = roundDiagnosticPayload(base);
+  return {
+    ...base,
+    ok: false,
+    collectionStatus: "failed",
+    degraded: true,
+    schemaVersion: Number(base.schemaVersion) || 5,
+    collectedAt: base.collectedAt || now,
+    attemptedAt: now,
+    windowHours: Number(base.windowHours) || 24,
+    durationMs: Number(base.durationMs) || Math.max(0, Date.now() - Date.parse(startedAt || now)),
+    error: "A ronda não pôde ser concluída após as tentativas automáticas.",
+    detail: String(error instanceof Error ? error.message : error || base.detail || "Falha não identificada.").slice(0, 500),
+    sources: Array.isArray(base.sources) ? base.sources : [],
+    diagnostics,
+    totals: base.totals || { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
+    items: Array.isArray(base.items) && base.ok ? base.items : [],
+    topics: Array.isArray(base.topics) && base.ok ? base.topics : [],
+    dedicatedMonitoring: base.dedicatedMonitoring || {
+      enabled: false,
+      terms: [],
+      items: [],
+      statuses: [],
+      totals: { terms: 0, items: 0, sources: 0 },
+    },
+    operational: base.operational || {},
+  };
 }
 
 
@@ -354,6 +422,7 @@ function articleAnalysisAi(env) {
 
 
 function retryableProcessingError(error) {
+  if (error?.code === "PUBLISHER_ARTICLE_UNAVAILABLE") return false;
   const message = error instanceof Error ? error.message : String(error || "");
   return /timeout|tempo limite|temporar|429|500|502|503|504|ai indisponível|falha de rede|network/i.test(message);
 }
@@ -366,9 +435,8 @@ function createProgressReporter(db, jobId, lock) {
     const now = Date.now();
     const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
     const changedStage = message && message !== lastMessage;
-    const advanced = safeProgress - lastProgress >= 3;
-    if (!changedStage && !advanced && now - lastWriteAt < 2_500) return;
-    await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
+    const advanced = safeProgress - lastProgress >= 8;
+    if (!changedStage && !advanced && now - lastWriteAt < 4_000) return;
     await updateIntelligentJob(db, {
       jobId,
       status: "running",
@@ -400,6 +468,7 @@ function publicIntelligentJob(job) {
 }
 
 async function processIntelligentCarouselJob(env, job, topic, options = {}) {
+  const jobStartedAt = Date.now();
   const db = requireDatabase(env);
   const jobLock = await acquireLock(db, `intelligent-job-${job.jobId}`, 12 * 60 * 1000);
   if (!jobLock) return null;
@@ -487,6 +556,15 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       payload: storedData,
     });
     if (completed?.status !== "succeeded") throw new Error("Não foi possível registrar o encerramento do ciclo.");
+    structuredLog("intelligent_job_completed", {
+      jobId: job.jobId,
+      durationMs: Date.now() - jobStartedAt,
+      readingMs: Number(data?.performance?.readingMs) || null,
+      aiMs: Number(data?.performance?.aiMs) || null,
+      fastPath: Boolean(data?.performance?.fastPath),
+      analysisMode: data?.analysisMode || "source-extraction",
+      slideCount,
+    });
     return storedData;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -615,23 +693,30 @@ async function processRoundQueueMessage(message, env, body = {}) {
       message.retry({ delaySeconds: 20 * attempts });
       return;
     }
-    const detail = error instanceof Error ? error.message : String(error);
+    const failedPayload = terminalRoundFailurePayload(error, { startedAt });
+    const failedDiagnostics = failedPayload.diagnostics?.portals || {};
+    structuredLog("round_failed_final", {
+      runId,
+      triggerType,
+      attempts,
+      detail: failedPayload.detail,
+      portalsTotal: Number(failedDiagnostics.total) || 0,
+      portalsWithContent: Number(failedDiagnostics.withContent) || 0,
+      portalsFailed: Number(failedDiagnostics.failed) || 0,
+      portalsDegraded: Number(failedDiagnostics.degraded) || 0,
+      portalErrors: failedDiagnostics.byCode || {},
+    });
     await saveRun(requireDatabase(env), {
       id: runId,
       triggerType,
       startedAt,
-      payload: {
-        ok: false,
-        collectedAt: new Date().toISOString(),
-        windowHours: 24,
-        error: "A ronda não pôde ser concluída após as tentativas automáticas.",
-        detail: detail.slice(0, 300),
-        sources: [],
-        totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
-        items: [],
-        topics: [],
-      },
-    }).catch(() => null);
+      payload: failedPayload,
+    }).catch((saveError) => {
+      structuredLog("round_failure_save_failed", {
+        runId,
+        detail: saveError instanceof Error ? saveError.message : String(saveError),
+      });
+    });
     message?.ack?.();
   }
 }
@@ -887,6 +972,7 @@ async function performRound(env, triggerType, options = {}) {
     if (!options.runStarted) await markRunStarted(db, { id: runId, triggerType, queuedAt: startedAt, startedAt });
     else await touchRun(db, runId, startedAt).catch(() => null);
     let payload;
+    let collectedPayload = null;
     try {
       const [monitoringTerms, previousRound, sourceStates] = await Promise.all([
         listMonitoringTerms(db, { activeOnly: true }),
@@ -899,6 +985,7 @@ async function performRound(env, triggerType, options = {}) {
         previousRound,
         sourceStates,
       });
+      collectedPayload = payload;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("O coletor não retornou um resultado válido.");
       }
@@ -930,29 +1017,65 @@ async function performRound(env, triggerType, options = {}) {
       payload.schemaVersion = 5;
       payload.catalog = { version: CATALOG_VERSION, portals: FEEDS.length };
     } catch (error) {
-      payload = {
-        ok: false,
-        schemaVersion: 5,
-        collectedAt: new Date().toISOString(),
-        windowHours: 24,
-        durationMs: Date.now() - Date.parse(startedAt),
-        error: "A coleta foi interrompida por um erro interno.",
-        detail: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
-        sources: [],
-        totals: { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
-        items: [],
-        topics: [],
-        dedicatedMonitoring: {
-          enabled: false,
-          terms: [],
+      const detail = error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500);
+      if (collectedPayload?.ok && Array.isArray(collectedPayload.items) && collectedPayload.items.length) {
+        payload = {
+          ...collectedPayload,
+          ok: true,
+          collectionStatus: "partial",
+          degraded: true,
+          processingWarning: detail,
+          diagnostics: {
+            ...(collectedPayload.diagnostics || {}),
+            processing: {
+              ok: false,
+              detail,
+              recovered: true,
+            },
+          },
+        };
+        structuredLog("round_processing_recovered", {
+          runId,
+          detail,
+          items: Number(payload?.totals?.items) || payload.items.length,
+        });
+      } else {
+        const base = collectedPayload && typeof collectedPayload === "object" && !Array.isArray(collectedPayload)
+          ? collectedPayload
+          : {};
+        payload = {
+          ...base,
+          ok: false,
+          collectionStatus: "failed",
+          degraded: true,
+          schemaVersion: 5,
+          collectedAt: base.collectedAt || new Date().toISOString(),
+          windowHours: 24,
+          durationMs: Number(base.durationMs) || Date.now() - Date.parse(startedAt),
+          error: base.error || "A coleta foi interrompida por um erro interno.",
+          detail,
+          sources: Array.isArray(base.sources) ? base.sources : [],
+          diagnostics: roundDiagnosticPayload(base),
+          totals: base.totals || { items: 0, topics: 0, sources: 0, socialItems: 0, dedicatedItems: 0 },
           items: [],
-          statuses: [],
-          totals: { terms: 0, items: 0, sources: 0 },
-        },
-      };
+          topics: [],
+          dedicatedMonitoring: base.dedicatedMonitoring || {
+            enabled: false,
+            terms: [],
+            items: [],
+            statuses: [],
+            totals: { terms: 0, items: 0, sources: 0 },
+          },
+          operational: base.operational || {},
+        };
+      }
     }
     await renewLock(db, lock, 12 * 60 * 1000).catch(() => null);
-    if (!payload.ok && options.deferFailureSave) throw new HttpError(503, payload.error, payload.detail || null);
+    if (!payload.ok && options.deferFailureSave) {
+      const failure = new HttpError(503, payload.error, payload.detail || null);
+      failure.roundPayload = payload;
+      throw failure;
+    }
     await saveRun(db, { id: runId, triggerType, startedAt, payload });
     await runDatabaseMaintenance(db).catch((error) => {
       structuredLog("database_maintenance_failed", { detail: error instanceof Error ? error.message : String(error) });
@@ -966,6 +1089,9 @@ async function performRound(env, triggerType, options = {}) {
       items: Number(payload?.totals?.items) || 0,
       sources: Number(payload?.totals?.sources) || 0,
       portalRequests: Number(payload?.operational?.externalPortalRequests) || 0,
+      collectionStatus: payload.collectionStatus || (payload.ok ? "complete" : "failed"),
+      portalsFailed: Number(payload?.diagnostics?.portals?.failed) || 0,
+      portalsDegraded: Number(payload?.diagnostics?.portals?.degraded) || 0,
     });
     if (!payload.ok) throw new HttpError(503, payload.error, payload.detail || null);
     return storedPayload;
@@ -1145,6 +1271,18 @@ async function handleApi(request, env, url, ctx) {
     ]);
     const activeRun = freshActiveRun(latest);
     const running = Boolean(activeRun);
+    let lastAttempt = null;
+    if (latest && ["failed", "expired"].includes(latest.status)) {
+      const storedAttempt = await getRunPayload(db, latest.id).catch(() => null);
+      lastAttempt = {
+        id: latest.id,
+        status: latest.status,
+        completedAt: latest.completedAt || latest.heartbeatAt || latest.startedAt || latest.queuedAt || null,
+        error: latest.error || storedAttempt?.error || null,
+        detail: storedAttempt?.payload?.detail || null,
+        diagnostics: storedAttempt?.payload ? roundDiagnosticPayload(storedAttempt.payload) : null,
+      };
+    }
     const payload = {
       ok: true,
       ready: true,
@@ -1156,6 +1294,7 @@ async function handleApi(request, env, url, ctx) {
       activeRunStartedAt: activeRun?.startedAt || null,
       lastRunId: latestSuccess?.id || null,
       lastSuccessAt: latestSuccess?.completedAt || null,
+      lastAttempt,
       items: latestSuccess?.items || 0,
       topics: latestSuccess?.topics || 0,
       sources: latestSuccess?.sources || 0,
@@ -1247,20 +1386,23 @@ async function handleApi(request, env, url, ctx) {
       intelligentReading: {
         ready: true,
         aiReady: Boolean(articleAnalysisAi(env)?.run),
-        mode: "single-article-with-feed-fallback",
+        mode: "publisher-article-required",
         asynchronousJobs: true,
         queueReady: Boolean(env.INTELLIGENT_JOBS_QUEUE?.send),
         deadLetterQueueConfigured: true,
         executionMode: env.INTELLIGENT_JOBS_QUEUE?.send ? "cloudflare-queue" : "request-fallback",
         articleLimit: 1,
-        readingStrategy: "single-best-source-with-history",
-        cycleMode: "one-article-one-script",
+        readingStrategy: "try-up-to-3-publisher-sources-with-history",
+        cycleMode: "one-read-publisher-article-one-script",
         cycleFinalization: "terminal-and-released",
         nextCycleAfterTerminal: true,
-        factPipeline: "evidence-map-then-carousel",
+        factPipeline: "source-evidence-extraction-then-redaction",
+        factsGeneratedByAi: false,
+        publisherArticleRequired: true,
+        publisherAttemptsMax: 3,
         editorialQualityGate: true,
         articleReadCacheHours: 12,
-        perSourceTimeoutSeconds: 10,
+        perSourceTimeoutSeconds: 7,
         readingConcurrency: 1,
         model: env.ARTICLE_ANALYSIS_MODEL || ARTICLE_ANALYSIS_MODEL,
       },
@@ -1527,7 +1669,7 @@ async function handleApi(request, env, url, ctx) {
       queued: true,
       status: queued.job.status,
       job: publicIntelligentJob(queued.job),
-      pollAfterMs: 1_200,
+      pollAfterMs: 900,
       configuration: { slideCount, profileApplied: Boolean(writingProfile), profileUpdatedAt: writingProfile?.updatedAt || null },
     }, 202);
   }

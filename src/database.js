@@ -766,12 +766,30 @@ export async function getRunStatus(db, id) {
     .prepare(`
       SELECT id, trigger_type, status, queued_at,
              NULLIF(started_at, '') AS started_at, NULLIF(completed_at, '') AS completed_at,
-             items_count, topics_count, sources_count, social_items_count, error
+             items_count, topics_count, sources_count, social_items_count, error, payload_json
       FROM runs WHERE id = ? LIMIT 1
     `)
     .bind(id)
     .first();
-  return row ?? null;
+  if (!row) return null;
+  let diagnostics = null;
+  let detail = null;
+  let collectionStatus = null;
+  if (row.payload_json) {
+    try {
+      const payload = JSON.parse(row.payload_json);
+      diagnostics = payload?.diagnostics || null;
+      detail = payload?.detail || null;
+      collectionStatus = payload?.collectionStatus || null;
+    } catch {}
+  }
+  delete row.payload_json;
+  return {
+    ...row,
+    collectionStatus,
+    detail,
+    diagnostics,
+  };
 }
 
 export async function getRunPayload(db, id) {
@@ -938,7 +956,7 @@ function parseIntelligentJob(row) {
     createdAt: row.created_at,
     updatedAt,
     expiresAt: row.expires_at,
-    stale: active && Date.now() - Date.parse(updatedAt) > 10 * 60 * 1000,
+    stale: active && Date.now() - Date.parse(updatedAt) > 2 * 60 * 1000,
   };
 }
 
@@ -955,7 +973,7 @@ export async function createIntelligentJob(db, {
   cacheKey,
   runId,
   topicId,
-  staleMs = 10 * 60 * 1000,
+  staleMs = 2 * 60 * 1000,
   ttlMinutes = 120,
   replaceCompleted = false,
 } = {}) {

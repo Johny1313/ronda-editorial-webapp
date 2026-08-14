@@ -129,6 +129,9 @@ test("publicação usa assets estáticos, fila de rondas e polling condicional",
   assert.match(index, /processYouTubeQueueMessage/);
   assert.match(index, /\/api\/youtube\/status/);
   assert.match(index, /reused: true/);
+  assert.match(index, /round_failed_final/);
+  assert.match(index, /failure\.roundPayload = payload/);
+  assert.match(index, /lastAttempt/);
 });
 
 test("estado da ronda usa fila, início real, heartbeat e expiração", async () => {

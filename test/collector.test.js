@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectFeed, collectRound, FEED_COUNTS, FEEDS } from "../src/collector.js";
+import { collectFeed, collectRound, FEED_COUNTS, FEEDS, summarizePortalStatuses } from "../src/collector.js";
 
 const now = new Date("2026-07-22T12:00:00Z");
 const fallbackXml = `<rss><channel>
@@ -112,11 +112,33 @@ test("usa fallback do portal e complementa com Bluesky", async () => {
 });
 
 test("falha de todas as fontes retorna diagnóstico estruturado", async () => {
-  const feed = { id: "falha", name: "Falha", urls: ["https://fail.test/rss"] };
+  const feed = { id: "falha", name: "Falha", region: "Brasil", urls: ["https://fail.test/rss"] };
   const result = await collectRound({ fetcher: async () => new Response("erro", { status: 500 }), now, feeds: [feed] });
   assert.equal(result.ok, false);
+  assert.equal(result.collectionStatus, "failed");
   assert.equal(result.sources[0].ok, false);
+  assert.equal(result.diagnostics.portals.total, 1);
+  assert.equal(result.diagnostics.portals.failed, 1);
+  assert.equal(result.diagnostics.portals.withContent, 0);
+  assert.ok(result.diagnostics.portals.issues[0].name === "Falha");
   assert.match(result.error, /Nenhuma fonte/);
+});
+
+test("diagnóstico da ronda diferencia cache degradado, falha e fonte saudável", () => {
+  const summary = summarizePortalStatuses([
+    { id: "ok", name: "OK", region: "Brasil", ok: true, count: 12, route: "direct" },
+    { id: "cache", name: "Cache", region: "Brasil", ok: true, count: 5, route: "cache", cached: true, degraded: true, warning: "HTTP 503" },
+    { id: "fail", name: "Falha", region: "Mundo", ok: false, count: 0, errorCode: "blocked", httpStatus: 403, error: "HTTP 403" },
+    { id: "rede", name: "Bluesky", region: "Rede", ok: false, count: 0, error: "erro" },
+  ]);
+  assert.equal(summary.total, 3);
+  assert.equal(summary.withContent, 2);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.degraded, 1);
+  assert.equal(summary.cached, 1);
+  assert.equal(summary.complete, false);
+  assert.equal(summary.byCode.blocked, 1);
+  assert.equal(summary.byCode["degraded-cache"], 1);
 });
 
 test("decodifica RSS Windows-1252 sem corromper acentos", async () => {

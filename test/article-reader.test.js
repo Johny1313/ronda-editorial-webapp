@@ -70,8 +70,8 @@ test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async ()
 
   const result = await buildIntelligentCarousel(topic, { ai, fetcher });
   assert.equal(externalFetches, 1);
-  assert.equal(result.analysisMode, "ai");
-  assert.equal(result.reading.basis, "single-live-article-with-feed-fallback");
+  assert.equal(result.analysisMode, "ai-redaction-from-source-evidence");
+  assert.equal(result.reading.basis, "single-publisher-article");
   assert.equal(result.reading.successful, 1);
   assert.equal(result.reading.liveSuccessful, 1);
   assert.equal(result.reading.fallbackSources, 0);
@@ -80,9 +80,10 @@ test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async ()
   assert.equal(result.slides.length, 7);
   assert.ok(result.slides.every((slide) => slide.title && slide.subtitle && slide.body === slide.subtitle));
   assert.deepEqual(result.slides.map((slide) => slide.role), ["Título principal", "Contexto", "Informação principal", "Detalhamento", "Consequência", "Conclusão", "CTA"]);
-  assert.equal(result.questions.where, "Brasil.");
-  assert.equal(result.reading.strategy, "single-best-source");
-  assert.equal(result.reading.cycleMode, "one-article-one-script");
+  assert.equal(result.reading.publisherVerified, true);
+  assert.equal(result.reading.factsGeneratedByAi, false);
+  assert.equal(result.reading.strategy, "publisher-required-with-alternatives");
+  assert.equal(result.reading.cycleMode, "one-read-article-one-script");
   assert.equal(result.reading.cycleComplete, true);
   assert.equal(result.reading.nextCycleAllowed, true);
   assert.equal(result.cycle.status, "completed");
@@ -91,18 +92,41 @@ test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async ()
   assert.equal(result.reading.selectedSource.sourceName, "Portal A");
   assert.ok(result.reading.selectedSource.selection.score > 0);
   assert.equal(result.reading.alternativesAvailable, 1);
-  assert.equal(aiInputs.length, 2);
-  assert.match(aiInputs[0].messages[0].content, /exatamente UMA matéria/i);
-  assert.match(aiInputs[0].messages[1].content, /PORTAL SELECIONADO: Portal A/);
-  assert.match(aiInputs[1].messages[0].content, /UMA matéria/);
+  assert.equal(aiInputs.length, 1);
+  assert.match(aiInputs[0].messages[0].content, /NÃO deve gerar fatos|não deve gerar fatos/i);
+  assert.match(aiInputs[0].messages[1].content, /PORTAL LIDO: Portal A/);
+  assert.match(aiInputs[0].messages[1].content, /EVIDÊNCIAS EXTRAÍDAS LITERALMENTE DA MATÉRIA/);
   assert.doesNotMatch(aiInputs[0].messages[1].content, /Portal B detalha|Plano prevê investimentos/);
   assert.ok(result.facts.length >= 1);
   assert.ok(result.facts.every((fact) => fact.id && fact.claim && fact.evidence));
   assert.equal(result.validation.passed, true);
+  assert.ok(result.validation.issues.some((issue) => issue.code === "unsupported-by-source" || issue.code === "unsupported-number"));
+  assert.ok(result.slides.every((slide) => !/Subtítulo factual do slide/i.test(slide.subtitle)));
   assert.equal(result.editorialGate.copyAllowed, true);
   assert.ok(result.slides.every((slide) => slide.title.length <= 68 && slide.subtitle.length <= 190));
   assert.equal(result.verificationLinks.length, 3);
   assert.ok(result.reading.sources.every((source) => !("content" in source)));
+});
+
+test("não usa texto do feed como substituto da leitura do site", async () => {
+  const topic = {
+    id: "topic-fast-feed",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [{
+      id: "a", kind: "portal", title: "Plano de mobilidade urbana avança",
+      content: `${longParagraph} ${longParagraph} ${longParagraph}`, contentSource: "feed-content",
+      sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/fast",
+    }],
+  };
+  let fetches = 0;
+  await assert.rejects(
+    buildIntelligentCarousel(topic, {
+      fetcher: async () => { fetches += 1; throw new Error("portal bloqueado"); },
+    }),
+    /abrir e ler uma matéria publicada|evitar criar fatos/i,
+  );
+  assert.equal(fetches, 1);
 });
 
 test("bloqueia o carrossel quando a ronda possui apenas títulos", async () => {
@@ -117,7 +141,7 @@ test("bloqueia o carrossel quando a ronda possui apenas títulos", async () => {
   };
   await assert.rejects(
     buildIntelligentCarousel(topic, { fetcher: async () => { throw new Error("bloqueado"); } }),
-    /apenas título|informação insuficiente/i,
+    /abrir e ler uma matéria publicada|informação insuficiente/i,
   );
 });
 
@@ -156,7 +180,7 @@ test("lê somente uma fonte mesmo quando o assunto possui vários portais", asyn
   assert.ok(progress.some((event) => event.progress === 8));
   assert.ok(progress.some((event) => event.progress === 18));
   assert.ok(progress.some((event) => event.progress === 60));
-  assert.match(progress.findLast((event) => event.stage === "reading")?.message || "", /Matéria concluída: Portal A/);
+  assert.match(progress.findLast((event) => event.stage === "reading")?.message || "", /Matéria apurada: Portal A/);
   assert.equal(result.slides.length, 7);
 });
 
@@ -262,31 +286,21 @@ test("prioriza URL direta do portal em vez de link agregador", async () => {
   assert.equal(result.reading.selectedSource.selection.reasons.aggregatorUrl, false);
 });
 
-test("mantém progresso ativo e usa fallback somente da mesma matéria", async () => {
+test("tenta outra matéria publicada quando o primeiro portal bloqueia a leitura", async () => {
   const topic = {
     id: "topic-heartbeat",
     title: "Plano de mobilidade urbana",
     editoria: "Política",
     items: [
       {
-        id: "materia-unica",
-        kind: "portal",
-        title: "Plano de mobilidade urbana",
-        content: `${longParagraph} ${longParagraph}`,
-        contentSource: "feed-content",
-        sourceName: "Portal A",
-        publishedAt: "2026-07-24T10:00:00Z",
-        url: "https://portal-a.test/materia-unica",
+        id: "materia-1", kind: "portal", title: "Plano de mobilidade urbana",
+        content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content",
+        sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/materia-1",
       },
       {
-        id: "outra-materia",
-        kind: "portal",
-        title: "Outro portal repercute o assunto",
-        content: `${longParagraph} ${longParagraph}`,
-        contentSource: "feed-content",
-        sourceName: "Portal B",
-        publishedAt: "2026-07-24T09:59:00Z",
-        url: "https://portal-b.test/outra-materia",
+        id: "materia-2", kind: "portal", title: "Outro portal publica o plano de mobilidade",
+        content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content",
+        sourceName: "Portal B", publishedAt: "2026-07-24T09:59:00Z", url: "https://portal-b.test/materia-2",
       },
     ],
   };
@@ -298,14 +312,16 @@ test("mantém progresso ativo e usa fallback somente da mesma matéria", async (
     onProgress: async (event) => progress.push(event),
     fetcher: async (url) => {
       fetched.push(String(url));
-      await new Promise((resolve) => setTimeout(resolve, 35));
-      throw new Error("portal bloqueou a leitura");
+      if (String(url).includes("portal-a.test")) throw new Error("portal bloqueou a leitura");
+      return new Response(articleHtml("Outro portal publica o plano de mobilidade"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     },
   });
-  assert.deepEqual(fetched, ["https://portal-a.test/materia-unica"]);
-  assert.equal(result.reading.selectedSource.selectedArticleId, "materia-unica");
-  assert.equal(result.reading.selectedSource.fallbackScope, "same-article");
-  assert.equal(result.reading.selectedSource.readMode, "feed-fallback");
+  assert.deepEqual(fetched, ["https://portal-a.test/materia-1", "https://portal-b.test/materia-2"]);
+  assert.equal(result.reading.selectedSource.selectedArticleId, "materia-2");
+  assert.equal(result.reading.selectedSource.readMode, "full-article");
+  assert.equal(result.reading.publisherVerified, true);
+  assert.equal(result.reading.requested, 2);
+  assert.equal(result.reading.failed, 1);
   assert.ok(progress.some((event) => event.progress > 18 && event.progress < 60));
   assert.ok(progress.some((event) => event.progress === 60));
 });
@@ -358,20 +374,18 @@ test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () 
   const ai = {
     run: async (_model, input) => {
       prompts.push(input.messages.map((message) => message.content).join("\n"));
-      if (prompts.length === 1) {
-        return { response: {
-          questions: { whatHappened: longParagraph, who: "Prefeitura", where: "cidade", when: "2026", impact: longParagraph, repercussion: longParagraph },
-          entities: { people: [], companies: [], places: [], dates: ["2026"], themes: ["política"], keywords: ["mobilidade"] },
-          facts: [{ claim: "A prefeitura apresentou um plano de mobilidade urbana.", evidence: "A prefeitura apresentou um plano nacional de mobilidade urbana para reorganizar o transporte público", confidence: "high" }],
-        } };
-      }
-      return { response: { slides: Array.from({ length: 5 }, (_, index) => ({
-        number: index + 1,
-        role: index === 4 ? "CTA" : "Informação",
-        title: `Slide ${index + 1}`,
-        subtitle: "A prefeitura apresentou um plano de mobilidade urbana para reorganizar o transporte público.",
-        evidenceIds: ["fact-1"],
-      })) } };
+      return { response: {
+        questions: { whatHappened: longParagraph, who: "Prefeitura", where: "cidade", when: "2026", impact: longParagraph, repercussion: longParagraph },
+        entities: { people: [], companies: [], places: [], dates: ["2026"], themes: ["política"], keywords: ["mobilidade"] },
+        facts: [{ claim: "A prefeitura apresentou um plano de mobilidade urbana.", evidence: "A prefeitura apresentou um plano nacional de mobilidade urbana para reorganizar o transporte público", confidence: "high" }],
+        slides: Array.from({ length: 5 }, (_, index) => ({
+          number: index + 1,
+          role: index === 4 ? "CTA" : "Informação",
+          title: `Slide ${index + 1}`,
+          subtitle: "A prefeitura apresentou um plano de mobilidade urbana para reorganizar o transporte público.",
+          evidenceIds: ["fact-1"],
+        })),
+      } };
     },
   };
   const result = await buildIntelligentCarousel(topic, {
@@ -389,7 +403,7 @@ test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () 
   assert.equal(result.slides.length, 5);
   assert.equal(result.writingProfile.active, true);
   assert.equal(result.writingProfile.sampleCount, 3);
-  assert.match(prompts[1], /PERFIL DE ESCRITA DO USUÁRIO/);
-  assert.match(prompts[1], /Conversacional e direto/);
-  assert.match(prompts[1], /Fatos, números, nomes e datas devem vir exclusivamente/i);
+  assert.match(prompts[0], /PERFIL DE ESCRITA DO USUÁRIO/);
+  assert.match(prompts[0], /Conversacional e direto/);
+  assert.match(prompts[0], /não use conhecimento externo|fatos/i);
 });

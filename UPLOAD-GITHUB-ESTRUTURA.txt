@@ -1,0 +1,26 @@
+RONDA EDITORIAL v2.7.6 — ESTRUTURA DO UPLOAD
+
+IMPORTANTE: preserve as pastas do ZIP ao publicar no GitHub.
+
+Na raiz devem ficar apenas arquivos de configuração/documentação, por exemplo:
+package.json
+package-lock.json
+wrangler.jsonc
+schema.sql
+README.md
+CHANGELOG.md
+RECUPERAR-D1-AGORA.sql
+
+Código do Worker deve permanecer em src/.
+Interface deve permanecer em public/.
+Testes devem permanecer em test/.
+Validação deve permanecer em scripts/.
+Migrações devem permanecer em migrations/ e migrations_youtube/.
+Workflow deve permanecer em .github/workflows/.
+
+NÃO envie cópias de index.js, youtube.js, app.js, styles.css, collector.js,
+profile.js, arquivos *.test.js ou migrations SQL soltas para a raiz.
+
+Após o upload, confirme:
+src/index.js -> const VERSION = "2.7.6";
+public/index.html -> /styles.css?v=2.7.6 e /app.js?v=2.7.6
