@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.7.6
+## Versão 2.7.7
 
-A versão 2.7.6 mantém a Ronda resiliente, perfis editoriais, carrosséis flexíveis e YouTube separado. A geração de carrossel agora exige a leitura real de pelo menos uma matéria publicada por um portal: feed, resumo ou título não bastam. Os fatos/evidências são extraídos do texto lido; a IA atua somente na redação dos slides e não pode criar fatos.
+A versão 2.7.7 mantém a apuração obrigatória em uma matéria publicada e adiciona uma regra editorial de diversidade: cada slide informativo precisa acrescentar um ângulo factual diferente. O sistema bloqueia repetição de manchete, dado ou conclusão e prefere falhar com uma recomendação de menos slides a preencher o roteiro com a mesma informação reformulada.
 
 Principais mudanças:
 
@@ -25,6 +25,15 @@ Principais mudanças:
 - chave da API protegida no secret `YOUTUBE_API_KEY`;
 - quota, cache, circuit breaker e erros do YouTube separados da Ronda.
 
+
+### Diversidade factual do carrossel
+
+- cada slide informativo usa uma evidência principal diferente da matéria lida;
+- título e subtítulo do mesmo slide não podem repetir a mesma frase;
+- o subtítulo da capa precisa acrescentar informação em vez de repetir a manchete;
+- títulos genéricos de preenchimento são evitados;
+- repetição semântica é corrigida automaticamente usando outra evidência literal da matéria;
+- se a fonte não oferecer informação suficiente para a quantidade escolhida, o sistema informa o máximo de slides recomendado em vez de repetir conteúdo.
 
 ### Perfil editorial e carrossel flexível
 

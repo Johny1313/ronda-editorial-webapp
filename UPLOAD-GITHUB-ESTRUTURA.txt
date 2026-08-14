@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.7.6 — ESTRUTURA DO UPLOAD
+RONDA EDITORIAL v2.7.7 — ESTRUTURA DO UPLOAD
 
 IMPORTANTE: preserve as pastas do ZIP ao publicar no GitHub.
 
@@ -22,5 +22,5 @@ NÃO envie cópias de index.js, youtube.js, app.js, styles.css, collector.js,
 profile.js, arquivos *.test.js ou migrations SQL soltas para a raiz.
 
 Após o upload, confirme:
-src/index.js -> const VERSION = "2.7.6";
-public/index.html -> /styles.css?v=2.7.6 e /app.js?v=2.7.6
+src/index.js -> const VERSION = "2.7.7";
+public/index.html -> /styles.css?v=2.7.7 e /app.js?v=2.7.7

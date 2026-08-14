@@ -344,14 +344,62 @@ test("gera quantidade flexível de slides preservando 7 como padrão", async () 
   };
   const fetcher = async () => new Response(articleHtml(topic.title), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
   const compact = await buildIntelligentCarousel(topic, { fetcher, slideCount: 3 });
-  const extended = await buildIntelligentCarousel(topic, { fetcher, slideCount: 12 });
   const standard = await buildIntelligentCarousel(topic, { fetcher });
   assert.equal(compact.slides.length, 3);
   assert.equal(compact.slides.at(-1).role, "CTA");
-  assert.equal(extended.slides.length, 12);
-  assert.equal(extended.slideCount, 12);
   assert.equal(standard.slides.length, 7);
-  assert.match(extended.postModel, /12 slides/);
+  await assert.rejects(
+    buildIntelligentCarousel(topic, { fetcher, slideCount: 12 }),
+    /evidências distintas|sem repetição|Reduza a quantidade de slides/i,
+  );
+});
+
+
+
+test("remove repetição de informação entre slides mesmo quando a IA repete a mesma evidência", async () => {
+  const article = [
+    "O surto de ebola no Congo ultrapassou dois mil óbitos confirmados pelas autoridades de saúde.",
+    "A variante Bundibugyo soma 4.566 casos confirmados desde o início da emergência.",
+    "A Organização Mundial da Saúde informou que a transmissão acelerou nas últimas semanas.",
+    "Equipes médicas ampliaram a vigilância epidemiológica e o atendimento nas áreas mais afetadas.",
+    "Autoridades locais reforçaram medidas de isolamento e rastreamento de contatos.",
+    "Pacientes graves podem apresentar manifestações hemorrágicas e comprometimento de diferentes órgãos.",
+    "O governo afirma que novas equipes serão enviadas para ampliar a resposta ao surto.",
+    "A OMS recomenda manter a identificação rápida de casos e o acompanhamento dos contatos próximos."
+  ].join(" ");
+  const topic = {
+    id: "topic-ebola-diverso",
+    title: "Ebola avança no Congo e supera 2 mil mortes",
+    editoria: "Saúde",
+    items: [{ id: "a", kind: "portal", title: "Ebola avança no Congo e supera 2 mil mortes", sourceName: "Portal Saúde", publishedAt: "2026-08-14T10:00:00Z", url: "https://portal-saude.test/ebola" }],
+  };
+  const html = `<!doctype html><html><head><script type="application/ld+json">${JSON.stringify({ "@type": "NewsArticle", headline: topic.title, datePublished: "2026-08-14T10:00:00Z", articleBody: article })}</script></head><body><article><p>${article}</p></article></body></html>`;
+  const ai = {
+    run: async () => ({ response: { slides: Array.from({ length: 6 }, (_, index) => ({
+      number: index + 1,
+      role: index === 5 ? "CTA" : "Informação",
+      title: index === 5 ? "Acompanhe" : "Ebola avança no Congo",
+      subtitle: index === 5 ? "Acompanhe as atualizações." : "Ebola avança no Congo e supera 2 mil mortes.",
+      evidenceIds: index === 5 ? [] : ["fact-1"],
+    })) } }),
+  };
+  const result = await buildIntelligentCarousel(topic, {
+    ai,
+    slideCount: 6,
+    fetcher: async () => new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }),
+  });
+  const informative = result.slides.filter((slide) => slide.role !== "CTA");
+  assert.equal(informative.length, 5);
+  assert.equal(new Set(informative.map((slide) => slide.evidenceIds[0])).size, informative.length);
+  assert.equal(result.validation.noRepeatedAngles, true);
+  assert.equal(result.validation.passed, true);
+  assert.ok(result.validation.issues.some((issue) => issue.code === "reused-primary-evidence" || issue.code === "repeated-slide" || issue.code === "title-repeats-subtitle"));
+  for (let left = 0; left < informative.length; left += 1) {
+    for (let right = left + 1; right < informative.length; right += 1) {
+      assert.notEqual(informative[left].subtitle, informative[right].subtitle);
+      assert.notEqual(informative[left].title, informative[right].title);
+    }
+  }
 });
 
 test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () => {

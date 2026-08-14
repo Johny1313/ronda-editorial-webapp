@@ -1,4 +1,4 @@
-RONDA EDITORIAL v2.7.6 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.7.7 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
 OBJETIVO
@@ -24,7 +24,7 @@ CHANGELOG.md.
 ----------------------------
 Crie uma branch, por exemplo:
 
-  release-v2.7.6
+  release-v2.7.7
 
 Envie o pacote completo para essa branch. Evite Upload files em main.
 
@@ -100,7 +100,7 @@ Abra:
 
 Confirme:
 
-  version: 2.7.6
+  version: 2.7.7
   youtube.configured: true
   youtube.queueReady: true
   catalogPortals: 39
@@ -117,7 +117,7 @@ Na interface:
 
 8. PROMOVER
 -----------
-Depois do preview, abra Pull Request da branch release-v2.7.6 para main.
+Depois do preview, abra Pull Request da branch release-v2.7.7 para main.
 O merge executará o deploy de produção.
 
 9. MONITORAR
@@ -135,7 +135,7 @@ por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota
 API afetam somente a aba YouTube.
 
 
-Após o deploy da v2.7.6, aplique as migrações pendentes:
+Após o deploy da v2.7.7, aplique as migrações pendentes:
 
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
 
@@ -152,7 +152,7 @@ O Wrangler aplicará 0005 e 0006 quando ainda estiverem pendentes. A 0006 cria o
 6. Confirme que o servidor devolve exatamente a quantidade escolhida.
 7. Saia e entre novamente para validar a sessão.
 
-A versão 2.7.6 não exige novo binding nem nova migration. Os perfis continuam no DB principal e o YouTube permanece no YOUTUBE_DB.
+A versão 2.7.7 não exige novo binding nem nova migration. Os perfis continuam no DB principal e o YouTube permanece no YOUTUBE_DB.
 Não há confirmação de e-mail nem recuperação automática de senha nesta versão.
 
 11. VALIDAR APURAÇÃO OBRIGATÓRIA DO CARROSSEL

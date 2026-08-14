@@ -15,7 +15,7 @@ const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 10_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v6-publisher-required";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v7-distinct-angles";
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -326,7 +326,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.7.6; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.7.7; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -718,64 +718,183 @@ function heuristicEntities(text) {
   return { people, companies, places, dates, themes, keywords };
 }
 
-function fallbackFactsFromArticle(article, limit = 8) {
-  const list = sentences(`${article?.title || ""}. ${article?.content || ""}`);
+function evidenceAngle(value) {
+  const text = plainText(value).toLocaleLowerCase("pt-BR");
+  if (/próxim|proxim|deverá|devera|previst|esperad|a partir|até o fim|etapa|cronograma|medida seguinte|desdobramento/.test(text)) return "next";
+  if (/impact|consequ|efeito|risco|morte|mortes|afet|preju|benef|compromet|hospital|internad|vítim|vitim/.test(text)) return "impact";
+  if (/oms|governo|minist|secretar|autoridad|afirm|disse|declar|anunci|informou|confirmou|orient|recomend|medida|resposta/.test(text)) return "response";
+  if (/porque|devido|caus|provoc|origem|transmiss|decorr|associad|explica/.test(text)) return "cause";
+  if (/\b\d+(?:[.,]\d+)?%?\b|milh|bilh|mil\b|casos|confirmad|percent|taxa|recorde/.test(text)) return "scale";
+  if (/desde|antes|históric|historico|já havia|ja havia|primeir|anterior|em \d{4}|no ano/.test(text)) return "context";
+  if (/\b(em|no|na|nos|nas)\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]/u.test(String(value || ""))) return "place";
+  return "event";
+}
+
+function evidenceRichness(value) {
+  const text = plainText(value);
+  let score = Math.min(4, wordCount(text) / 8);
+  if (/\d/.test(text)) score += 2;
+  if (/[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\p{L}.-]+(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][\p{L}.-]+)+/u.test(text)) score += 1;
+  if (/segundo|afirm|disse|informou|confirmou|de acordo|porque|devido|impact|risco|morte|casos|medida|previst/i.test(text)) score += 1.5;
+  return score;
+}
+
+function evidenceUnits(sentence) {
+  const text = plainText(sentence);
+  if (!text) return [];
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= 14) return [text];
+
+  // Quebra frases longas somente em trechos literais e contíguos da matéria.
+  // Isso aumenta a quantidade de ângulos verificáveis sem inventar informação.
+  const coarse = text.split(/;\s+|,\s+(?=(?:com|mas|porém|porem|enquanto|além|alem|segundo|ainda|já|ja|o que|a qual|que|e\s+(?:a|o|os|as|um|uma|ele|ela|eles|elas|isso|também|tambem))\b)/i)
+    .map((part) => part.trim())
+    .filter((part) => wordCount(part) >= 5);
+  if (coarse.length >= 2) return coarse;
+
+  // Em frases muito extensas, cria janelas literais sem sobreposição para preservar diversidade factual.
+  if (words.length >= 24) {
+    const midpoint = Math.ceil(words.length / 2);
+    const left = words.slice(0, midpoint).join(" ").replace(/[,:;–—-]+$/, "").trim();
+    const right = words.slice(midpoint).join(" ").replace(/^[,:;–—-]+/, "").trim();
+    if (wordCount(left) >= 7 && wordCount(right) >= 7) return [left, right];
+  }
+  return [text];
+}
+
+function fallbackFactsFromArticle(article, limit = 24) {
+  const contentSentences = sentences(article?.content || "");
+  const candidates = [];
+  for (const sentence of contentSentences) candidates.push(...evidenceUnits(sentence));
+  if (plainText(article?.title)) candidates.push(plainText(article.title));
+
   const output = [];
-  const seen = new Set();
-  for (const sentence of list) {
-    const evidence = editorialClip(sentence, 240);
-    const key = plainText(evidence).toLocaleLowerCase("pt-BR");
-    if (!evidence || seen.has(key)) continue;
-    seen.add(key);
+  for (const candidate of candidates) {
+    const evidence = editorialClip(candidate, 240);
+    if (!evidence || wordCount(evidence) < 5) continue;
+    // Evita duplicatas quase idênticas, mas preserva cláusulas diferentes da mesma frase quando trazem outro dado.
+    if (output.some((fact) => tokenSimilarity(fact.evidence, evidence) >= 0.82)) continue;
     output.push({
       id: `fact-${output.length + 1}`,
-      claim: editorialClip(sentence, 220),
+      claim: editorialClip(candidate, 220),
       evidence,
+      angle: evidenceAngle(evidence),
       confidence: article?.contentLevel === "article" || article?.contentLevel === "content" ? "high" : "medium",
     });
     if (output.length >= limit) break;
   }
-  if (!output.length && plainText(article?.title)) {
-    output.push({
-      id: "fact-1",
-      claim: editorialClip(article.title, 180),
-      evidence: editorialClip(article.title, 180),
-      confidence: "low",
-    });
-  }
   return output;
 }
 
+function roleAnglePreferences(role) {
+  if (role === "Título principal") return ["event", "scale", "impact", "response", "context"];
+  if (role === "Contexto") return ["context", "place", "cause", "event", "response"];
+  if (role === "Informação principal") return ["scale", "event", "response", "impact", "cause"];
+  if (role.startsWith("Detalhamento")) return ["response", "cause", "scale", "place", "context", "event"];
+  if (role === "Consequência") return ["impact", "risk", "scale", "response", "next"];
+  if (role === "Conclusão") return ["next", "response", "impact", "context", "event"];
+  return ["event", "scale", "response", "context", "impact", "next", "cause", "place"];
+}
+
+function selectDistinctFact(facts, usedIds, role, { avoidText = "" } = {}) {
+  const preferences = roleAnglePreferences(role);
+  const candidates = facts.filter((fact) => !usedIds.has(fact.id));
+  if (!candidates.length) return null;
+  return candidates
+    .map((fact, order) => {
+      const angle = fact.angle || evidenceAngle(fact.evidence);
+      const preferenceIndex = preferences.indexOf(angle);
+      const preferenceScore = preferenceIndex < 0 ? 0 : (preferences.length - preferenceIndex) * 3;
+      const duplicatePenalty = avoidText ? tokenSimilarity(avoidText, fact.evidence) * 12 : 0;
+      return { fact, score: preferenceScore + evidenceRichness(fact.evidence) - duplicatePenalty - order * 0.01 };
+    })
+    .sort((left, right) => right.score - left.score)[0]?.fact || candidates[0];
+}
+
+function angleLabel(angle, role) {
+  if (angle === "scale") return "Os números da matéria";
+  if (angle === "impact") return "Impacto registrado";
+  if (angle === "response") return "Resposta e medidas";
+  if (angle === "cause") return "O que explica o caso";
+  if (angle === "next") return "Próximos passos";
+  if (angle === "context") return "O contexto anterior";
+  if (angle === "place") return "Onde o caso acontece";
+  if (role === "Consequência") return "Efeito direto";
+  if (role === "Conclusão") return "O que vem agora";
+  return "Ponto central";
+}
+
+function roleTitle(role, primary, articleTitle = "") {
+  if (role === "Título principal") return editorialClip(articleTitle || primary?.claim || primary?.evidence || "Notícia em destaque", MAX_SLIDE_TITLE_CHARS);
+  const evidence = plainText(primary?.claim || primary?.evidence || "");
+  const words = evidence.split(/\s+/).filter(Boolean);
+  const startsAsFragment = /^[a-záàâãéêíóôõúç]/.test(evidence);
+  const selectedWords = startsAsFragment
+    ? words.slice(Math.max(0, words.length - Math.min(7, words.length)))
+    : words.slice(0, Math.min(8, words.length));
+  const concise = selectedWords.join(" ");
+  const proposed = editorialClip(concise || role, MAX_SLIDE_TITLE_CHARS);
+  return tokenSimilarity(proposed, evidence) >= 0.68
+    ? angleLabel(primary?.angle || evidenceAngle(evidence), role)
+    : proposed;
+}
+
+function buildDistinctFallbackSlides(article, facts, slideCount) {
+  const plan = carouselSlidePlan(slideCount);
+  const factualSlides = plan.filter(([, role]) => role !== "CTA");
+  if (facts.length < factualSlides.length) {
+    const maximumSlides = Math.max(MIN_CAROUSEL_SLIDES, Math.min(MAX_CAROUSEL_SLIDES, facts.length + 1));
+    const error = new Error(`A matéria possui ${facts.length} evidências distintas, insuficientes para ${factualSlides.length} slides informativos sem repetição. Para esta matéria, escolha no máximo ${maximumSlides} slides ou selecione outra fonte.`);
+    error.code = "INSUFFICIENT_DISTINCT_EVIDENCE";
+    throw error;
+  }
+  const usedIds = new Set();
+  const slides = [];
+  let previousText = "";
+  for (const [number, role] of plan) {
+    if (role === "CTA") {
+      slides.push({ number, role, title: "Continue acompanhando", subtitle: "Consulte a matéria original e acompanhe as próximas atualizações.", body: "Consulte a matéria original e acompanhe as próximas atualizações.", evidenceIds: [] });
+      continue;
+    }
+    const primary = selectDistinctFact(facts, usedIds, role, {
+      avoidText: `${previousText} ${role === "Título principal" ? article.title || "" : ""}`,
+    });
+    if (!primary) throw new Error("Não há evidências distintas suficientes para concluir o roteiro sem repetição.");
+    usedIds.add(primary.id);
+    const title = roleTitle(role, primary, article?.title || "");
+    let subtitle = editorialClip(primary.evidence, MAX_SLIDE_SUBTITLE_CHARS);
+
+    // Na capa, a manchete pode resumir o fato central; o deck deve acrescentar outro trecho da matéria.
+    if (role === "Título principal" && tokenSimilarity(title, subtitle) >= 0.56) {
+      const alternative = selectDistinctFact(facts, usedIds, role, { avoidText: `${title} ${previousText}` });
+      if (alternative) {
+        usedIds.add(alternative.id);
+        subtitle = editorialClip(alternative.evidence, MAX_SLIDE_SUBTITLE_CHARS);
+        slides.push({ number, role, title, subtitle, body: subtitle, evidenceIds: [primary.id, alternative.id] });
+        previousText = `${title} ${subtitle}`;
+        continue;
+      }
+    }
+
+    slides.push({ number, role, title, subtitle, body: subtitle, evidenceIds: [primary.id] });
+    previousText = `${title} ${subtitle}`;
+  }
+  return slides;
+}
+
 function fallbackAnalysis(topic, articles, socialItems, slideCount = DEFAULT_CAROUSEL_SLIDES) {
-  const combined = articles.map((article) => `${article.title}. ${article.content}`).join("\n\n");
+  const article = articles[0];
+  const combined = articles.map((item) => `${item.title}. ${item.content}`).join("\n\n");
   const list = sentences(combined);
-  const headline = compact(articles[0]?.title || topic?.title || "Assunto em acompanhamento", 110);
-  const whatHappened = compact(list.slice(0, 2).join(" ") || articles[0]?.content || headline, 420);
+  const headline = compact(article?.title || topic?.title || "Assunto em acompanhamento", 110);
+  const whatHappened = compact(list.slice(0, 2).join(" ") || article?.content || headline, 420);
   const context = compact(list.slice(2, 4).join(" ") || whatHappened, 420);
   const details = compact(list.slice(4, 7).join(" ") || context, 420);
-  const impact = firstMatchingSentence(list, /impact|consequ|efeito|mudan|risco|benef|preju|custo|afeta|pode/i, details);
-  const repercussion = firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta|afirm|disse|declar/i, list.at(-1) || details);
+  const impact = firstMatchingSentence(list, /impact|consequ|efeito|mudan|risco|benef|preju|custo|afeta|morte|casos/i, details);
+  const repercussion = firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta|afirm|disse|declar|anunci|medida/i, list.at(-1) || details);
   const entities = heuristicEntities(`${headline}\n${combined}`);
-  const facts = fallbackFactsFromArticle(articles[0], 20);
-  const plan = carouselSlidePlan(slideCount);
-  const factualSubtitle = (index, fallbackText = "") => editorialClip(facts[index % Math.max(1, facts.length)]?.evidence || fallbackText, 380);
-  const slideForRole = (number, role, index) => {
-    if (role === "Título principal") return { number, role, title: headline, subtitle: factualSubtitle(0, whatHappened) };
-    if (role === "Contexto") return { number, role, title: "Entenda o cenário", subtitle: factualSubtitle(1, context) };
-    if (role === "Informação principal") return { number, role, title: "O que aconteceu", subtitle: factualSubtitle(0, whatHappened) };
-    if (role.startsWith("Detalhamento")) return { number, role, title: role === "Detalhamento" ? "Os principais detalhes" : `Detalhe ${role.split(" ").at(-1)}`, subtitle: factualSubtitle(Math.min(index, facts.length - 1), details) };
-    if (role === "Consequência") {
-      const best = facts.reduce((current, fact) => tokenSimilarity(fact.evidence, impact) > tokenSimilarity(current?.evidence || "", impact) ? fact : current, facts[0]);
-      return { number, role, title: "Qual é o impacto", subtitle: editorialClip(best?.evidence || impact, 380) };
-    }
-    if (role === "Conclusão") return { number, role, title: "O que a matéria informa", subtitle: factualSubtitle(Math.max(0, facts.length - 1), repercussion) };
-    return { number, role: "CTA", title: "Acompanhe os desdobramentos", subtitle: "Consulte a matéria original e acompanhe as próximas atualizações." };
-  };
-  const slides = plan.map(([number, role], index) => slideForRole(number, role, index)).map((slide) => {
-    if (slide.role === "CTA") return { ...slide, body: slide.subtitle, evidenceIds: [] };
-    const bestFact = facts.reduce((current, fact) => tokenSimilarity(fact.evidence, slide.subtitle) > tokenSimilarity(current?.evidence || "", slide.subtitle) ? fact : current, facts[0]);
-    return { ...slide, body: slide.subtitle, evidenceIds: bestFact?.id ? [bestFact.id] : [] };
-  });
+  const facts = fallbackFactsFromArticle(article, 24);
+  const slides = buildDistinctFallbackSlides(article, facts, slideCount);
   return {
     questions: {
       whatHappened,
@@ -970,7 +1089,8 @@ function normalizeSlides(value, fallback, facts, slideCount = DEFAULT_CAROUSEL_S
       title: editorialClip(rawSlides[index]?.title || fallbackSlide.title || role, MAX_SLIDE_TITLE_CHARS),
       subtitle,
       body: subtitle,
-      evidenceIds: evidenceIds.length ? evidenceIds : fallbackEvidence.length ? fallbackEvidence : facts[0]?.id ? [facts[0].id] : [],
+      // Nunca cai automaticamente em fact-1: cada fallback já possui um conjunto de evidências distinto.
+      evidenceIds: evidenceIds.length ? evidenceIds : fallbackEvidence,
     };
   });
 }
@@ -998,41 +1118,91 @@ function validateSlides(slides, fallbackSlides, facts, article) {
   const issues = [];
   const corrected = slides.map((slide) => ({ ...slide, evidenceIds: [...(slide.evidenceIds || [])] }));
   const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  const replaceWithFallback = (index, code, extra = {}) => {
+    issues.push({ code, slide: index + 1, ...extra });
+    corrected[index] = { ...fallbackSlides[index], evidenceIds: [...(fallbackSlides[index]?.evidenceIds || [])] };
+  };
+
   for (let index = 0; index < corrected.length; index += 1) {
     const slide = corrected[index];
     if (!slide.title || !slide.subtitle) {
-      issues.push({ code: "empty-slide", slide: index + 1 });
-      corrected[index] = { ...fallbackSlides[index], evidenceIds: fallbackSlides[index]?.evidenceIds || [] };
+      replaceWithFallback(index, "empty-slide");
       continue;
     }
     const unsupported = unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText);
     if (unsupported.length) {
-      issues.push({ code: "unsupported-number", slide: index + 1, values: unsupported });
-      corrected[index] = { ...fallbackSlides[index], evidenceIds: fallbackSlides[index]?.evidenceIds || [] };
+      replaceWithFallback(index, "unsupported-number", { values: unsupported });
+      continue;
+    }
+    if (slide.role !== "CTA" && tokenSimilarity(slide.title, slide.subtitle) >= 0.68) {
+      replaceWithFallback(index, "title-repeats-subtitle");
       continue;
     }
     if (!slideHasSourceSupport(slide, facts, article)) {
-      issues.push({ code: "unsupported-by-source", slide: index + 1 });
-      corrected[index] = { ...fallbackSlides[index], evidenceIds: fallbackSlides[index]?.evidenceIds || [] };
+      replaceWithFallback(index, "unsupported-by-source");
     }
   }
+
+  // Cada slide informativo precisa ter uma evidência principal diferente.
+  const primaryOwner = new Map();
+  for (let index = 0; index < corrected.length; index += 1) {
+    const slide = corrected[index];
+    if (slide.role === "CTA") continue;
+    const primary = slide.evidenceIds?.[0];
+    if (!primary) {
+      replaceWithFallback(index, "missing-primary-evidence");
+      continue;
+    }
+    if (primaryOwner.has(primary)) {
+      replaceWithFallback(index, "reused-primary-evidence", { similarTo: primaryOwner.get(primary) + 1, evidenceId: primary });
+    } else {
+      primaryOwner.set(primary, index);
+    }
+  }
+
+  // Detecta repetição semântica no texto final; o fallback é construído com ângulos distintos.
   for (let left = 0; left < corrected.length; left += 1) {
+    if (corrected[left].role === "CTA") continue;
     for (let right = left + 1; right < corrected.length; right += 1) {
-      if (tokenSimilarity(corrected[left].subtitle, corrected[right].subtitle) < 0.76) continue;
-      issues.push({ code: "repeated-slide", slide: right + 1, similarTo: left + 1 });
-      corrected[right] = { ...fallbackSlides[right], evidenceIds: fallbackSlides[right]?.evidenceIds || [] };
+      if (corrected[right].role === "CTA") continue;
+      const leftText = `${corrected[left].title} ${corrected[left].subtitle}`;
+      const rightText = `${corrected[right].title} ${corrected[right].subtitle}`;
+      if (tokenSimilarity(leftText, rightText) < 0.66 && tokenSimilarity(corrected[left].subtitle, corrected[right].subtitle) < 0.64) continue;
+      replaceWithFallback(right, "repeated-slide", { similarTo: left + 1 });
     }
   }
+
+  const finalPrimaryOwner = new Map();
   const finalProblems = corrected.flatMap((slide, index) => {
     const problems = [];
     if (!slide.title || !slide.subtitle) problems.push({ code: "empty-slide", slide: index + 1 });
     if (unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText).length) problems.push({ code: "unsupported-number", slide: index + 1 });
     if ((slide.evidenceIds || []).some((id) => !facts.some((fact) => fact.id === id))) problems.push({ code: "invalid-evidence", slide: index + 1 });
     if (!slideHasSourceSupport(slide, facts, article)) problems.push({ code: "unsupported-by-source", slide: index + 1 });
+    if (slide.role !== "CTA") {
+      if (tokenSimilarity(slide.title, slide.subtitle) >= 0.68) problems.push({ code: "title-repeats-subtitle", slide: index + 1 });
+      const primary = slide.evidenceIds?.[0];
+      if (!primary) problems.push({ code: "missing-primary-evidence", slide: index + 1 });
+      else if (finalPrimaryOwner.has(primary)) problems.push({ code: "reused-primary-evidence", slide: index + 1, similarTo: finalPrimaryOwner.get(primary) + 1 });
+      else finalPrimaryOwner.set(primary, index);
+    }
     return problems;
   });
+  for (let left = 0; left < corrected.length; left += 1) {
+    if (corrected[left].role === "CTA") continue;
+    for (let right = left + 1; right < corrected.length; right += 1) {
+      if (corrected[right].role === "CTA") continue;
+      const leftText = `${corrected[left].title} ${corrected[left].subtitle}`;
+      const rightText = `${corrected[right].title} ${corrected[right].subtitle}`;
+      if (tokenSimilarity(leftText, rightText) >= 0.66 || tokenSimilarity(corrected[left].subtitle, corrected[right].subtitle) >= 0.64) {
+        finalProblems.push({ code: "repeated-slide", slide: right + 1, similarTo: left + 1 });
+      }
+    }
+  }
+  const informativeSlides = corrected.filter((slide) => slide.role !== "CTA");
+  const distinctPrimaryEvidence = new Set(informativeSlides.map((slide) => slide.evidenceIds?.[0]).filter(Boolean)).size;
   const evidenceCoverage = corrected.length
-    ? corrected.filter((slide) => slide.evidenceIds?.length).length / corrected.length
+    ? corrected.filter((slide) => slide.role === "CTA" || slide.evidenceIds?.length).length / corrected.length
     : 0;
   return {
     slides: corrected.map((slide) => ({ ...slide, body: slide.subtitle })),
@@ -1043,6 +1213,9 @@ function validateSlides(slides, fallbackSlides, facts, article) {
       correctedSlides: [...new Set(issues.map((issue) => issue.slide).filter(Boolean))],
       factCount: facts.length,
       evidenceCoverage: Number(evidenceCoverage.toFixed(2)),
+      distinctPrimaryEvidence,
+      informativeSlides: informativeSlides.length,
+      noRepeatedAngles: distinctPrimaryEvidence === informativeSlides.length,
       limits: { titleChars: MAX_SLIDE_TITLE_CHARS, subtitleChars: MAX_SLIDE_SUBTITLE_CHARS },
     },
   };
@@ -1064,8 +1237,12 @@ function evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle 
     `EVIDÊNCIAS EXTRAÍDAS LITERALMENTE DA MATÉRIA:\n${evidenceMap}`,
     "Sua função é somente REDIGIR os slides a partir das evidências acima. Não crie, complete, deduza ou acrescente fatos.",
     "Cada slide informativo deve referenciar em evidenceIds pelo menos uma evidência usada. Não cite IDs inexistentes.",
+    "REGRA DE DIVERSIDADE: o primeiro evidenceId de cada slide informativo deve ser diferente do primeiro evidenceId de todos os outros slides. Cada slide precisa acrescentar uma informação factual nova.",
+    "Não repita a manchete no subtítulo do slide 1. O subtítulo deve acrescentar outro dado, contexto, agente, número, impacto, resposta ou próximo passo presente nas evidências.",
+    "Não use títulos genéricos como 'Entenda o cenário', 'O que aconteceu', 'Os principais detalhes' ou 'O que a matéria informa'. Prefira títulos específicos derivados do ângulo factual daquele slide.",
+    "Não reformule a mesma informação para preencher papéis diferentes. Se uma evidência já foi o ângulo principal de um slide, use outra como ângulo principal no próximo.",
     "Você pode adaptar ritmo, clareza e tom do texto, mas não pode alterar nomes, datas, números, relações causais ou conclusões presentes nas evidências.",
-    `Produza exatamente ${slideCount} slides. Título até ${MAX_SLIDE_TITLE_CHARS} caracteres; subtítulo até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres e no máximo duas frases.`,
+    `Produza exatamente ${slideCount} slides. Título até ${MAX_SLIDE_TITLE_CHARS} caracteres; subtítulo até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres e no máximo duas frases. Não aumente a quantidade de texto para compensar falta de informação.`,
     "No CTA, não acrescente informação factual nova; apenas convide o leitor a acompanhar ou consultar a matéria original.",
   ].filter(Boolean).join("\n\n").slice(0, MAX_PROMPT_CHARS);
 }
@@ -1075,7 +1252,7 @@ async function runAiCarouselFromEvidence(ai, model, topic, article, facts, slide
     messages: [
       {
         role: "system",
-        content: `Você é um redator jornalístico brasileiro. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências e referencie os IDs utilizados.`,
+        content: `Você é um redator jornalístico brasileiro. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências. Cada slide informativo deve ter um ângulo factual diferente e um evidenceIds[0] diferente; não repita manchete, dado ou conclusão em slides distintos.`,
       },
       { role: "user", content: evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle) },
     ],
@@ -1097,7 +1274,7 @@ export function intelligentCarouselCacheKey(runId, topic, { slideCount = DEFAULT
   const item = selected?.item;
   const count = carouselSlidePlan(slideCount).length;
   const sourceFingerprint = [item?.url, item?.title, item?.publishedAt, item?.content, item?.description].filter(Boolean).join("|");
-  return `smart-v7-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${count}|${styleKey || "default"}|${sourceFingerprint}`)}`;
+  return `smart-v8-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${count}|${styleKey || "default"}|${sourceFingerprint}`)}`;
 }
 
 export async function buildIntelligentCarousel(topic, {

@@ -1,3 +1,14 @@
+## 2.7.7 — carrossel com ângulos factuais distintos
+
+- Corrige repetição de manchete, dado ou conclusão em slides diferentes.
+- Cada slide informativo passa a usar uma evidência principal diferente da matéria lida.
+- O slide de capa não pode repetir a manchete no subtítulo; o deck precisa acrescentar outra informação da fonte.
+- A validação detecta repetição semântica entre slides e repetição entre título e subtítulo do mesmo slide.
+- O prompt proíbe títulos genéricos e exige um ângulo factual novo por slide, sem aumentar a quantidade de texto.
+- Frases extensas da matéria podem ser divididas em trechos literais para aumentar a variedade de evidências sem criar fatos.
+- Quando a matéria não possui evidências distintas suficientes para a quantidade escolhida, a geração é bloqueada e informa o máximo recomendado em vez de repetir conteúdo.
+- Cache de carrossel recebe nova versão para não reutilizar roteiros repetitivos gerados anteriormente.
+
 ## 2.7.6 — carrossel baseado obrigatoriamente em matéria publicada
 
 - O carrossel só é gerado depois de abrir e extrair o texto principal de pelo menos um portal que publicou a matéria.
