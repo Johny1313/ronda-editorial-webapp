@@ -179,16 +179,18 @@ test("snapshot antigo remove canais fora do catálogo atual", () => {
   assert.equal(filtered.schemaVersion, 5);
 });
 
-test("D1 aplica retenção limitada e recuperação ao atingir o tamanho máximo", async () => {
-  const [database, migration] = await Promise.all([
+test("D1 aplica retenção limitada, compacta snapshots e separa o YouTube", async () => {
+  const [database, rescueMigration, wrangler] = await Promise.all([
     readFile(new URL("../src/database.js", import.meta.url), "utf8"),
-    readFile(new URL("../migrations/0005_d1_storage_guard.sql", import.meta.url), "utf8"),
+    readFile(new URL("../migrations/0007_core_storage_rescue_and_youtube_split.sql", import.meta.url), "utf8"),
+    readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"),
   ]);
-  assert.match(database, /maxYouTubeCollections: 48/);
-  assert.match(database, /maxYouTubeTermResults: 24/);
-  assert.match(database, /maxRuns: 288/);
+  assert.match(database, /maxRunPayloads: 12/);
+  assert.match(database, /maxRunRows: 576/);
+  assert.match(database, /maxYouTubeCollections: 12/);
   assert.match(database, /Exceeded maximum DB size/i);
-  assert.match(database, /compactYouTubeCollectionForStorage/);
-  assert.match(migration, /LIMIT 48/);
-  assert.match(migration, /LIMIT 288/);
+  assert.match(database, /preflightCoreStorage/);
+  assert.match(rescueMigration, /UPDATE runs[\s\S]*payload_json = NULL/);
+  assert.match(rescueMigration, /DELETE FROM youtube_collections/);
+  assert.match(wrangler, /YOUTUBE_DB/);
 });

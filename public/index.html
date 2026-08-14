@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.7.0">
+  <link rel="stylesheet" href="/styles.css?v=2.7.2">
 </head>
 <body>
   <main class="app">
@@ -122,15 +122,15 @@
 
       <section class="youtube-view" id="youtubeView" hidden aria-labelledby="youtubeTitle">
         <div class="management-heading youtube-heading">
-          <div><p class="eyebrow">Radar audiovisual</p><h2 id="youtubeTitle">YouTube Editorial</h2><p>Vídeos, assuntos, canais e termos monitorados em uma coleta independente da Ronda de portais.</p></div>
+          <div><p class="eyebrow">Radar audiovisual</p><h2 id="youtubeTitle">YouTube Editorial</h2><p>Vídeos, assuntos e termos monitorados somente em canais jornalísticos, em uma coleta independente da Ronda de portais.</p></div>
           <div class="youtube-heading-actions"><button class="secondary" id="collectYouTube" type="button">↻ Atualizar YouTube</button><span class="youtube-module-status" id="youtubeModuleStatus">Verificando configuração</span></div>
         </div>
-        <div class="background-note youtube-note"><strong>Coleta isolada</strong><span>O YouTube usa fila própria a cada 15 minutos. Uma falha nesta aba não interfere na Ronda, nos Termos ou na leitura inteligente.</span></div>
+        <div class="background-note youtube-note"><strong>Somente canais de notícias</strong><span>A coleta usa uma lista fixa de veículos jornalísticos e fila própria a cada 15 minutos. Canais de creators, entretenimento e comentários independentes não entram no radar.</span></div>
 
         <section class="summary youtube-summary" aria-label="Resumo do YouTube">
           <div><strong id="youtubeSummaryVideos">0</strong><span>vídeos analisados</span><small>última coleta</small></div>
           <div><strong id="youtubeSummaryTopics">0</strong><span>assuntos ativos</span><small>agrupamento editorial</small></div>
-          <div><strong id="youtubeSummaryChannels">0</strong><span>canais distintos</span><small>amostra atual</small></div>
+          <div><strong id="youtubeSummaryChannels">0</strong><span>canais de notícias</span><small>amostra jornalística</small></div>
           <div class="attention"><strong id="youtubeSummaryUrgent">0</strong><span>pautar agora</span><small>sinal de alta atenção</small></div>
         </section>
 
@@ -171,7 +171,7 @@
           </section>
           <section class="youtube-side-stack">
             <article class="youtube-panel">
-              <div class="youtube-panel-head"><div><p class="eyebrow">Canais</p><h3>Quem está puxando audiência</h3></div></div>
+              <div class="youtube-panel-head"><div><p class="eyebrow">Canais de notícias</p><h3>Quem está puxando audiência</h3></div></div>
               <div class="youtube-ranking-list" id="youtubeChannelList"></div>
             </article>
             <article class="youtube-panel">
@@ -278,6 +278,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.7.0" defer></script>
+  <script src="/app.js?v=2.7.2" defer></script>
 </body>
 </html>

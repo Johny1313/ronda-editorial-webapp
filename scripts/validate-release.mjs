@@ -28,6 +28,7 @@ assert.equal(wrangler.minify, true);
 assert.equal(wrangler.keep_names, false);
 assert.match(wranglerText, /ROUND_JOBS_QUEUE/);
 assert.match(wranglerText, /YOUTUBE_JOBS_QUEUE/);
+assert.match(wranglerText, /YOUTUBE_DB/);
 assert.match(wranglerText, /ronda-editorial-youtube-jobs/);
 assert.match(wranglerText, /dead_letter_queue/);
 assert.match(index, /\/api\/status/);
@@ -55,6 +56,10 @@ assert.match(app, /document\.hidden \? 5 \* 60_000 : 60_000/);
 assert.match(collector, /runPool\(due, 5/);
 assert.match(youtube, /collectYouTubeTrending/);
 assert.match(youtube, /collectYouTubeTerm/);
+assert.match(youtube, /YOUTUBE_CHANNEL_SCOPE = "news_only"/);
+assert.match(youtube, /APPROVED_YOUTUBE_NEWS_CHANNELS/);
+assert.match(youtube, /filterYouTubeNewsVideos/);
+assert.match(youtube, /restrictYouTubeCollectionToNews/);
 assert.match(youtube, /videos:batchGetStats/);
 assert.match(await read("src/database.js"), /compactYouTubeCollectionForStorage/);
 assert.match(await read("src/database.js"), /emergencyDatabaseCleanup/);
@@ -85,6 +90,9 @@ for (const required of [
   "migrations/0004_youtube_integration.sql",
   "migrations/0005_d1_storage_guard.sql",
   "migrations/0006_user_profiles_and_flexible_carousels.sql",
+  "migrations/0007_core_storage_rescue_and_youtube_split.sql",
+  "migrations_youtube/0001_youtube_database.sql",
+  "RECUPERAR-D1-AGORA.sql",
   "src/youtube.js",
   "src/profile.js",
   "public/_headers",

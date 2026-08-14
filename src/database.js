@@ -1,7 +1,7 @@
 import { DEFAULT_SLIDE_COUNT, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.7.0";
+export const DATABASE_SCHEMA_VERSION = "2.7.1";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -180,9 +180,17 @@ const SCHEMA_STATEMENTS = [
 ];
 
 const STORAGE_GUARD = Object.freeze({
-  maxRuns: 288,
-  maxYouTubeCollections: 48,
-  maxYouTubeTermResults: 24,
+  // Cada ronda já contém a janela editorial completa; manter centenas de payloads completos
+  // apenas duplica os mesmos dados e enche o D1. Preservamos metadados por 48h, mas
+  // somente as 24 rondas mais recentes mantêm payload detalhado.
+  maxRunRows: 576,
+  maxRunPayloads: 12,
+  maxYouTubeCollections: 12,
+  maxYouTubeTermResults: 12,
+  maxArticleReadCache: 40,
+  maxIntelligentCarousels: 60,
+  maxIntelligentJobs: 120,
+  maxTranslations: 1000,
 });
 
 export function isD1StorageLimitError(error) {
@@ -206,18 +214,31 @@ async function emergencyCleanupRaw(db) {
        ORDER BY collected_at DESC
        LIMIT ${STORAGE_GUARD.maxYouTubeTermResults}
      )`,
+    `UPDATE runs SET payload_json = NULL
+     WHERE payload_json IS NOT NULL
+       AND status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status = 'success' AND payload_json IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT ${STORAGE_GUARD.maxRunPayloads}
+       )`,
     `DELETE FROM runs
      WHERE status NOT IN ('queued', 'running')
        AND id NOT IN (
          SELECT id FROM runs
          WHERE status NOT IN ('queued', 'running')
          ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC
-         LIMIT ${STORAGE_GUARD.maxRuns}
+         LIMIT ${STORAGE_GUARD.maxRunRows}
        )`,
     `DELETE FROM intelligent_carousels WHERE expires_at < '${now}'`,
+    `DELETE FROM intelligent_carousels WHERE cache_key NOT IN (SELECT cache_key FROM intelligent_carousels ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentCarousels})`,
     `DELETE FROM intelligent_jobs WHERE expires_at < '${now}'`,
+    `DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`,
     `DELETE FROM article_read_cache WHERE expires_at < '${now}'`,
+    `DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`,
     `DELETE FROM translation_cache WHERE updated_at < '${translationCutoff}'`,
+    `DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`,
     `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
     `DELETE FROM user_sessions WHERE expires_at < '${now}'`,
   ];
@@ -226,6 +247,39 @@ async function emergencyCleanupRaw(db) {
   }
 }
 
+
+export async function preflightCoreStorage(db, { purgeLegacyYouTube = false } = {}) {
+  if (!db) return false;
+  const statements = [
+    `UPDATE runs SET payload_json = NULL
+     WHERE payload_json IS NOT NULL
+       AND status NOT IN ('queued', 'running')
+       AND id NOT IN (
+         SELECT id FROM runs
+         WHERE status = 'success' AND payload_json IS NOT NULL
+         ORDER BY completed_at DESC
+         LIMIT ${STORAGE_GUARD.maxRunPayloads}
+       )`,
+    `DELETE FROM intelligent_carousels WHERE expires_at < '${new Date().toISOString()}'`,
+    `DELETE FROM intelligent_jobs WHERE expires_at < '${new Date().toISOString()}'`,
+    `DELETE FROM article_read_cache WHERE expires_at < '${new Date().toISOString()}'`,
+  ];
+  if (purgeLegacyYouTube) {
+    statements.unshift(
+      `DELETE FROM youtube_collections`,
+      `DELETE FROM youtube_term_results`,
+      `DELETE FROM youtube_state`,
+    );
+  }
+  let changed = false;
+  for (const statement of statements) {
+    try {
+      const result = await db.prepare(statement).run();
+      if (Number(result?.meta?.changes || 0) > 0) changed = true;
+    } catch {}
+  }
+  return changed;
+}
 export async function emergencyDatabaseCleanup(db) {
   if (!db) return false;
   await emergencyCleanupRaw(db);
@@ -579,6 +633,7 @@ export async function startRun(db, { id, triggerType, startedAt }) {
 
 export async function saveRun(db, { id, triggerType, startedAt, payload }) {
   await ensureSchema(db);
+  await preflightCoreStorage(db).catch(() => null);
   const safePayload = payload && typeof payload === "object" && !Array.isArray(payload)
     ? payload
     : {
@@ -1160,13 +1215,18 @@ export async function runDatabaseMaintenance(db, { intervalHours = 12 } = {}) {
   const translationCutoff = new Date(nowMs - 14 * 24 * 60 * 60 * 1000).toISOString();
   await db.batch([
     db.prepare("DELETE FROM runs WHERE status IN ('success', 'failed', 'expired') AND NULLIF(completed_at, '') < ?").bind(retentionCutoff),
-    db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRuns})`),
+    db.prepare(`UPDATE runs SET payload_json = NULL WHERE payload_json IS NOT NULL AND status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status = 'success' AND payload_json IS NOT NULL ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxRunPayloads})`),
+    db.prepare(`DELETE FROM runs WHERE status NOT IN ('queued', 'running') AND id NOT IN (SELECT id FROM runs WHERE status NOT IN ('queued', 'running') ORDER BY COALESCE(NULLIF(completed_at, ''), NULLIF(heartbeat_at, ''), NULLIF(started_at, ''), queued_at) DESC LIMIT ${STORAGE_GUARD.maxRunRows})`),
     db.prepare("DELETE FROM locks WHERE expires_at < ?").bind(nowMs - 5 * 60 * 1000),
     db.prepare("DELETE FROM user_sessions WHERE expires_at < ?").bind(now),
     db.prepare("DELETE FROM translation_cache WHERE updated_at < ?").bind(translationCutoff),
+    db.prepare(`DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`),
     db.prepare("DELETE FROM intelligent_carousels WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM intelligent_carousels WHERE cache_key NOT IN (SELECT cache_key FROM intelligent_carousels ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentCarousels})`),
     db.prepare("DELETE FROM intelligent_jobs WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM intelligent_jobs WHERE job_id NOT IN (SELECT job_id FROM intelligent_jobs ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxIntelligentJobs})`),
     db.prepare("DELETE FROM article_read_cache WHERE expires_at < ?").bind(now),
+    db.prepare(`DELETE FROM article_read_cache WHERE cache_key NOT IN (SELECT cache_key FROM article_read_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxArticleReadCache})`),
     db.prepare(`DELETE FROM youtube_collections WHERE id NOT IN (SELECT id FROM youtube_collections ORDER BY completed_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeCollections})`),
     db.prepare(`DELETE FROM youtube_term_results WHERE id NOT IN (SELECT id FROM youtube_term_results ORDER BY collected_at DESC LIMIT ${STORAGE_GUARD.maxYouTubeTermResults})`),
     db.prepare(`

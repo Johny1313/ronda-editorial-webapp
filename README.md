@@ -2,9 +2,9 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.7.0
+## Versão 2.7.2
 
-A versão 2.7.0 mantém a coleta otimizada e a aba YouTube, acrescentando perfis editoriais por e-mail, biblioteca compacta de exemplos de escrita e carrosséis com quantidade flexível de slides.
+A versão 2.7.2 mantém perfis editoriais, carrosséis flexíveis e o banco separado do YouTube. A aba YouTube passa a monitorar somente uma lista fixa de canais jornalísticos aprovados; conteúdos de creators, entretenimento e canais independentes fora da lista são descartados antes dos rankings e agrupamentos.
 
 Principais mudanças:
 
@@ -71,12 +71,13 @@ A política de armazenamento iniciada na versão 2.6.1 corrige o erro `D1_ERROR:
 
 Política atual:
 
-- 48 snapshots do YouTube, equivalentes a aproximadamente 12 horas;
-- 24 resultados recentes de termos do YouTube;
-- 288 rondas finalizadas, equivalentes a aproximadamente 24 horas;
-- cache de traduções por 14 dias;
-- limpeza antes de cada gravação do YouTube;
-- limpeza emergencial e uma repetição segura quando o D1 informar limite de tamanho.
+- o D1 principal (`DB`) guarda a Ronda, termos, leitura inteligente e perfis;
+- o YouTube usa o D1 separado `YOUTUBE_DB`;
+- somente as 12 rondas mais recentes mantêm o payload JSON completo; o histórico operacional preserva até 576 linhas leves;
+- o YouTube mantém até 12 snapshots e 12 resultados recentes de termos no banco próprio;
+- caches de leitura, carrossel e tradução têm limites máximos além do TTL;
+- antes de uma nova gravação da Ronda, snapshots redundantes são liberados;
+- ao detectar limite de armazenamento, o sistema limpa e repete a gravação uma única vez.
 
 A interface continua exibindo a última coleta válida e não armazena imagens no D1; apenas as URLs das miniaturas são mantidas.
 
@@ -115,8 +116,10 @@ um termo ativo por rotação, quando houver cota
         ↓
 estatísticas, agrupamento e decisão editorial local
         ↓
-D1 / aba YouTube
+YOUTUBE_DB / aba YouTube
 ```
+
+O banco `YOUTUBE_DB` é isolado do `DB`; uma falha ou crescimento do YouTube não impede a gravação de novas rondas.
 
 A aba não possui gráficos. Ela preserva o padrão de cards, chips, filtros, indicadores e links de apuração usado pela Ronda.
 

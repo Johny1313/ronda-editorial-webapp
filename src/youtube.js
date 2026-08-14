@@ -3,6 +3,58 @@ const DEFAULT_REGION = "BR";
 const DEFAULT_LIMIT = 25;
 const REQUEST_TIMEOUT_MS = 8_000;
 
+export const YOUTUBE_CHANNEL_SCOPE = "news_only";
+export const APPROVED_YOUTUBE_NEWS_CHANNELS = Object.freeze([
+  "g1",
+  "GloboNews",
+  "CNN Brasil",
+  "Band Jornalismo",
+  "BandNews TV",
+  "BandNews FM",
+  "SBT News",
+  "Record News",
+  "Jovem Pan News",
+  "UOL",
+  "UOL Notícias",
+  "Folha de S.Paulo",
+  "Folha de São Paulo",
+  "Estadão",
+  "O Globo",
+  "Poder360",
+  "BBC News Brasil",
+  "Metrópoles",
+  "CBN",
+  "Agência Brasil",
+  "Veja",
+  "InfoMoney",
+  "Money Times",
+  "ge",
+  "Canaltech",
+  "Canal Rural"
+]);
+
+function normalizedChannelName(value) {
+  return normalizeText(value)
+    .replace(/&/g, " e ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const APPROVED_YOUTUBE_NEWS_CHANNEL_KEYS = new Set(
+  APPROVED_YOUTUBE_NEWS_CHANNELS.map(normalizedChannelName)
+);
+
+export function isApprovedYouTubeNewsChannel(value) {
+  const title = typeof value === "string" ? value : value?.channel || value?.snippet?.channelTitle || "";
+  const key = normalizedChannelName(title);
+  return Boolean(key && APPROVED_YOUTUBE_NEWS_CHANNEL_KEYS.has(key));
+}
+
+export function filterYouTubeNewsVideos(videos = []) {
+  return (Array.isArray(videos) ? videos : []).filter(isApprovedYouTubeNewsChannel);
+}
+
 const STOPWORDS = new Set(`a agora ainda ai alem algo algum alguma alguns algumas ao aos aquela aquele aqueles aquelas aqui assim ate cada com como contra da das de dela dele deles delas depois dia dias do dos e ela ele eles elas em entre era essa esse esses essas esta este estes eu foi for fora hoje ja la mais mas meu minha muito muita muitos muitas na nao nas nem no nos nossa nosso novas novo novos num numa o os ou para pela pelo pelas pelos por porque qual quando que quem se sem ser seu sua suas seus sobre so tambem tem ter toda todo todos todas um uma umas uns vai ver voce voces video videos oficial parte melhor live shorts canal atualizado atual ultimas ultima primeiro primeira segunda segundo novo musica clipe episodio completa completo react trailer gameplay highlights minuto minutos horas hora mundo brasil brasileiro brasileira estreia entrevista noticia noticias tv youtube`.split(/\s+/));
 const ACRONYMS = new Map([["bbb", "BBB"], ["gta", "GTA"], ["ufc", "UFC"], ["f1", "F1"], ["nba", "NBA"], ["nfl", "NFL"], ["ia", "IA"], ["stf", "STF"], ["sp", "SP"], ["rj", "RJ"]]);
 
@@ -253,6 +305,50 @@ export function extractYouTubeTopics(videos, limit = 24) {
   return selected.map((topic, index) => ({ ...topic, rank: index + 1 }));
 }
 
+export function restrictYouTubeCollectionToNews(collection) {
+  if (!collection || typeof collection !== "object") return collection || null;
+  const videos = filterYouTubeNewsVideos(collection.videos || []);
+  const topics = extractYouTubeTopics(videos);
+  const output = {
+    ...collection,
+    newsOnly: true,
+    channelScope: YOUTUBE_CHANNEL_SCOPE,
+    videos,
+    topics,
+  };
+  output.channels = buildChannels(videos);
+  output.alerts = buildAlerts(output);
+  output.stats = {
+    videoCount: videos.length,
+    topicCount: topics.length,
+    channelCount: output.channels.length,
+    urgentCount: topics.filter((topic) => topic.decisionLevel === "high").length,
+    views: videos.reduce((sum, video) => sum + (Number(video.views) || 0), 0),
+    viewsPerHour: videos.reduce((sum, video) => sum + (Number(video.viewsPerHour) || 0), 0),
+    comments: videos.reduce((sum, video) => sum + (Number(video.comments) || 0), 0),
+  };
+  return output;
+}
+
+export function restrictYouTubeTermResultToNews(result) {
+  if (!result || typeof result !== "object") return result || null;
+  const videos = filterYouTubeNewsVideos(result.videos || []);
+  return {
+    ...result,
+    newsOnly: true,
+    channelScope: YOUTUBE_CHANNEL_SCOPE,
+    videos,
+    summary: {
+      ...(result.summary || {}),
+      videoCount: videos.length,
+      views: videos.reduce((sum, video) => sum + (Number(video.views) || 0), 0),
+      viewsPerHour: videos.reduce((sum, video) => sum + (Number(video.viewsPerHour) || 0), 0),
+      comments: videos.reduce((sum, video) => sum + (Number(video.comments) || 0), 0),
+      topVideo: videos[0] || null,
+    },
+  };
+}
+
 function compareCollection(collection, previous) {
   const previousVideos = new Map((previous?.videos || []).map((video) => [video.id, video]));
   const previousTopics = new Map((previous?.topics || []).map((topic) => [topic.id, topic]));
@@ -308,6 +404,8 @@ export function buildYouTubeCollection(videos, { region = DEFAULT_REGION, previo
     collectedAt,
     region,
     cached,
+    newsOnly: true,
+    channelScope: YOUTUBE_CHANNEL_SCOPE,
     videos: attentionVideos,
     topics: extractYouTubeTopics(attentionVideos),
   }, previous);
@@ -326,15 +424,17 @@ export function buildYouTubeCollection(videos, { region = DEFAULT_REGION, previo
 }
 
 export async function collectYouTubeTrending({ apiKey, region = DEFAULT_REGION, limit = DEFAULT_LIMIT, previous = null, nowMs = Date.now() } = {}) {
-  const maxResults = clamp(limit, 5, 50);
+  const outputLimit = clamp(limit, 5, 50);
   const payload = await youtubeRequest(apiKey, "videos", {
     part: "snippet,statistics,contentDetails",
     chart: "mostPopular",
     regionCode: String(region || DEFAULT_REGION).toUpperCase(),
-    maxResults,
+    maxResults: 50,
     hl: "pt-BR",
   });
-  const videos = (payload.items || []).map((item, index) => normalizeYouTubeVideo(item, index, nowMs));
+  const videos = filterYouTubeNewsVideos(
+    (payload.items || []).map((item, index) => normalizeYouTubeVideo(item, index, nowMs))
+  ).slice(0, outputLimit);
   return {
     collection: buildYouTubeCollection(videos, { region: String(region || DEFAULT_REGION).toUpperCase(), previous, collectedAt: new Date(nowMs).toISOString() }),
     quotaEvents: [{ endpoint: "videos.list", bucket: "general", units: 1, calls: 1 }],
@@ -369,7 +469,7 @@ export async function collectYouTubeTerm({ apiKey, term, termId, region = DEFAUL
     safeSearch: "moderate",
     order: "date",
     publishedAfter,
-    maxResults: clamp(limit, 1, 20),
+    maxResults: clamp(Math.max(Number(limit) * 4, 20), 1, 50),
   });
   const searchItems = search.items || [];
   const ids = searchItems.map((item) => item?.id?.videoId).filter(Boolean);
@@ -387,7 +487,9 @@ export async function collectYouTubeTerm({ apiKey, term, termId, region = DEFAUL
       quotaEvents.push({ endpoint: "videos.list", bucket: "general", units: 1, calls: 1, fallback: true });
     }
   }
-  const videos = calculateYouTubeAttention(mergeSearchWithStats(searchItems, statsItems, nowMs));
+  const videos = calculateYouTubeAttention(
+    filterYouTubeNewsVideos(mergeSearchWithStats(searchItems, statsItems, nowMs))
+  ).slice(0, clamp(limit, 1, 20));
   return {
     result: {
       id: crypto.randomUUID(),

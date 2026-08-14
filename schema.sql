@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS youtube_state (
 INSERT INTO app_state (key, value, updated_at)
 VALUES ('schema_version', '2.6.1', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
--- Ronda Editorial 2.7.0
+-- Ronda Editorial 2.7.1
 -- Perfis editoriais, autenticação por e-mail e biblioteca compacta de exemplos de escrita.
 
 CREATE TABLE IF NOT EXISTS users (
@@ -179,5 +179,5 @@ CREATE TABLE IF NOT EXISTS writing_profiles (
 DELETE FROM user_sessions WHERE expires_at < CURRENT_TIMESTAMP;
 
 INSERT INTO app_state (key, value, updated_at)
-VALUES ('schema_version', '2.7.0', CURRENT_TIMESTAMP)
+VALUES ('schema_version', '2.7.1', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;

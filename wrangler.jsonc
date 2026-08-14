@@ -18,6 +18,10 @@
     {
       "binding": "DB",
       "migrations_dir": "migrations"
+    },
+    {
+      "binding": "YOUTUBE_DB",
+      "migrations_dir": "migrations_youtube"
     }
   ],
   "queues": {

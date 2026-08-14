@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.7.2 — YouTube somente em canais de notícias
+
+- Aba YouTube restrita a uma lista fixa de veículos jornalísticos.
+- Canais de creators, entretenimento e comentários independentes são descartados da coleta.
+- Vídeos populares são filtrados antes de agrupamento, ranking e alertas.
+- Buscas dos Termos também retornam apenas vídeos de canais jornalísticos aprovados.
+- A API pública filtra snapshots antigos para impedir que canais não jornalísticos reapareçam após o deploy.
+- A coleta de `mostPopular` lê até 50 candidatos em uma única chamada e mantém apenas os canais aprovados, sem aumentar o número de chamadas desse endpoint.
+
+## 2.7.1 — recuperação do D1 e isolamento do YouTube
+
+- Corrige a falha `D1_ERROR: Exceeded maximum DB size` na gravação da Ronda.
+- Move novas coletas do YouTube para o binding D1 separado `YOUTUBE_DB`.
+- Remove snapshots antigos do YouTube do banco editorial principal durante a recuperação.
+- Mantém payload completo somente nas 12 rondas mais recentes; histórico mais antigo permanece como metadados leves.
+- Limita caches de leitura, carrosséis, jobs e traduções por quantidade, além do TTL.
+- Executa uma limpeza leve antes de gravar uma nova ronda.
+- Falha do banco do YouTube não derruba `/api/health` nem a Ronda de portais.
+- Inclui `migrations/0007_core_storage_rescue_and_youtube_split.sql` e `migrations_youtube/0001_youtube_database.sql`.
+
 ## 2.7.0 — perfis editoriais e carrosséis flexíveis
 
 - Cadastro e login por e-mail e senha com PBKDF2 e sessões `HttpOnly`.

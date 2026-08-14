@@ -6,8 +6,12 @@ import {
   calculateYouTubeAttention,
   defaultYouTubeQuotaState,
   extractYouTubeTopics,
+  filterYouTubeNewsVideos,
+  isApprovedYouTubeNewsChannel,
   normalizeYouTubeVideo,
   publicYouTubeQuota,
+  restrictYouTubeCollectionToNews,
+  restrictYouTubeTermResultToNews,
 } from "../src/youtube.js";
 import {
   compactYouTubeCollectionForStorage,
@@ -77,6 +81,41 @@ test("coleção entrega cards, canais e alertas sem gráfico", () => {
   assert.ok(Array.isArray(collection.alerts));
   assert.equal("chart" in collection, false);
   assert.equal("series" in collection, false);
+});
+
+
+test("aceita somente canais jornalísticos aprovados", () => {
+  assert.equal(isApprovedYouTubeNewsChannel("CNN Brasil"), true);
+  assert.equal(isApprovedYouTubeNewsChannel("g1"), true);
+  assert.equal(isApprovedYouTubeNewsChannel("Canal de Games do João"), false);
+  const mixed = [
+    { ...normalized[0], channel: "CNN Brasil" },
+    { ...normalized[1], channel: "Canal de Games do João" },
+    { ...normalized[2], channel: "Band Jornalismo" },
+  ];
+  assert.deepEqual(filterYouTubeNewsVideos(mixed).map((video) => video.channel), ["CNN Brasil", "Band Jornalismo"]);
+});
+
+test("filtra snapshots antigos e resultados de termos para news only", () => {
+  const mixed = calculateYouTubeAttention([
+    { ...normalized[0], channel: "CNN Brasil", channelId: "cnn" },
+    { ...normalized[1], channel: "Creator Aleatório", channelId: "creator" },
+    { ...normalized[2], channel: "Poder360", channelId: "poder360" },
+  ]);
+  const oldCollection = buildYouTubeCollection(mixed, { region: "BR", collectedAt: "2026-07-27T18:00:00Z" });
+  const newsCollection = restrictYouTubeCollectionToNews(oldCollection);
+  assert.equal(newsCollection.newsOnly, true);
+  assert.equal(newsCollection.stats.videoCount, 2);
+  assert.deepEqual(newsCollection.videos.map((video) => video.channel).sort(), ["CNN Brasil", "Poder360"]);
+
+  const term = restrictYouTubeTermResultToNews({
+    id: "term-old",
+    term: "eleições",
+    videos: mixed,
+    summary: {},
+  });
+  assert.equal(term.summary.videoCount, 2);
+  assert.equal(term.videos.some((video) => video.channel === "Creator Aleatório"), false);
 });
 
 test("controla separadamente cota de busca e cota geral", () => {

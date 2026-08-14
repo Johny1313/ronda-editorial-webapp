@@ -34,6 +34,7 @@ import {
   queueRun,
   markRunStarted,
   touchRun,
+  preflightCoreStorage,
   setMonitoringTermActive,
   updateIntelligentJob,
   cleanupYouTubeData,
@@ -86,14 +87,18 @@ import {
 } from "./profile.js";
 import { portugueseOnlyFallback, TRANSLATION_MODEL, translateRoundPayload } from "./translation.js";
 import {
+  APPROVED_YOUTUBE_NEWS_CHANNELS,
+  YOUTUBE_CHANNEL_SCOPE,
   applyYouTubeQuotaEvents,
   collectYouTubeTerm,
   collectYouTubeTrending,
   defaultYouTubeQuotaState,
   publicYouTubeQuota,
+  restrictYouTubeCollectionToNews,
+  restrictYouTubeTermResultToNews,
 } from "./youtube.js";
 
-const VERSION = "2.7.0";
+const VERSION = "2.7.2";
 const INTELLIGENT_JOB_STALE_LABEL = "10 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -169,6 +174,15 @@ function validatedMonitoringTerm(body) {
 function requireDatabase(env) {
   if (!env.DB) throw new HttpError(503, "Banco D1 não configurado.", "Crie um banco D1 e adicione ao Worker um binding chamado DB.");
   return env.DB;
+}
+
+function requireYouTubeDatabase(env) {
+  // O YouTube não pode voltar silenciosamente ao banco editorial principal:
+  // se o binding separado faltar, somente a aba YouTube fica indisponível.
+  if (!env.YOUTUBE_DB) {
+    throw new HttpError(503, "Banco D1 do YouTube não configurado.", "Adicione o binding YOUTUBE_DB; a Ronda de portais continua independente.");
+  }
+  return env.YOUTUBE_DB;
 }
 
 function secureCookieForRequest(request) {
@@ -685,6 +699,9 @@ async function youtubePublicStatus(db, env) {
   return {
     configured: Boolean(env.YOUTUBE_API_KEY),
     queueReady: Boolean(env.YOUTUBE_JOBS_QUEUE?.send),
+    newsOnly: true,
+    channelScope: YOUTUBE_CHANNEL_SCOPE,
+    approvedChannelCount: APPROVED_YOUTUBE_NEWS_CHANNELS.length,
     status: active?.status || runtime.status || (latest ? "success" : "idle"),
     running: Boolean(active),
     jobId: active?.jobId || runtime.jobId || null,
@@ -704,7 +721,8 @@ async function youtubePublicStatus(db, env) {
 }
 
 async function performYouTubeCollection(env, body = {}) {
-  const db = requireDatabase(env);
+  const db = requireYouTubeDatabase(env);
+  const coreDb = requireDatabase(env);
   await ensureSchema(db);
   const lock = await acquireLock(db, "youtube-collection", 12 * 60 * 1000);
   if (!lock) throw new HttpError(409, "Já existe uma coleta do YouTube em andamento.");
@@ -740,7 +758,7 @@ async function performYouTubeCollection(env, body = {}) {
 
     let termResult = null;
     if (body.monitorTerm) {
-      const activeTerms = await listMonitoringTerms(db, { activeOnly: true });
+      const activeTerms = await listMonitoringTerms(coreDb, { activeOnly: true });
       if (activeTerms.length && Number(quota.searchCalls || 0) < 80) {
         const cursorState = await getYouTubeStateValue(db, YOUTUBE_TERM_CURSOR_KEY, { index: 0 });
         const index = Math.max(0, Number(cursorState?.index) || 0) % activeTerms.length;
@@ -803,7 +821,7 @@ async function processYouTubeQueueMessage(message, env, body = {}) {
     await performYouTubeCollection(env, body);
     message?.ack?.();
   } catch (error) {
-    const db = requireDatabase(env);
+    const db = requireYouTubeDatabase(env);
     const attempts = Number(message?.attempts || 1);
     const retryable = youtubeRetryableError(error);
     const detail = error instanceof Error ? error.message : String(error);
@@ -855,6 +873,9 @@ async function processQueueBatch(batch, env) {
 
 async function performRound(env, triggerType, options = {}) {
   const db = requireDatabase(env);
+  // Libera espaço antes de qualquer nova gravação. Quando YOUTUBE_DB existe,
+  // os snapshots antigos do YouTube no banco principal deixam de ser necessários.
+  await preflightCoreStorage(db, { purgeLegacyYouTube: true }).catch(() => null);
   await ensureSchema(db);
   const lock = options.lock || await acquireLock(db, "editorial-round", 12 * 60 * 1000);
   if (!lock) throw new HttpError(409, "Já existe uma ronda em andamento.");
@@ -1152,7 +1173,14 @@ async function handleApi(request, env, url, ctx) {
     const [latest, monitoringTerms, youtubeStatus] = await Promise.all([
       getLatestRunSummary(db, { successOnly: true }),
       listMonitoringTerms(db, { activeOnly: true }),
-      youtubePublicStatus(db, env),
+      youtubePublicStatus(requireYouTubeDatabase(env), env).catch((error) => ({
+        configured: Boolean(env.YOUTUBE_API_KEY),
+        queueReady: Boolean(env.YOUTUBE_JOBS_QUEUE?.send),
+        status: "error",
+        running: false,
+        error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+        isolated: true,
+      })),
     ]);
     const lastSuccessAt = latest?.completedAt ?? null;
     const ageMs = lastSuccessAt ? Date.now() - Date.parse(lastSuccessAt) : Number.POSITIVE_INFINITY;
@@ -1250,30 +1278,32 @@ async function handleApi(request, env, url, ctx) {
 
 
   if (url.pathname === "/api/youtube/status" && request.method === "GET") {
-    const db = requireDatabase(env);
+    const db = requireYouTubeDatabase(env);
     const status = await youtubePublicStatus(db, env);
     return conditionalJson(request, { ok: true, status }, `youtube-status-${status.status}-${status.jobId || "none"}-${status.lastSuccessAt || "none"}`);
   }
 
   if (url.pathname === "/api/youtube/latest" && request.method === "GET") {
-    const db = requireDatabase(env);
+    const db = requireYouTubeDatabase(env);
     const [collection, termResults, status] = await Promise.all([
       getLatestYouTubeCollection(db),
       getLatestYouTubeTermResults(db, 12),
       youtubePublicStatus(db, env),
     ]);
+    const newsCollection = restrictYouTubeCollectionToNews(collection);
+    const newsTermResults = termResults.map(restrictYouTubeTermResultToNews);
     return conditionalJson(request, {
       ok: true,
-      collection,
-      termResults,
+      collection: newsCollection,
+      termResults: newsTermResults,
       status,
-    }, `youtube-latest-${collection?.id || "empty"}-${termResults[0]?.id || "none"}-${status.status}`);
+    }, `youtube-latest-${newsCollection?.id || "empty"}-${newsTermResults[0]?.id || "none"}-${status.status}-news-only`);
   }
 
   if (url.pathname === "/api/youtube/collect" && request.method === "POST") {
     requireOperationAuth(request, env);
     if (!env.YOUTUBE_API_KEY) throw new HttpError(503, "Chave da API do YouTube não configurada.", "Adicione o secret YOUTUBE_API_KEY ao Worker.");
-    const db = requireDatabase(env);
+    const db = requireYouTubeDatabase(env);
     const runtime = await getYouTubeRuntime(db);
     const active = activeYouTubeRuntime(runtime);
     if (active) return json({ ok: true, queued: true, reused: true, jobId: active.jobId, status: active.status }, 202);
@@ -1613,7 +1643,7 @@ export default {
         structuredLog("youtube_scheduled_skipped", { reason: "missing_api_key" });
         return;
       }
-      const db = requireDatabase(env);
+      const db = requireYouTubeDatabase(env);
       const runtime = await getYouTubeRuntime(db);
       if (activeYouTubeRuntime(runtime)) {
         structuredLog("youtube_scheduled_skipped", { reason: "active_job", jobId: runtime.jobId });
