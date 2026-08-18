@@ -1,165 +1,35 @@
-RONDA EDITORIAL v2.7.7 — PUBLICAÇÃO PELO GITHUB
+RONDA EDITORIAL v2.8.0 — PUBLICAÇÃO PELO GITHUB
 ================================================
 
-OBJETIVO
---------
-Publicar a Ronda com perfis editoriais, exemplos de escrita e carrosséis flexíveis em uma branch de preview antes de promover para produção. O YouTube continua em fila própria.
+1. PRESERVE A ESTRUTURA DE PASTAS
+- src/ continua dentro de src/
+- public/ continua dentro de public/
+- test/ continua dentro de test/
+- migrations/ e migrations_youtube/ continuam separadas
+- não envie os arquivos internos dessas pastas para a raiz
 
-1. SUBSTITUIR O PROJETO
------------------------
-Substitua o conteúdo antigo pelo conteúdo completo deste pacote. Preserve:
+2. ARQUIVOS DE VERSÃO
+- package.json: 2.8.0
+- package-lock.json: 2.8.0
+- src/index.js: const VERSION = "2.8.0"
+- public/index.html: styles.css?v=2.8.0 e app.js?v=2.8.0
 
-  .github/workflows/ci.yml
-  package-lock.json
-  migrations/0004_youtube_integration.sql
-  migrations/0005_d1_storage_guard.sql
-  migrations/0006_user_profiles_and_flexible_carousels.sql
-  src/youtube.js
-  src/profile.js
+3. BUILD
+Build command: npm run build
+Deploy command: npx wrangler deploy
 
-Remova a pasta antiga dist e arquivos ALTERACOES-v*.txt. O histórico está em
-CHANGELOG.md.
+O build correto termina com:
+Release 2.8.0 validado.
 
-2. CRIAR UMA BRANCH DE TESTE
-----------------------------
-Crie uma branch, por exemplo:
-
-  release-v2.7.7
-
-Envie o pacote completo para essa branch. Evite Upload files em main.
-
-3. CONFIGURAR WORKERS BUILDS
-----------------------------
-Cloudflare > Worker > Settings > Builds:
-
-  Production branch: main
-  Build command: npm ci && npm run check
-  Deploy command: npx --yes wrangler@4.113.0 deploy
-  Non-production deploy command:
-    npx --yes wrangler@4.113.0 versions upload
-  Root directory: /
-
-4. RECURSOS DECLARADOS
-----------------------
-O wrangler.jsonc declara:
-
-  DB                         banco D1
-  AI                         Workers AI
-  ASSETS                     interface estática
-  INTELLIGENT_JOBS_QUEUE     leitura inteligente
-  ROUND_JOBS_QUEUE           rondas de portais
-  YOUTUBE_JOBS_QUEUE         coleta independente do YouTube
-  YOUTUBE_DB                 banco D1 separado do YouTube
-
-Filas:
-
-  ronda-editorial-intelligent-jobs
-  ronda-editorial-intelligent-jobs-dlq
-  ronda-editorial-round-jobs
-  ronda-editorial-round-jobs-dlq
-  ronda-editorial-youtube-jobs
-  ronda-editorial-youtube-jobs-dlq
-
-5. CONFIGURAR A CHAVE DO YOUTUBE
---------------------------------
-A chave nunca deve ser enviada ao GitHub.
-
-Pelo terminal, na pasta do projeto:
-
-  npx --yes wrangler@4.113.0 secret put YOUTUBE_API_KEY
-
-Ou no painel:
-
-  Worker > Settings > Variables and Secrets > Add
-  Type: Secret
-  Name: YOUTUBE_API_KEY
-  Value: sua chave da YouTube Data API v3
-
-6. APLICAR MIGRAÇÕES
---------------------
-Após o deploy, execute uma vez:
-
-  npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
-
-As migrações mais recentes são:
-
-  0005_d1_storage_guard.sql
-  0006_user_profiles_and_flexible_carousels.sql
-
-A migração 0006 cria usuários, sessões, exemplos de escrita e guias de estilo.
-
-7. VALIDAR O PREVIEW
---------------------
-Abra:
-
-  /api/self-test
-  /api/health
-  /api/status
-  /api/youtube/status
-  /api/youtube/latest
-
-Confirme:
-
-  version: 2.7.7
-  youtube.configured: true
-  youtube.queueReady: true
-  catalogPortals: 39
-
-Na interface:
-
-1. Abra a aba YouTube.
-2. Confirme que não existe gráfico.
-3. Clique em Atualizar YouTube.
-4. Aguarde o estado passar por Na fila, Coletando e Atualizado.
-5. Valide cards de assuntos, vídeos, canais, alertas e termos.
-6. Abra um link no YouTube para confirmar a apuração.
-7. Execute uma Ronda de portais e confirme que ela continua independente.
-
-8. PROMOVER
------------
-Depois do preview, abra Pull Request da branch release-v2.7.7 para main.
-O merge executará o deploy de produção.
-
-9. MONITORAR
-------------
-No Cloudflare, confira:
-
-  Queues > ronda-editorial-youtube-jobs
-  Worker > Observability
-  D1 > youtube_collections
-  D1 > youtube_term_results
-  D1 > youtube_state
-
-A coleta de vídeos em alta ocorre a cada 15 minutos. Um termo ativo é consultado
-por rotação a cada 30 minutos quando há margem de cota. Erros de chave, quota ou
-API afetam somente a aba YouTube.
-
-
-Após o deploy da v2.7.7, aplique as migrações pendentes:
-
+4. MIGRAÇÕES APÓS O DEPLOY
 npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+npx --yes wrangler@4.113.0 d1 migrations apply YOUTUBE_DB --remote
 
-O Wrangler aplicará 0005 e 0006 quando ainda estiverem pendentes. A 0006 cria os perfis editoriais e as preferências de slides.
+Novas:
+- migrations/0009_newsroom_workflow.sql
+- migrations_youtube/0002_curated_news_channels.sql
 
-
-10. VALIDAR PERFIL E SLIDES FLEXÍVEIS
--------------------------------------
-1. Abra a aba Perfil e crie uma conta com e-mail e senha.
-2. Adicione um texto de pelo menos 40 caracteres.
-3. Clique em Atualizar estilo.
-4. Escolha o padrão de slides entre 3 e 15.
-5. Abra um assunto da Ronda e selecione uma quantidade diferente.
-6. Confirme que o servidor devolve exatamente a quantidade escolhida.
-7. Saia e entre novamente para validar a sessão.
-
-A versão 2.7.7 não exige novo binding nem nova migration. Os perfis continuam no DB principal e o YouTube permanece no YOUTUBE_DB.
-Não há confirmação de e-mail nem recuperação automática de senha nesta versão.
-
-11. VALIDAR APURAÇÃO OBRIGATÓRIA DO CARROSSEL
-----------------------------------------------
-1. Abra um assunto com link de portal e gere o carrossel.
-2. Confirme em "Apuração obrigatória" que a fonte aparece como verificada.
-3. Confirme que "Fatos criados pela IA" aparece como não no texto copiado.
-4. Teste um portal bloqueado: o sistema pode tentar até 3 fontes do mesmo assunto.
-5. Se nenhum site puder ser lido, a geração deve falhar com diagnóstico; não deve usar feed, título ou resumo para fabricar um roteiro.
-
+5. TESTE
+- /api/health -> version 2.8.0
+- aba Mesa -> deve listar pautas depois da próxima ronda
+- aba YouTube -> Curadoria aceita @handle, URL ou ID UC...

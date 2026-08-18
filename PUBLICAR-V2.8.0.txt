@@ -1,0 +1,17 @@
+Ronda Editorial v2.8.0
+
+1. Envie o conteúdo preservando as pastas exatamente como estão no ZIP.
+2. Não arraste os arquivos internos de src/, public/, test/ ou migrations/ para a raiz.
+3. Depois do deploy, aplique:
+
+npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+npx --yes wrangler@4.113.0 d1 migrations apply YOUTUBE_DB --remote
+
+Novas migrations:
+- migrations/0009_newsroom_workflow.sql
+- migrations_youtube/0002_curated_news_channels.sql
+
+Validação rápida:
+- /api/health deve mostrar version 2.8.0
+- aba Mesa deve abrir sem erro
+- aba YouTube > Curadoria deve aceitar @handle, URL ou ID UC...

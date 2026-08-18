@@ -9,6 +9,7 @@ export const MAX_STYLE_TOTAL_CHARS = 30_000;
 export const MIN_SLIDE_COUNT = 3;
 export const MAX_SLIDE_COUNT = 15;
 export const DEFAULT_SLIDE_COUNT = 7;
+export const MAX_CAROUSEL_LEARNING_EXAMPLES = 24;
 export const WRITING_STYLE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const encoder = new TextEncoder();
@@ -266,4 +267,58 @@ export function writingStylePrompt(profile) {
     profile.avoid?.length ? `EVITAR: ${profile.avoid.join(", ")}` : null,
     instructions ? `INSTRUÇÕES: ${instructions}` : null,
   ].filter(Boolean).join("\n").slice(0, 3_500);
+}
+
+
+export function normalizeCarouselLearningExample(body = {}) {
+  const rawSlides = Array.isArray(body.slides) ? body.slides : [];
+  const slideCount = validateSlideCount(body.slideCount || rawSlides.length || DEFAULT_SLIDE_COUNT);
+  if (rawSlides.length !== slideCount) throw new Error("O exemplo precisa conter a mesma quantidade de slides informada.");
+  const slides = rawSlides.map((slide, index) => {
+    const title = plainText(slide?.title).replace(/\s+/g, " ").trim().slice(0, 100);
+    const subtitle = plainText(slide?.subtitle || slide?.body).replace(/\s+/g, " ").trim().slice(0, 260);
+    const role = plainText(slide?.role).replace(/\s+/g, " ").trim().slice(0, 60) || `Slide ${index + 1}`;
+    if (!title || !subtitle) throw new Error(`O slide ${index + 1} precisa de título e subtítulo para entrar na memória editorial.`);
+    return { number: index + 1, role, title, subtitle };
+  });
+  const topicId = plainText(body.topicId).replace(/\s+/g, " ").trim().slice(0, 100) || "unknown";
+  const sourceName = plainText(body.sourceName).replace(/\s+/g, " ").trim().slice(0, 100) || "Fonte não informada";
+  const signature = slides.map((slide) => `${slide.role}|${slide.title}|${slide.subtitle}`).join("\n");
+  return {
+    topicId,
+    sourceName,
+    slideCount,
+    slides,
+    contentHash: stableHash(signature.toLocaleLowerCase("pt-BR")),
+  };
+}
+
+function average(values = []) {
+  return values.length ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length : 0;
+}
+
+export function summarizeCarouselLearning(examples = []) {
+  const recent = (Array.isArray(examples) ? examples : []).slice(0, MAX_CAROUSEL_LEARNING_EXAMPLES);
+  const slides = recent.flatMap((example) => Array.isArray(example?.slides) ? example.slides : []);
+  if (!slides.length) return { count: 0, prompt: "", metrics: null };
+  const informative = slides.filter((slide) => String(slide.role || "").toLocaleLowerCase("pt-BR") !== "cta");
+  const titleLengths = informative.map((slide) => String(slide.title || "").length);
+  const subtitleLengths = informative.map((slide) => String(slide.subtitle || "").length);
+  const subtitleSentences = informative.map((slide) => Math.max(1, (String(slide.subtitle || "").match(/[.!?]+/g) || []).length));
+  const questionTitles = informative.filter((slide) => /\?$/.test(String(slide.title || "").trim())).length;
+  const colonTitles = informative.filter((slide) => /:/.test(String(slide.title || ""))).length;
+  const titleAverage = Math.round(average(titleLengths));
+  const subtitleAverage = Math.round(average(subtitleLengths));
+  const sentenceAverage = Number(average(subtitleSentences).toFixed(1));
+  const questionRate = informative.length ? Math.round((questionTitles / informative.length) * 100) : 0;
+  const colonRate = informative.length ? Math.round((colonTitles / informative.length) * 100) : 0;
+  const metrics = { titleAverage, subtitleAverage, sentenceAverage, questionRate, colonRate, examples: recent.length };
+  const prompt = [
+    `MEMÓRIA EDITORIAL APROVADA: ${recent.length} carrosséis aceitos ou editados pelo usuário.`,
+    `Comprimento preferido observado: títulos ~${titleAverage} caracteres; subtítulos ~${subtitleAverage} caracteres; ${sentenceAverage} frase(s) por subtítulo.`,
+    `Títulos em forma de pergunta aparecem em ${questionRate}% dos slides e títulos com dois-pontos em ${colonRate}%.`,
+    "Use esses padrões apenas para forma, ritmo e extensão. Não reutilize nomes, números, fatos ou frases de carrosséis anteriores.",
+    "Quando houver conflito entre memória de estilo e factualidade da matéria atual, a matéria atual sempre prevalece.",
+  ].join("\n");
+  return { count: recent.length, prompt, metrics };
 }

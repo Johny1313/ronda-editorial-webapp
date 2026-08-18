@@ -1,7 +1,7 @@
-import { DEFAULT_SLIDE_COUNT, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
+import { DEFAULT_SLIDE_COUNT, MAX_CAROUSEL_LEARNING_EXAMPLES, MAX_STYLE_SAMPLES, MAX_STYLE_TOTAL_CHARS, validateSlideCount } from "./profile.js";
 const initializedBindings = new WeakSet();
 export const MAX_MONITORING_TERMS = 6;
-export const DATABASE_SCHEMA_VERSION = "2.7.1";
+export const DATABASE_SCHEMA_VERSION = "2.8.0";
 
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS runs (
@@ -172,6 +172,43 @@ const SCHEMA_STATEMENTS = [
     sample_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS carousel_learning_examples (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    slide_count INTEGER NOT NULL,
+    slides_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, content_hash)
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_carousel_learning_user ON carousel_learning_examples(user_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_stories (
+    id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, editoria TEXT NOT NULL, priority TEXT NOT NULL,
+    editorial_queue TEXT NOT NULL DEFAULT 'watch', workflow_status TEXT NOT NULL DEFAULT 'discovered', score INTEGER NOT NULL DEFAULT 0,
+    assignee_user_id TEXT, verification_level TEXT NOT NULL DEFAULT 'single', first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+    last_changed_at TEXT NOT NULL, source_count INTEGER NOT NULL DEFAULT 0, item_count INTEGER NOT NULL DEFAULT 0, latest_run_id TEXT,
+    snapshot_json TEXT NOT NULL DEFAULT '{}', change_summary_json TEXT NOT NULL DEFAULT '{}', published_at TEXT, updated_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_stories_queue ON newsroom_stories(editorial_queue, last_changed_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_stories_status ON newsroom_stories(workflow_status, updated_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_story_events (
+    id TEXT PRIMARY KEY, story_id TEXT NOT NULL, event_type TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_newsroom_story_events_story ON newsroom_story_events(story_id, created_at DESC)",
+  `CREATE TABLE IF NOT EXISTS newsroom_story_notes (
+    id TEXT PRIMARY KEY, story_id TEXT NOT NULL, user_id TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS newsroom_story_followers (
+    story_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(story_id, user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS youtube_curated_channels (
+    channel_id TEXT PRIMARY KEY, title TEXT NOT NULL, handle TEXT, uploads_playlist_id TEXT NOT NULL, thumbnail_url TEXT,
+    subscriber_count INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, added_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    last_checked_at TEXT, last_video_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_youtube_curated_active ON youtube_curated_channels(active, title)",
   `DELETE FROM source_state WHERE source_id IN (
     'fatos-desconhecidos', 'mega-curioso', 'incrivel-club', 'misterios-do-mundo',
     'canaltech-curiosidades', 'superinteressante', 'revista-galileu',
@@ -191,6 +228,10 @@ const STORAGE_GUARD = Object.freeze({
   maxIntelligentCarousels: 60,
   maxIntelligentJobs: 120,
   maxTranslations: 1000,
+  maxCarouselLearningPerUser: MAX_CAROUSEL_LEARNING_EXAMPLES,
+  maxNewsroomStories: 500,
+  maxNewsroomEvents: 3000,
+  maxNewsroomNotes: 1500,
 });
 
 export function isD1StorageLimitError(error) {
@@ -241,6 +282,10 @@ async function emergencyCleanupRaw(db) {
     `DELETE FROM translation_cache WHERE cache_key NOT IN (SELECT cache_key FROM translation_cache ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxTranslations})`,
     `DELETE FROM locks WHERE expires_at < ${Date.now() - 5 * 60 * 1000}`,
     `DELETE FROM user_sessions WHERE expires_at < '${now}'`,
+    `DELETE FROM carousel_learning_examples WHERE id NOT IN (SELECT id FROM carousel_learning_examples ORDER BY created_at DESC LIMIT 240)`,
+    `DELETE FROM newsroom_story_events WHERE id NOT IN (SELECT id FROM newsroom_story_events ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomEvents})`,
+    `DELETE FROM newsroom_story_notes WHERE id NOT IN (SELECT id FROM newsroom_story_notes ORDER BY created_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomNotes})`,
+    `DELETE FROM newsroom_stories WHERE workflow_status IN ('published','discarded') AND id NOT IN (SELECT id FROM newsroom_stories ORDER BY updated_at DESC LIMIT ${STORAGE_GUARD.maxNewsroomStories})`,
   ];
   for (const statement of statements) {
     try { await db.prepare(statement).run(); } catch {}
@@ -373,6 +418,8 @@ export function compactYouTubeCollectionForStorage(collection) {
     collectedAt: collection.collectedAt || null,
     region: collection.region || "BR",
     cached: Boolean(collection.cached),
+    curated: Boolean(collection.curated),
+    curatedChannelCount: Number(collection.curatedChannelCount) || 0,
     videos,
     topics,
     channels,
@@ -1373,6 +1420,226 @@ export async function cleanupYouTubeData(db) {
   await emergencyCleanupRaw(db);
 }
 
+function newsroomStoryRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id, topicKey: row.topic_key, title: row.title, editoria: row.editoria, priority: row.priority,
+    queue: row.editorial_queue, workflowStatus: row.workflow_status, score: Number(row.score) || 0,
+    assigneeUserId: row.assignee_user_id || null, verificationLevel: row.verification_level || "single",
+    firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at, lastChangedAt: row.last_changed_at,
+    sourceCount: Number(row.source_count) || 0, itemCount: Number(row.item_count) || 0, latestRunId: row.latest_run_id || null,
+    snapshot: parseJsonObject(row.snapshot_json, {}), changeSummary: parseJsonObject(row.change_summary_json, {}),
+    publishedAt: row.published_at || null, updatedAt: row.updated_at,
+  };
+}
+
+function compactTopicSnapshot(topic = {}) {
+  const items = Array.isArray(topic.items) ? topic.items : [];
+  return {
+    title: String(topic.title || "").slice(0, 220),
+    sourceNames: [...new Set((topic.sourceNames || items.map((item) => item?.sourceName)).filter(Boolean))].slice(0, 20),
+    itemKeys: items.slice(0, 20).map((item) => `${item?.sourceName || ""}|${item?.title || ""}|${item?.publishedAt || ""}`).filter(Boolean),
+    lastPublishedAt: topic.lastPublishedAt || null,
+    score: Number(topic.score) || 0,
+    priority: topic.priority || "Em observação",
+  };
+}
+
+function newsroomVerification(topic = {}) {
+  const names = (topic.sourceNames || []).map((value) => String(value).toLocaleLowerCase("pt-BR"));
+  if (names.some((name) => /agência brasil|agencia brasil|gov\.br|tse|stf|senado|câmara|camara dos deputados/.test(name))) return "official";
+  return Number(topic.sourceCount) >= 2 ? "cross" : "single";
+}
+
+function newsroomQueue(topic = {}, changed = false) {
+  const score = Number(topic.score) || 0;
+  if (topic.priority === "Pautar agora" || score >= 72) return "now";
+  if (changed && score >= 48) return "rising";
+  if (score >= 38 || Number(topic.sourceCount) >= 2) return "watch";
+  return "quiet";
+}
+
+function newsroomChanges(previous = {}, current = {}) {
+  const oldSources = new Set(previous.sourceNames || []);
+  const oldItems = new Set(previous.itemKeys || []);
+  const newSources = (current.sourceNames || []).filter((name) => !oldSources.has(name));
+  const newItems = (current.itemKeys || []).filter((key) => !oldItems.has(key));
+  const scoreDelta = (Number(current.score) || 0) - (Number(previous.score) || 0);
+  const priorityChanged = Boolean(previous.priority && previous.priority !== current.priority);
+  const changed = !previous.title || newSources.length > 0 || newItems.length > 0 || Math.abs(scoreDelta) >= 8 || priorityChanged;
+  const parts = [];
+  if (!previous.title) parts.push("Pauta identificada nesta ronda");
+  if (newSources.length) parts.push(`${newSources.length} ${newSources.length === 1 ? "nova fonte" : "novas fontes"}`);
+  if (newItems.length) parts.push(`${newItems.length} ${newItems.length === 1 ? "nova publicação" : "novas publicações"}`);
+  if (scoreDelta >= 8) parts.push(`índice subiu ${scoreDelta} pontos`);
+  if (scoreDelta <= -8) parts.push(`índice caiu ${Math.abs(scoreDelta)} pontos`);
+  if (priorityChanged) parts.push(`prioridade mudou para ${current.priority}`);
+  return { changed, newSources, newItemsCount: newItems.length, scoreDelta, priorityChanged, text: parts.join(" · ") || "Sem mudança editorial relevante" };
+}
+
+export async function syncNewsroomStories(db, topics = [], { runId = null, at = new Date().toISOString() } = {}) {
+  await ensureSchema(db);
+  const output = [];
+  for (const topic of Array.isArray(topics) ? topics : []) {
+    const topicKey = String(topic?.id || "").trim();
+    if (!topicKey) continue;
+    const id = topicKey.replace(/^topic-/, "story-");
+    const existingRow = await db.prepare("SELECT * FROM newsroom_stories WHERE topic_key = ? LIMIT 1").bind(topicKey).first();
+    const existing = newsroomStoryRow(existingRow);
+    const current = compactTopicSnapshot(topic);
+    const changes = newsroomChanges(existing?.snapshot || {}, current);
+    const queue = newsroomQueue(topic, changes.changed);
+    const verification = newsroomVerification(topic);
+    const firstSeenAt = existing?.firstSeenAt || at;
+    const lastChangedAt = changes.changed ? at : existing?.lastChangedAt || at;
+    const workflow = existing?.workflowStatus || "discovered";
+    const assignee = existing?.assigneeUserId || null;
+    await db.prepare(`
+      INSERT INTO newsroom_stories (
+        id, topic_key, title, editoria, priority, editorial_queue, workflow_status, score, assignee_user_id,
+        verification_level, first_seen_at, last_seen_at, last_changed_at, source_count, item_count, latest_run_id,
+        snapshot_json, change_summary_json, published_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(topic_key) DO UPDATE SET
+        title=excluded.title, editoria=excluded.editoria, priority=excluded.priority, editorial_queue=excluded.editorial_queue,
+        score=excluded.score, verification_level=excluded.verification_level, last_seen_at=excluded.last_seen_at,
+        last_changed_at=excluded.last_changed_at, source_count=excluded.source_count, item_count=excluded.item_count,
+        latest_run_id=excluded.latest_run_id, snapshot_json=excluded.snapshot_json, change_summary_json=excluded.change_summary_json,
+        updated_at=excluded.updated_at
+    `).bind(
+      id, topicKey, String(topic.title || "Assunto em acompanhamento").slice(0, 240), topic.editoria || "Notícias",
+      topic.priority || "Em observação", queue, workflow, Number(topic.score) || 0, assignee, verification,
+      firstSeenAt, at, lastChangedAt, Number(topic.sourceCount) || 0, Number(topic.itemCount) || 0, runId,
+      JSON.stringify(current), JSON.stringify(changes), existing?.publishedAt || null, at,
+    ).run();
+    if (changes.changed) {
+      await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), id, existing ? "changed" : "discovered", changes.text, JSON.stringify(changes), at).run();
+    }
+    output.push(await getNewsroomStory(db, id));
+  }
+  return output.filter(Boolean);
+}
+
+export async function getNewsroomStory(db, id) {
+  await ensureSchema(db);
+  const row = await db.prepare("SELECT * FROM newsroom_stories WHERE id = ? LIMIT 1").bind(id).first();
+  if (!row) return null;
+  const story = newsroomStoryRow(row);
+  const [events, notes, followers] = await Promise.all([
+    db.prepare("SELECT * FROM newsroom_story_events WHERE story_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
+    db.prepare("SELECT n.*, u.display_name FROM newsroom_story_notes n LEFT JOIN users u ON u.id=n.user_id WHERE story_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
+    db.prepare("SELECT COUNT(*) AS count FROM newsroom_story_followers WHERE story_id = ?").bind(id).first(),
+  ]);
+  story.events = (events?.results || []).map((event) => ({ id:event.id, type:event.event_type, summary:event.summary, payload:parseJsonObject(event.payload_json, {}), createdAt:event.created_at }));
+  story.notes = (notes?.results || []).map((note) => ({ id:note.id, userId:note.user_id, displayName:note.display_name || "Redação", note:note.note, createdAt:note.created_at }));
+  story.followerCount = Number(followers?.count) || 0;
+  return story;
+}
+
+export async function listNewsroomStories(db, { limit = 80, queue = null, status = null } = {}) {
+  await ensureSchema(db);
+  const clauses = ["workflow_status <> 'discarded'"];
+  const binds = [];
+  if (queue) { clauses.push("editorial_queue = ?"); binds.push(queue); }
+  if (status) { clauses.push("workflow_status = ?"); binds.push(status); }
+  const safeLimit = Math.max(1, Math.min(150, Number(limit) || 80));
+  const result = await db.prepare(`SELECT * FROM newsroom_stories WHERE ${clauses.join(" AND ")} ORDER BY CASE editorial_queue WHEN 'now' THEN 1 WHEN 'rising' THEN 2 WHEN 'watch' THEN 3 ELSE 4 END, last_changed_at DESC LIMIT ?`).bind(...binds, safeLimit).all();
+  return (result?.results || []).map(newsroomStoryRow);
+}
+
+export async function updateNewsroomStory(db, id, patch = {}, actorUserId = null) {
+  await ensureSchema(db);
+  const current = await getNewsroomStory(db, id);
+  if (!current) return null;
+  const allowedStatuses = new Set(["discovered","selected","investigating","confirmed","production","published","discarded"]);
+  const status = allowedStatuses.has(patch.workflowStatus) ? patch.workflowStatus : current.workflowStatus;
+  const assignee = patch.assignToSelf ? actorUserId : patch.clearAssignee ? null : current.assigneeUserId;
+  const publishedAt = status === "published" ? (current.publishedAt || new Date().toISOString()) : current.publishedAt;
+  const now = new Date().toISOString();
+  await db.prepare("UPDATE newsroom_stories SET workflow_status=?, assignee_user_id=?, published_at=?, updated_at=? WHERE id=?")
+    .bind(status, assignee, publishedAt, now, id).run();
+  const changes = [];
+  if (status !== current.workflowStatus) changes.push(`status: ${status}`);
+  if (assignee !== current.assigneeUserId) changes.push(assignee ? "pauta assumida" : "responsável removido");
+  if (changes.length) await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, 'workflow', ?, ?, ?)")
+    .bind(crypto.randomUUID(), id, changes.join(" · "), JSON.stringify({ status, assigneeUserId:assignee }), now).run();
+  return getNewsroomStory(db, id);
+}
+
+export async function addNewsroomStoryNote(db, id, userId, note) {
+  await ensureSchema(db);
+  const text = String(note || "").replace(/\s+/g, " ").trim().slice(0, 800);
+  if (!text) throw new Error("Nota vazia.");
+  const now = new Date().toISOString();
+  await db.prepare("INSERT INTO newsroom_story_notes (id, story_id, user_id, note, created_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), id, userId, text, now).run();
+  await db.prepare("INSERT INTO newsroom_story_events (id, story_id, event_type, summary, payload_json, created_at) VALUES (?, ?, 'note', ?, '{}', ?)")
+    .bind(crypto.randomUUID(), id, "Nova nota editorial", now).run();
+  return getNewsroomStory(db, id);
+}
+
+export async function toggleNewsroomStoryFollow(db, id, userId) {
+  await ensureSchema(db);
+  const existing = await db.prepare("SELECT 1 AS ok FROM newsroom_story_followers WHERE story_id=? AND user_id=?").bind(id,userId).first();
+  if (existing) await db.prepare("DELETE FROM newsroom_story_followers WHERE story_id=? AND user_id=?").bind(id,userId).run();
+  else await db.prepare("INSERT INTO newsroom_story_followers (story_id,user_id,created_at) VALUES (?,?,?)").bind(id,userId,new Date().toISOString()).run();
+  return { following: !existing, story: await getNewsroomStory(db,id) };
+}
+
+export async function getNewsroomHandoff(db, { hours = 8 } = {}) {
+  await ensureSchema(db);
+  const safeHours = Math.max(1, Math.min(24, Number(hours) || 8));
+  const cutoff = new Date(Date.now() - safeHours * 3600000).toISOString();
+  const [stories, events] = await Promise.all([
+    listNewsroomStories(db, { limit: 80 }),
+    db.prepare("SELECT e.*, s.title, s.editoria FROM newsroom_story_events e JOIN newsroom_stories s ON s.id=e.story_id WHERE e.created_at>=? ORDER BY e.created_at DESC LIMIT 80").bind(cutoff).all(),
+  ]);
+  const pending = stories.filter((story) => !["published","discarded"].includes(story.workflowStatus));
+  return {
+    since: cutoff,
+    counters: {
+      changed: (events?.results || []).filter((event) => event.event_type === "changed").length,
+      discovered: (events?.results || []).filter((event) => event.event_type === "discovered").length,
+      urgent: pending.filter((story) => story.queue === "now").length,
+      investigating: pending.filter((story) => story.workflowStatus === "investigating").length,
+      unassigned: pending.filter((story) => !story.assigneeUserId).length,
+    },
+    attention: pending.filter((story) => story.queue === "now" || story.workflowStatus === "investigating").slice(0, 12),
+    events: (events?.results || []).slice(0, 30).map((event) => ({ id:event.id, storyId:event.story_id, title:event.title, editoria:event.editoria, type:event.event_type, summary:event.summary, createdAt:event.created_at })),
+  };
+}
+
+function curatedChannelRow(row) {
+  if (!row) return null;
+  return { channelId:row.channel_id, title:row.title, handle:row.handle || null, uploadsPlaylistId:row.uploads_playlist_id, thumbnail:row.thumbnail_url || "", subscriberCount:Number(row.subscriber_count)||0, active:Number(row.active)===1, addedAt:row.added_at, updatedAt:row.updated_at, lastCheckedAt:row.last_checked_at || null, lastVideoAt:row.last_video_at || null, failureCount:Number(row.failure_count)||0 };
+}
+
+export async function listYouTubeCuratedChannels(db, { activeOnly = false } = {}) {
+  await ensureSchema(db);
+  const result = await db.prepare(`SELECT * FROM youtube_curated_channels ${activeOnly ? "WHERE active=1" : ""} ORDER BY active DESC, title COLLATE NOCASE`).all();
+  return (result?.results || []).map(curatedChannelRow);
+}
+
+export async function saveYouTubeCuratedChannel(db, channel) {
+  await ensureSchema(db);
+  const count = await db.prepare("SELECT COUNT(*) AS count FROM youtube_curated_channels").first();
+  if (Number(count?.count) >= 30) throw new Error("Limite de 30 canais na curadoria atingido.");
+  const now = new Date().toISOString();
+  await db.prepare(`INSERT INTO youtube_curated_channels (channel_id,title,handle,uploads_playlist_id,thumbnail_url,subscriber_count,active,added_at,updated_at) VALUES (?,?,?,?,?,?,1,?,?) ON CONFLICT(channel_id) DO UPDATE SET title=excluded.title,handle=excluded.handle,uploads_playlist_id=excluded.uploads_playlist_id,thumbnail_url=excluded.thumbnail_url,subscriber_count=excluded.subscriber_count,active=1,updated_at=excluded.updated_at`)
+    .bind(channel.channelId, channel.title, channel.handle || null, channel.uploadsPlaylistId, channel.thumbnail || "", Number(channel.subscriberCount)||0, now, now).run();
+  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channel.channelId).first());
+}
+
+export async function setYouTubeCuratedChannelActive(db, channelId, active) {
+  await ensureSchema(db); await db.prepare("UPDATE youtube_curated_channels SET active=?,updated_at=? WHERE channel_id=?").bind(active?1:0,new Date().toISOString(),channelId).run();
+  return curatedChannelRow(await db.prepare("SELECT * FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).first());
+}
+
+export async function deleteYouTubeCuratedChannel(db, channelId) {
+  await ensureSchema(db); await db.prepare("DELETE FROM youtube_curated_channels WHERE channel_id=?").bind(channelId).run(); return { deleted:true, channelId };
+}
+
 export async function databaseHealth(db) {
   await ensureSchema(db);
   const row = await db.prepare("SELECT 1 AS ok").first();
@@ -1545,6 +1812,58 @@ export async function deleteWritingSample(db, userId, sampleId) {
   return Number(result?.meta?.changes) > 0;
 }
 
+
+function parseCarouselLearningExample(row) {
+  if (!row) return null;
+  let slides = [];
+  try { slides = JSON.parse(row.slides_json || "[]"); } catch {}
+  return {
+    id: row.id,
+    topicId: row.topic_id,
+    sourceName: row.source_name,
+    slideCount: Number(row.slide_count) || slides.length,
+    slides: Array.isArray(slides) ? slides : [],
+    createdAt: row.created_at,
+  };
+}
+
+export async function listCarouselLearningExamples(db, userId, limit = MAX_CAROUSEL_LEARNING_EXAMPLES) {
+  await ensureSchema(db);
+  const result = await db.prepare(`
+    SELECT * FROM carousel_learning_examples
+    WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+  `).bind(userId, Math.max(1, Math.min(MAX_CAROUSEL_LEARNING_EXAMPLES, Number(limit) || MAX_CAROUSEL_LEARNING_EXAMPLES))).all();
+  return (result?.results || []).map(parseCarouselLearningExample).filter(Boolean);
+}
+
+export async function getCarouselLearningStats(db, userId) {
+  await ensureSchema(db);
+  const row = await db.prepare(`
+    SELECT COUNT(*) AS example_count, MAX(created_at) AS updated_at
+    FROM carousel_learning_examples WHERE user_id = ?
+  `).bind(userId).first();
+  return { count: Number(row?.example_count) || 0, updatedAt: row?.updated_at || null };
+}
+
+export async function createCarouselLearningExample(db, userId, example) {
+  await ensureSchema(db);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO carousel_learning_examples (
+      id, user_id, topic_id, source_name, slide_count, slides_json, content_hash, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, content_hash) DO UPDATE SET created_at = excluded.created_at
+  `).bind(id, userId, example.topicId, example.sourceName, example.slideCount, JSON.stringify(example.slides), example.contentHash, now).run();
+  await db.prepare(`
+    DELETE FROM carousel_learning_examples
+    WHERE user_id = ? AND id NOT IN (
+      SELECT id FROM carousel_learning_examples WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+    )
+  `).bind(userId, userId, MAX_CAROUSEL_LEARNING_EXAMPLES).run();
+  const stats = await getCarouselLearningStats(db, userId);
+  return { id, ...example, createdAt: now, ...stats };
+}
 
 export async function invalidateWritingProfile(db, userId) {
   await ensureSchema(db);

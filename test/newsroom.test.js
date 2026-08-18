@@ -1,0 +1,4 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+test("release exposes newsroom workflow and YouTube curation", async () => { const [db,index,html,youtube]=await Promise.all([readFile(new URL("../src/database.js",import.meta.url),"utf8"),readFile(new URL("../src/index.js",import.meta.url),"utf8"),readFile(new URL("../public/index.html",import.meta.url),"utf8"),readFile(new URL("../src/youtube.js",import.meta.url),"utf8")]); assert.match(db,/newsroom_stories/); assert.match(db,/syncNewsroomStories/); assert.match(db,/youtube_curated_channels/); assert.match(index,/\/api\/newsroom/); assert.match(index,/\/api\/youtube\/channels/); assert.match(html,/Mesa de pauta/); assert.match(html,/youtubeCurationForm/); assert.match(youtube,/playlistItems/); assert.match(youtube,/resolveYouTubeChannel/); });

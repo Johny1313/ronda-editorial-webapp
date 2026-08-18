@@ -58,6 +58,20 @@ import {
   getWritingProfile,
   invalidateWritingProfile,
   saveWritingProfile,
+  listCarouselLearningExamples,
+  getCarouselLearningStats,
+  createCarouselLearningExample,
+  syncNewsroomStories,
+  listNewsroomStories,
+  getNewsroomStory,
+  updateNewsroomStory,
+  addNewsroomStoryNote,
+  toggleNewsroomStoryFollow,
+  getNewsroomHandoff,
+  listYouTubeCuratedChannels,
+  saveYouTubeCuratedChannel,
+  setYouTubeCuratedChannelActive,
+  deleteYouTubeCuratedChannel,
 } from "./database.js";
 import { parseFeed, plainText } from "./parser.js";
 import {
@@ -75,6 +89,8 @@ import {
   normalizeDisplayName,
   normalizeEmail,
   normalizeStyleSample,
+  normalizeCarouselLearningExample,
+  summarizeCarouselLearning,
   parseCookies,
   randomToken,
   sessionCookie,
@@ -92,13 +108,15 @@ import {
   applyYouTubeQuotaEvents,
   collectYouTubeTerm,
   collectYouTubeTrending,
+  collectYouTubeCuratedChannels,
+  resolveYouTubeChannel,
   defaultYouTubeQuotaState,
   publicYouTubeQuota,
   restrictYouTubeCollectionToNews,
   restrictYouTubeTermResultToNews,
 } from "./youtube.js";
 
-const VERSION = "2.7.7";
+const VERSION = "2.8.0";
 const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -285,16 +303,18 @@ function publicWritingProfile(value) {
 }
 
 async function profilePayload(db, user) {
-  const [samples, stats, writingProfile] = await Promise.all([
+  const [samples, stats, writingProfile, carouselLearning] = await Promise.all([
     listWritingSamples(db, user.id),
     getWritingSampleStats(db, user.id),
     getWritingProfile(db, user.id),
+    getCarouselLearningStats(db, user.id),
   ]);
   return {
     authenticated: true,
     user,
     samples,
     writingProfile: publicWritingProfile(writingProfile),
+    carouselLearning,
     limits: {
       maximumSamples: MAX_STYLE_SAMPLES,
       maximumCharactersPerSample: MAX_STYLE_SAMPLE_CHARS,
@@ -491,9 +511,14 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
     }
     const slideCount = validateSlideCount(options.slideCount, DEFAULT_SLIDE_COUNT);
     const profileRecord = options.writingProfile?.profile ? options.writingProfile : null;
-    const writingStyle = profileRecord ? {
-      ...profileRecord,
-      prompt: writingStylePrompt(profileRecord.profile),
+    const learningExamples = options.userId ? await listCarouselLearningExamples(db, options.userId).catch(() => []) : [];
+    const adaptiveMemory = summarizeCarouselLearning(learningExamples);
+    const profilePrompt = profileRecord ? writingStylePrompt(profileRecord.profile) : "";
+    const combinedStylePrompt = [profilePrompt, adaptiveMemory.prompt].filter(Boolean).join("\n\n");
+    const writingStyle = combinedStylePrompt ? {
+      ...(profileRecord || {}),
+      prompt: combinedStylePrompt,
+      adaptiveMemory: { count: adaptiveMemory.count, metrics: adaptiveMemory.metrics },
     } : null;
     const data = await buildIntelligentCarousel(topic, {
       ai: articleAnalysisAi(env),
@@ -531,6 +556,7 @@ async function processIntelligentCarouselJob(env, job, topic, options = {}) {
       topicTitle: topic.title,
       requestedSlideCount: slideCount,
       profileApplied: Boolean(profileRecord),
+      adaptiveMemoryCount: adaptiveMemory.count,
       cycle: {
         ...(data.cycle || {}),
         status: "completed",
@@ -774,11 +800,12 @@ function youtubeRetryableError(error) {
 }
 
 async function youtubePublicStatus(db, env) {
-  const [runtime, latest, quota, termResults] = await Promise.all([
+  const [runtime, latest, quota, termResults, curatedChannels] = await Promise.all([
     getYouTubeRuntime(db),
     getLatestYouTubeCollection(db),
     getYouTubeStateValue(db, YOUTUBE_QUOTA_STATE_KEY, defaultYouTubeQuotaState()),
     getLatestYouTubeTermResults(db, 12),
+    listYouTubeCuratedChannels(db, { activeOnly: true }),
   ]);
   const active = activeYouTubeRuntime(runtime);
   return {
@@ -787,6 +814,8 @@ async function youtubePublicStatus(db, env) {
     newsOnly: true,
     channelScope: YOUTUBE_CHANNEL_SCOPE,
     approvedChannelCount: APPROVED_YOUTUBE_NEWS_CHANNELS.length,
+    curatedChannelCount: curatedChannels.length,
+    curationActive: curatedChannels.length > 0,
     status: active?.status || runtime.status || (latest ? "success" : "idle"),
     running: Boolean(active),
     jobId: active?.jobId || runtime.jobId || null,
@@ -837,7 +866,10 @@ async function performYouTubeCollection(env, body = {}) {
     const previous = await getLatestYouTubeCollection(db);
     const region = String(env.YOUTUBE_REGION || "BR").toUpperCase();
     const limit = Math.max(10, Math.min(50, Number(env.YOUTUBE_VIDEO_LIMIT) || 25));
-    const trending = await collectYouTubeTrending({ apiKey: env.YOUTUBE_API_KEY, region, limit, previous });
+    const curatedChannels = await listYouTubeCuratedChannels(db, { activeOnly: true });
+    const trending = curatedChannels.length
+      ? await collectYouTubeCuratedChannels({ apiKey: env.YOUTUBE_API_KEY, region, limit, previous, channels: curatedChannels })
+      : await collectYouTubeTrending({ apiKey: env.YOUTUBE_API_KEY, region, limit, previous });
     let quota = await getYouTubeStateValue(db, YOUTUBE_QUOTA_STATE_KEY, defaultYouTubeQuotaState());
     quota = applyYouTubeQuotaEvents(quota, trending.quotaEvents, trending.collection.collectedAt);
 
@@ -1076,6 +1108,9 @@ async function performRound(env, triggerType, options = {}) {
       failure.roundPayload = payload;
       throw failure;
     }
+    await syncNewsroomStories(db, payload.topics || [], { runId, at: payload.collectedAt || new Date().toISOString() }).catch((error) => {
+      structuredLog("newsroom_sync_failed", { runId, detail: error instanceof Error ? error.message : String(error) });
+    });
     await saveRun(db, { id: runId, triggerType, startedAt, payload });
     await runDatabaseMaintenance(db).catch((error) => {
       structuredLog("database_maintenance_failed", { detail: error instanceof Error ? error.message : String(error) });
@@ -1235,6 +1270,23 @@ async function handleApi(request, env, url, ctx) {
     if (!removed) throw new HttpError(404, "Texto não encontrado neste perfil.");
     await invalidateWritingProfile(requireDatabase(env), user.id);
     return json({ ok: true, ...(await profilePayload(requireDatabase(env), user)) });
+  }
+
+  if (url.pathname === "/api/profile/carousel-learning" && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await request.json().catch(() => ({}));
+    let example;
+    try { example = normalizeCarouselLearningExample(body); }
+    catch (error) { throw new HttpError(400, error.message); }
+    const db = requireDatabase(env);
+    const saved = await createCarouselLearningExample(db, user.id, example);
+    return json({
+      ok: true,
+      learned: true,
+      exampleCount: saved.count,
+      updatedAt: saved.updatedAt,
+      message: "Texto aprovado incorporado à memória editorial de estilo.",
+    }, 201);
   }
 
   if (url.pathname === "/api/profile/style/rebuild" && request.method === "POST") {
@@ -1419,6 +1471,61 @@ async function handleApi(request, env, url, ctx) {
   }
 
 
+  if (url.pathname === "/api/newsroom" && request.method === "GET") {
+    const db = requireDatabase(env);
+    const [stories, handoff] = await Promise.all([
+      listNewsroomStories(db, { limit: 100 }),
+      getNewsroomHandoff(db, { hours: Number(url.searchParams.get("hours")) || 8 }),
+    ]);
+    return json({ ok: true, stories, handoff });
+  }
+
+  const newsroomStoryRoute = /^\/api\/newsroom\/stories\/([a-z0-9-]{6,120})$/i.exec(url.pathname);
+  if (newsroomStoryRoute && request.method === "GET") {
+    const story = await getNewsroomStory(requireDatabase(env), newsroomStoryRoute[1]);
+    if (!story) throw new HttpError(404, "Pauta não encontrada.");
+    return json({ ok: true, story });
+  }
+  if (newsroomStoryRoute && request.method === "PATCH") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await readJsonBody(request);
+    const story = await updateNewsroomStory(requireDatabase(env), newsroomStoryRoute[1], body || {}, user.id);
+    if (!story) throw new HttpError(404, "Pauta não encontrada.");
+    return json({ ok: true, story });
+  }
+  const newsroomNoteRoute = /^\/api\/newsroom\/stories\/([a-z0-9-]{6,120})\/notes$/i.exec(url.pathname);
+  if (newsroomNoteRoute && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    const body = await readJsonBody(request);
+    return json({ ok: true, story: await addNewsroomStoryNote(requireDatabase(env), newsroomNoteRoute[1], user.id, body?.note) });
+  }
+  const newsroomFollowRoute = /^\/api\/newsroom\/stories\/([a-z0-9-]{6,120})\/follow$/i.exec(url.pathname);
+  if (newsroomFollowRoute && request.method === "POST") {
+    const { user } = await requireEditorialUser(request, env);
+    return json({ ok: true, ...(await toggleNewsroomStoryFollow(requireDatabase(env), newsroomFollowRoute[1], user.id)) });
+  }
+
+  if (url.pathname === "/api/youtube/channels" && request.method === "GET") {
+    return json({ ok: true, channels: await listYouTubeCuratedChannels(requireYouTubeDatabase(env)), limit: 30 });
+  }
+  if (url.pathname === "/api/youtube/channels" && request.method === "POST") {
+    requireOperationAuth(request, env);
+    const body = await readJsonBody(request);
+    const resolved = await resolveYouTubeChannel({ apiKey: env.YOUTUBE_API_KEY, input: body?.input });
+    const channel = await saveYouTubeCuratedChannel(requireYouTubeDatabase(env), resolved);
+    return json({ ok: true, channel }, 201);
+  }
+  const youtubeChannelRoute = /^\/api\/youtube\/channels\/(UC[a-zA-Z0-9_-]{20,})$/i.exec(url.pathname);
+  if (youtubeChannelRoute && request.method === "PATCH") {
+    requireOperationAuth(request, env);
+    const body = await readJsonBody(request);
+    return json({ ok: true, channel: await setYouTubeCuratedChannelActive(requireYouTubeDatabase(env), youtubeChannelRoute[1], body?.active !== false) });
+  }
+  if (youtubeChannelRoute && request.method === "DELETE") {
+    requireOperationAuth(request, env);
+    return json({ ok: true, ...(await deleteYouTubeCuratedChannel(requireYouTubeDatabase(env), youtubeChannelRoute[1])) });
+  }
+
   if (url.pathname === "/api/youtube/status" && request.method === "GET") {
     const db = requireYouTubeDatabase(env);
     const status = await youtubePublicStatus(db, env);
@@ -1432,7 +1539,7 @@ async function handleApi(request, env, url, ctx) {
       getLatestYouTubeTermResults(db, 12),
       youtubePublicStatus(db, env),
     ]);
-    const newsCollection = restrictYouTubeCollectionToNews(collection);
+    const newsCollection = status.curationActive ? collection : restrictYouTubeCollectionToNews(collection);
     const newsTermResults = termResults.map(restrictYouTubeTermResultToNews);
     return conditionalJson(request, {
       ok: true,
@@ -1598,7 +1705,10 @@ async function handleApi(request, env, url, ctx) {
     try { slideCount = validateSlideCount(body?.slideCount ?? user?.defaultSlideCount ?? DEFAULT_SLIDE_COUNT); }
     catch (error) { throw new HttpError(400, error.message); }
     const writingProfile = user ? await getWritingProfile(db, user.id) : null;
-    const styleKey = writingProfile?.updatedAt ? `${user.id}:${writingProfile.updatedAt}` : user ? `${user.id}:default` : "default";
+    const learningStats = user ? await getCarouselLearningStats(db, user.id) : { count: 0, updatedAt: null };
+    const styleKey = user
+      ? `${user.id}:${writingProfile?.updatedAt || "default"}:${learningStats.updatedAt || "no-learning"}:${learningStats.count}`
+      : "default";
     let runId = String(body?.runId || "").trim();
     let payload;
     if (runId) {
@@ -1670,7 +1780,7 @@ async function handleApi(request, env, url, ctx) {
       status: queued.job.status,
       job: publicIntelligentJob(queued.job),
       pollAfterMs: 900,
-      configuration: { slideCount, profileApplied: Boolean(writingProfile), profileUpdatedAt: writingProfile?.updatedAt || null },
+      configuration: { slideCount, profileApplied: Boolean(writingProfile), profileUpdatedAt: writingProfile?.updatedAt || null, adaptiveMemoryCount: learningStats.count },
     }, 202);
   }
 

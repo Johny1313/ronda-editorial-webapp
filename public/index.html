@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.7.7">
+  <link rel="stylesheet" href="/styles.css?v=2.8.0">
 </head>
 <body>
   <main class="app">
@@ -14,6 +14,7 @@
       <button class="brand" id="goTop" type="button" aria-label="Voltar ao topo">RE</button>
       <nav aria-label="Navegação principal">
         <button class="nav active" id="navRound" type="button"><span class="nav-icon">R</span><span>Ronda</span></button>
+        <button class="nav" id="navNewsroom" type="button"><span class="nav-icon">M</span><span>Mesa</span></button>
         <button class="nav" id="navSources" type="button"><span class="nav-icon">F</span><span>Fontes</span></button>
         <button class="nav" id="navMonitoring" type="button"><span class="nav-icon">T</span><span>Termos</span></button>
         <button class="nav" id="navYouTube" type="button"><span class="nav-icon">Y</span><span>YouTube</span></button>
@@ -60,6 +61,14 @@
         <div class="dedicated-heading"><div><p class="eyebrow">Última ronda automática</p><h3>Notícias dos termos ativos</h3></div><span id="dedicatedMonitoringMeta">Nenhum resultado</span></div>
         <div class="term-filters" id="monitoringTermFilters"></div>
         <div class="dedicated-news-list" id="dedicatedNewsList"><div class="empty"><strong>Nenhum termo monitorado</strong><span>Cadastre um termo para iniciar a busca dedicada.</span></div></div>
+      </section>
+
+
+      <section class="newsroom-view" id="newsroomView" hidden aria-labelledby="newsroomTitle">
+        <div class="management-heading newsroom-heading"><div><p class="eyebrow">Operação editorial</p><h2 id="newsroomTitle">Mesa de pauta</h2><p>Pautas persistentes entre rondas, mudanças recentes, responsáveis e passagem de turno.</p></div><button class="secondary" id="refreshNewsroom" type="button">↻ Atualizar mesa</button></div>
+        <div class="background-note"><strong>O que mudou, não o que repetiu</strong><span>A Mesa mantém cada pauta viva entre as rondas e destaca novas fontes, novas publicações, mudança de prioridade e itens que exigem ação.</span></div>
+        <section class="summary newsroom-summary"><div><strong id="newsroomUrgent">0</strong><span>pautar agora</span><small>atenção imediata</small></div><div><strong id="newsroomChanged">0</strong><span>mudaram</span><small>desde a passagem</small></div><div><strong id="newsroomInvestigating">0</strong><span>em apuração</span><small>workflow ativo</small></div><div><strong id="newsroomUnassigned">0</strong><span>sem responsável</span><small>precisam de dono</small></div></section>
+        <div class="newsroom-layout"><section class="newsroom-main"><div class="heading"><div><h2>Filas editoriais</h2><p>Prioridade automática + decisão humana</p></div><span class="last-update" id="newsroomUpdated">Sem dados</span></div><div class="newsroom-board" id="newsroomBoard"></div></section><aside class="newsroom-handoff"><div class="youtube-panel-head"><div><p class="eyebrow">Passagem de turno</p><h3>Desde as últimas 8h</h3></div></div><div id="newsroomHandoff"></div></aside></div>
       </section>
 
       <section class="profile-view" id="profileView" hidden aria-labelledby="profileTitle">
@@ -125,7 +134,8 @@
           <div><p class="eyebrow">Radar audiovisual</p><h2 id="youtubeTitle">YouTube Editorial</h2><p>Vídeos, assuntos e termos monitorados somente em canais jornalísticos, em uma coleta independente da Ronda de portais.</p></div>
           <div class="youtube-heading-actions"><button class="secondary" id="collectYouTube" type="button">↻ Atualizar YouTube</button><span class="youtube-module-status" id="youtubeModuleStatus">Verificando configuração</span></div>
         </div>
-        <div class="background-note youtube-note"><strong>Somente canais de notícias</strong><span>A coleta usa uma lista fixa de veículos jornalísticos e fila própria a cada 15 minutos. Canais de creators, entretenimento e comentários independentes não entram no radar.</span></div>
+        <div class="background-note youtube-note"><strong>Curadoria de canais jornalísticos</strong><span>Adicione os canais que a redação quer acompanhar. Quando houver canais ativos, a coleta usa somente os uploads dessa curadoria; sem curadoria, mantém o radar News & Politics como fallback.</span></div>
+        <section class="youtube-panel youtube-curation-panel"><div class="youtube-panel-head"><div><p class="eyebrow">Curadoria</p><h3>Canais monitorados</h3><p>Use @handle, URL do canal ou ID UC…</p></div><span id="youtubeCurationCount">0/30 canais</span></div><form class="youtube-curation-form" id="youtubeCurationForm"><input id="youtubeChannelInput" placeholder="Ex.: @bandjornalismo ou https://youtube.com/@..." maxlength="180" required><button class="primary" type="submit">Adicionar canal</button></form><p class="config-message" id="youtubeCurationMessage"></p><div class="youtube-curation-list" id="youtubeCurationList"></div></section>
 
         <section class="summary youtube-summary" aria-label="Resumo do YouTube">
           <div><strong id="youtubeSummaryVideos">0</strong><span>vídeos analisados</span><small>última coleta</small></div>
@@ -273,11 +283,11 @@
       <div class="carousel-slides" id="carouselSlides"></div>
       <section class="carousel-sources" id="carouselSources" aria-label="Links para apuração"></section>
       <p class="carousel-disclaimer" id="carouselDisclaimer"></p>
-      <div class="modal-actions"><button class="secondary" data-close="carouselModal" type="button">Fechar</button><button class="primary" id="copyCarousel" type="button" disabled>Copiar roteiro</button></div>
+      <div class="modal-actions"><button class="secondary" data-close="carouselModal" type="button">Fechar</button><button class="secondary" id="approveCarouselLearning" type="button" disabled>Aprovar e ensinar estilo</button><button class="primary" id="copyCarousel" type="button" disabled>Copiar roteiro</button></div>
       <p class="copy-message" id="copyCarouselMessage"></p>
     </section>
   </div>
 
-  <script src="/app.js?v=2.7.7" defer></script>
+  <script src="/app.js?v=2.8.0" defer></script>
 </body>
 </html>

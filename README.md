@@ -2,77 +2,17 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.7.7
+## Versão 2.8.0
 
-A versão 2.7.7 mantém a apuração obrigatória em uma matéria publicada e adiciona uma regra editorial de diversidade: cada slide informativo precisa acrescentar um ângulo factual diferente. O sistema bloqueia repetição de manchete, dado ou conclusão e prefere falhar com uma recomendação de menos slides a preencher o roteiro com a mesma informação reformulada.
+A v2.8.0 fortalece a geração de carrosséis em três etapas: leitura obrigatória de uma matéria publicada, redação ancorada em evidências e validação final de coerência. Frases incompletas, trechos concatenados e tabelas de percentuais sem contexto são rejeitados antes de o roteiro ser liberado.
 
-Principais mudanças:
+A evolução de estilo passa a ser persistente por perfil. O sistema **não se treina automaticamente com o próprio texto gerado**: isso reforçaria erros. Em vez disso, o usuário pode revisar/editar um roteiro e clicar em **Aprovar e ensinar estilo**. Até 24 carrosséis aprovados alimentam uma memória compacta de padrões de escrita (comprimento, ritmo e estrutura), sem reutilizar fatos, nomes ou números antigos.
 
-- catálogo fixo de 39 portais validados, sem cadastro manual de sites e sem canais dedicados a curiosidades;
-- fontes divididas em frequências de 5, 15 e 30 minutos;
-- no máximo cinco coletas externas simultâneas;
-- ronda manual e automática processadas pela Queue `ronda-editorial-round-jobs`;
-- snapshot persistente, ETag, `Last-Modified`, backoff e diagnóstico por portal;
-- recuperação por fonte por até 72 horas, identificada como cache;
-- interface servida como Static Assets, separada do Worker;
-- endpoint leve `/api/status` e polling adaptativo no navegador;
-- migração D1 versionada e limpeza periódica, sem manutenção pesada a cada ronda;
-- retries classificados e Dead Letter Queue para rondas e leitura inteligente;
-- build validado, Worker minificado e preview para branches não produtivas;
-- aba YouTube sem gráficos, com assuntos, vídeos, canais, alertas e resultados dos termos;
-- coleta do YouTube isolada na Queue `ronda-editorial-youtube-jobs`;
-- vídeos em alta a cada 15 minutos e rotação de um termo ativo a cada 30 minutos;
-- chave da API protegida no secret `YOUTUBE_API_KEY`;
-- quota, cache, circuit breaker e erros do YouTube separados da Ronda.
+Para ativar a memória editorial após o deploy, aplique as migrations do banco principal:
 
-
-### Diversidade factual do carrossel
-
-- cada slide informativo usa uma evidência principal diferente da matéria lida;
-- título e subtítulo do mesmo slide não podem repetir a mesma frase;
-- o subtítulo da capa precisa acrescentar informação em vez de repetir a manchete;
-- títulos genéricos de preenchimento são evitados;
-- repetição semântica é corrigida automaticamente usando outra evidência literal da matéria;
-- se a fonte não oferecer informação suficiente para a quantidade escolhida, o sistema informa o máximo de slides recomendado em vez de repetir conteúdo.
-
-### Perfil editorial e carrossel flexível
-
-- cadastro e login por e-mail e senha, com senha protegida por PBKDF2 e sessão em cookie `HttpOnly`;
-- aba **Perfil** para enviar textos, posts, legendas, roteiros e artigos que representem o estilo desejado;
-- arquivos TXT, MD, CSV e JSON são lidos no navegador; somente o texto normalizado é enviado;
-- até 8 exemplos, 5.000 caracteres por exemplo e 30.000 caracteres por perfil, preservando o limite do D1;
-- o Workers AI transforma os exemplos em um guia compacto de tom, ritmo, títulos, subtítulos, estrutura e CTA;
-- se a IA não responder, um analisador local gera um guia heurístico;
-- o perfil orienta somente a forma da escrita: todos os fatos continuam vindo de uma única matéria selecionada e validada;
-- cada usuário escolhe um padrão de 3 a 15 slides; o padrão inicial continua sendo 7;
-- a quantidade também pode ser alterada individualmente antes de gerar cada carrossel;
-- cache de carrossel separado por usuário, perfil de escrita e quantidade de slides.
-
-Esta funcionalidade adapta o estilo por instruções e exemplos. Ela não realiza fine-tuning permanente do modelo. A versão atual não envia e-mail de confirmação nem oferece recuperação automática de senha.
-
-### Correção do processamento de rondas
-
-- o botão e o Cron registram a ronda como `queued`;
-- o estado muda para `running` somente quando o consumidor inicia;
-- heartbeat é renovado entre coleta, persistência e tradução;
-- jobs sem progresso expiram em até 10 minutos;
-- snapshots antigos são filtrados pelo catálogo atual antes de chegar ao painel;
-- a primeira etapa de tradução foi limitada a 18 títulos novos por ronda.
-
-### Fontes removidas na 2.5.1
-
-- Fatos Desconhecidos;
-- Mega Curioso;
-- Hypeness;
-- Incrível.club;
-- Mistérios do Mundo;
-- Canaltech Curiosidades;
-- Superinteressante;
-- Revista Galileu;
-- Segredos do Mundo;
-- Awebic.
-
-O portal Hypeness já não fazia parte da versão 2.5.0. Os outros nove canais foram removidos do catálogo, das rotas de fallback e dos diagnósticos ativos. A editoria “Curiosidades e Ciência Pop” permanece disponível apenas para classificar matérias desse tema publicadas pelos portais jornalísticos gerais.
+```powershell
+npx --yes wrangler@4.113.0 d1 migrations apply DB --remote
+```
 
 ## Controle de armazenamento D1
 
@@ -297,3 +237,10 @@ Portais externos podem alterar feeds, bloquear automação ou limitar requisiç�
 ## Ajuste YouTube 2.7.3
 
 A coleta YouTube usa a categoria `News & Politics` como primeiro filtro e, em seguida, valida o canal por identidade jornalística. A comparação não depende mais de igualdade literal do nome do canal: aliases conhecidos e marcadores fortes de redação são aceitos. Se uma amostra atual não trouxer nenhum canal aprovado, o último snapshot jornalístico válido permanece disponível em cache em vez de ser substituído por uma coleção vazia.
+
+
+## Mesa de pauta (v2.8.0)
+A aba Mesa mantém pautas persistentes, mostra o que mudou, organiza workflow e passagem de turno.
+
+## Curadoria do YouTube
+Cadastre até 30 canais jornalísticos por @handle, URL ou ID. Com canais ativos, a coleta monitora os uploads deles; sem curadoria, usa o radar jornalístico padrão.

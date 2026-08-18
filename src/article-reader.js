@@ -15,7 +15,7 @@ const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 10_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v7-distinct-angles";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v8-coherent-grounded-adaptive";
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -37,9 +37,9 @@ export function carouselSlidePlan(value = DEFAULT_CAROUSEL_SLIDES) {
     ? Math.max(MIN_CAROUSEL_SLIDES, Math.min(MAX_CAROUSEL_SLIDES, requested))
     : DEFAULT_CAROUSEL_SLIDES;
   let roles;
-  if (count === 3) roles = ["Título principal", "Informação principal", "CTA"];
-  else if (count === 4) roles = ["Título principal", "Contexto", "Informação principal", "CTA"];
-  else if (count === 5) roles = ["Título principal", "Contexto", "Informação principal", "Consequência", "CTA"];
+  if (count === 3) roles = ["Título principal", "Informação principal", "Conclusão"];
+  else if (count === 4) roles = ["Título principal", "Contexto", "Informação principal", "Conclusão"];
+  else if (count === 5) roles = ["Título principal", "Contexto", "Informação principal", "Conclusão", "CTA"];
   else if (count === 6) roles = ["Título principal", "Contexto", "Informação principal", "Detalhamento", "Conclusão", "CTA"];
   else {
     const details = Array.from({ length: count - 6 }, (_, index) => count === 7 ? "Detalhamento" : `Detalhamento ${index + 1}`);
@@ -208,7 +208,7 @@ function paragraphText(html) {
   const expression = /<(p|h2|h3|li)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
   let match;
   while ((match = expression.exec(html)) && values.length < 140) {
-    const text = plainText(match[2]).replace(/\s+/g, " ").trim();
+    const text = repairArticleTypography(plainText(match[2])).replace(/\s+/g, " ").trim();
     const normalized = text.toLocaleLowerCase("pt-BR");
     if (text.length < 35 || text.length > 1_500 || NOISE_SENTENCE.test(text) || seen.has(normalized)) continue;
     seen.add(normalized);
@@ -217,11 +217,22 @@ function paragraphText(html) {
   return cleanArticleText(values.join("\n\n"));
 }
 
+function repairArticleTypography(value) {
+  return String(value || "")
+    .replace(/([0-9](?:[.,][0-9]+)?%)(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])/g, "$1 ")
+    .replace(/([A-Za-zÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç])(?=\d+(?:[.,]\d+)?%)/g, "$1 ")
+    .replace(/([a-záàâãéêíóôõúç]{3,})([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,})/g, "$1 $2")
+    .replace(/([!?;:])(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])/g, "$1 ")
+    .replace(/(^|[^0-9])\.(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ])/g, "$1. ")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function cleanArticleText(value) {
   const lines = String(value || "")
     .replace(/\r/g, "\n")
     .split(/\n+/)
-    .map((line) => plainText(line).trim())
+    .map((line) => repairArticleTypography(plainText(line)).trim())
     .filter((line) => line.length >= 25 && !NOISE_SENTENCE.test(line));
   const output = [];
   const seen = new Set();
@@ -326,7 +337,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.7.7; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.7.8; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -684,7 +695,24 @@ function readingQuality(records) {
 }
 
 function sentences(value) {
-  return plainText(value).split(/(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9])/).map((item) => item.trim()).filter((item) => item.length >= 25);
+  const paragraphs = String(value || "")
+    .replace(/\r/g, "\n")
+    .split(/\n{2,}|\n/)
+    .map((item) => repairArticleTypography(plainText(item)).trim())
+    .filter(Boolean);
+  const output = [];
+  for (const paragraph of paragraphs) {
+    const chunks = paragraph
+      .split(/(?<=[.!?])\s+(?=[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9“"])/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    for (let chunk of chunks) {
+      if (chunk.length < 25) continue;
+      if (!/[.!?]$/.test(chunk) && wordCount(chunk) >= 7 && !/:\s*\d+(?:[.,]\d+)?%\s*$/.test(chunk)) chunk = `${chunk}.`;
+      output.push(chunk);
+    }
+  }
+  return output;
 }
 
 function firstMatchingSentence(list, pattern, fallback) {
@@ -739,26 +767,31 @@ function evidenceRichness(value) {
   return score;
 }
 
+function completeEvidenceUnit(value) {
+  let text = repairArticleTypography(plainText(value)).replace(/\s+/g, " ").trim();
+  if (!text || wordCount(text) < 5) return "";
+  if (/^[a-záàâãéêíóôõúç]/.test(text)) return "";
+  if (/\b(?:de|da|do|das|dos|para|por|com|sem|em|no|na|nos|nas|e|ou|que|como|entre|sobre)$/i.test(text)) return "";
+  if (!/[.!?]$/.test(text)) text = `${text.replace(/[,:;–—-]+$/, "").trim()}.`;
+  return text;
+}
+
+function structuredStatisticUnits(value) {
+  const text = repairArticleTypography(value);
+  const matches = [...text.matchAll(/(?:^|[.;]\s+|\s{2,})([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][^:;.!?]{1,65}?):\s*(\d+(?:[.,]\d+)?%)/g)];
+  if (matches.length < 2) return [];
+  return matches.map((match) => completeEvidenceUnit(`${match[1].trim()}: ${match[2]}`)).filter(Boolean);
+}
+
 function evidenceUnits(sentence) {
-  const text = plainText(sentence);
+  const text = completeEvidenceUnit(sentence);
   if (!text) return [];
-  const words = text.split(/\s+/).filter(Boolean);
-  if (words.length <= 14) return [text];
-
-  // Quebra frases longas somente em trechos literais e contíguos da matéria.
-  // Isso aumenta a quantidade de ângulos verificáveis sem inventar informação.
-  const coarse = text.split(/;\s+|,\s+(?=(?:com|mas|porém|porem|enquanto|além|alem|segundo|ainda|já|ja|o que|a qual|que|e\s+(?:a|o|os|as|um|uma|ele|ela|eles|elas|isso|também|tambem))\b)/i)
-    .map((part) => part.trim())
-    .filter((part) => wordCount(part) >= 5);
-  if (coarse.length >= 2) return coarse;
-
-  // Em frases muito extensas, cria janelas literais sem sobreposição para preservar diversidade factual.
-  if (words.length >= 24) {
-    const midpoint = Math.ceil(words.length / 2);
-    const left = words.slice(0, midpoint).join(" ").replace(/[,:;–—-]+$/, "").trim();
-    const right = words.slice(midpoint).join(" ").replace(/^[,:;–—-]+/, "").trim();
-    if (wordCount(left) >= 7 && wordCount(right) >= 7) return [left, right];
-  }
+  const statistics = structuredStatisticUnits(text);
+  // Tabelas/placares colados costumam perder o cabeçalho semântico durante a extração.
+  // É mais seguro ignorá-los do que transformar pares soltos em frases potencialmente enganosas.
+  if (statistics.length >= 2) return [];
+  const semicolonParts = text.split(/;\s+/).map(completeEvidenceUnit).filter(Boolean);
+  if (semicolonParts.length >= 2) return semicolonParts;
   return [text];
 }
 
@@ -766,19 +799,30 @@ function fallbackFactsFromArticle(article, limit = 24) {
   const contentSentences = sentences(article?.content || "");
   const candidates = [];
   for (const sentence of contentSentences) candidates.push(...evidenceUnits(sentence));
-  if (plainText(article?.title)) candidates.push(plainText(article.title));
+  if (plainText(article?.title)) candidates.push({ text: plainText(article.title), type: "headline" });
+  if (article?.publishedAt && Number.isFinite(Date.parse(article.publishedAt))) {
+    const publishedLabel = new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long", year: "numeric" }).format(new Date(article.publishedAt));
+    candidates.push({ text: `Data de publicação informada pelo portal: ${publishedLabel}.`, type: "publication" });
+  }
 
   const output = [];
   for (const candidate of candidates) {
-    const evidence = editorialClip(candidate, 240);
-    if (!evidence || wordCount(evidence) < 5) continue;
+    const candidateText = typeof candidate === "object" ? candidate.text : candidate;
+    const candidateType = typeof candidate === "object" ? candidate.type : "content";
+    const evidence = editorialClip(candidateText, 240);
+    const isHeadlineEvidence = candidateType === "headline";
+    if (!evidence || wordCount(evidence) < (isHeadlineEvidence ? 3 : 5)) continue;
+    if (/^[a-záàâãéêíóôõúç]/.test(evidence) || /%[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]/.test(evidence)) continue;
+    if ((evidence.match(/%/g) || []).length >= 4 && (evidence.match(/:/g) || []).length >= 2) continue;
     // Evita duplicatas quase idênticas, mas preserva cláusulas diferentes da mesma frase quando trazem outro dado.
     if (output.some((fact) => tokenSimilarity(fact.evidence, evidence) >= 0.82)) continue;
     output.push({
       id: `fact-${output.length + 1}`,
-      claim: editorialClip(candidate, 220),
+      claim: editorialClip(candidateText, 220),
       evidence,
-      angle: evidenceAngle(evidence),
+      angle: candidateType === "headline" ? "headline" : candidateType === "publication" ? "context" : evidenceAngle(evidence),
+      headline: candidateType === "headline",
+      metadata: candidateType === "publication",
       confidence: article?.contentLevel === "article" || article?.contentLevel === "content" ? "high" : "medium",
     });
     if (output.length >= limit) break;
@@ -787,7 +831,7 @@ function fallbackFactsFromArticle(article, limit = 24) {
 }
 
 function roleAnglePreferences(role) {
-  if (role === "Título principal") return ["event", "scale", "impact", "response", "context"];
+  if (role === "Título principal") return ["headline", "event", "scale", "impact", "response", "context"];
   if (role === "Contexto") return ["context", "place", "cause", "event", "response"];
   if (role === "Informação principal") return ["scale", "event", "response", "impact", "cause"];
   if (role.startsWith("Detalhamento")) return ["response", "cause", "scale", "place", "context", "event"];
@@ -798,7 +842,14 @@ function roleAnglePreferences(role) {
 
 function selectDistinctFact(facts, usedIds, role, { avoidText = "" } = {}) {
   const preferences = roleAnglePreferences(role);
-  const candidates = facts.filter((fact) => !usedIds.has(fact.id));
+  if (role === "Título principal") {
+    const headline = facts.find((fact) => fact.headline && !usedIds.has(fact.id));
+    if (headline) return headline;
+  }
+  const ordinary = facts.filter((fact) => !usedIds.has(fact.id) && !fact.headline && !fact.metadata);
+  const candidates = ordinary.length
+    ? ordinary
+    : facts.filter((fact) => !usedIds.has(fact.id) && !fact.headline);
   if (!candidates.length) return null;
   return candidates
     .map((fact, order) => {
@@ -806,37 +857,66 @@ function selectDistinctFact(facts, usedIds, role, { avoidText = "" } = {}) {
       const preferenceIndex = preferences.indexOf(angle);
       const preferenceScore = preferenceIndex < 0 ? 0 : (preferences.length - preferenceIndex) * 3;
       const duplicatePenalty = avoidText ? tokenSimilarity(avoidText, fact.evidence) * 12 : 0;
-      return { fact, score: preferenceScore + evidenceRichness(fact.evidence) - duplicatePenalty - order * 0.01 };
+      const metadataPenalty = fact.metadata ? 12 : 0;
+      return { fact, score: preferenceScore + evidenceRichness(fact.evidence) - duplicatePenalty - metadataPenalty - order * 0.01 };
     })
     .sort((left, right) => right.score - left.score)[0]?.fact || candidates[0];
 }
 
 function angleLabel(angle, role) {
+  if (role === "Contexto") {
+    if (angle === "cause") return "O que explica o cenário";
+    if (angle === "place") return "Onde a notícia se concentra";
+    return "O contexto da notícia";
+  }
+  if (role === "Informação principal") {
+    if (angle === "scale") return "O principal dado";
+    if (angle === "response") return "O que informam as autoridades";
+    return "O ponto central";
+  }
+  if (role.startsWith("Detalhamento")) {
+    if (angle === "response") return "Medidas e resposta";
+    if (angle === "cause") return "Como o caso se explica";
+    if (angle === "scale") return "Outro dado relevante";
+    return "Um detalhe importante";
+  }
+  if (role === "Consequência") {
+    if (angle === "impact") return "O impacto da situação";
+    if (angle === "response") return "Efeitos e resposta";
+    return "O que isso pode provocar";
+  }
+  if (role === "Conclusão") {
+    if (angle === "next") return "Os próximos passos";
+    if (angle === "response") return "Como a resposta continua";
+    if (angle === "impact") return "O que fica em atenção";
+    return "O que a matéria deixa claro";
+  }
   if (angle === "scale") return "Os números da matéria";
   if (angle === "impact") return "Impacto registrado";
-  if (angle === "response") return "Resposta e medidas";
+  if (angle === "response") return "Resposta das autoridades";
   if (angle === "cause") return "O que explica o caso";
   if (angle === "next") return "Próximos passos";
   if (angle === "context") return "O contexto anterior";
   if (angle === "place") return "Onde o caso acontece";
-  if (role === "Consequência") return "Efeito direto";
-  if (role === "Conclusão") return "O que vem agora";
   return "Ponto central";
 }
 
 function roleTitle(role, primary, articleTitle = "") {
   if (role === "Título principal") return editorialClip(articleTitle || primary?.claim || primary?.evidence || "Notícia em destaque", MAX_SLIDE_TITLE_CHARS);
+  if (primary?.metadata) return "Quando a matéria foi publicada";
   const evidence = plainText(primary?.claim || primary?.evidence || "");
-  const words = evidence.split(/\s+/).filter(Boolean);
-  const startsAsFragment = /^[a-záàâãéêíóôõúç]/.test(evidence);
-  const selectedWords = startsAsFragment
-    ? words.slice(Math.max(0, words.length - Math.min(7, words.length)))
-    : words.slice(0, Math.min(8, words.length));
-  const concise = selectedWords.join(" ");
-  const proposed = editorialClip(concise || role, MAX_SLIDE_TITLE_CHARS);
-  return tokenSimilarity(proposed, evidence) >= 0.68
-    ? angleLabel(primary?.angle || evidenceAngle(evidence), role)
-    : proposed;
+  const firstClause = evidence.split(/[,;]|\s+—\s+/)[0].replace(/[.!?]+$/, "").trim();
+  const clauseSimilarity = tokenSimilarity(firstClause, evidence);
+  if (
+    wordCount(firstClause) >= 3
+    && firstClause.length >= 18
+    && firstClause.length <= MAX_SLIDE_TITLE_CHARS
+    && clauseSimilarity < 0.58
+    && !/\b(?:de|da|do|das|dos|para|por|com|sem|em|no|na|nos|nas|e|ou|que|como|entre|sobre)$/i.test(firstClause)
+  ) {
+    return firstClause;
+  }
+  return angleLabel(primary?.angle || evidenceAngle(evidence), role);
 }
 
 function buildDistinctFallbackSlides(article, facts, slideCount) {
@@ -849,6 +929,7 @@ function buildDistinctFallbackSlides(article, facts, slideCount) {
     throw error;
   }
   const usedIds = new Set();
+  const usedTitles = new Set();
   const slides = [];
   let previousText = "";
   for (const [number, role] of plan) {
@@ -861,15 +942,20 @@ function buildDistinctFallbackSlides(article, facts, slideCount) {
     });
     if (!primary) throw new Error("Não há evidências distintas suficientes para concluir o roteiro sem repetição.");
     usedIds.add(primary.id);
-    const title = roleTitle(role, primary, article?.title || "");
-    let subtitle = editorialClip(primary.evidence, MAX_SLIDE_SUBTITLE_CHARS);
+    let title = roleTitle(role, primary, article?.title || "");
+    if (usedTitles.has(normalizedEvidenceText(title))) {
+      title = angleLabel(primary?.angle || evidenceAngle(primary?.evidence), role);
+      if (usedTitles.has(normalizedEvidenceText(title))) title = `${role}: ${title}`;
+    }
+    usedTitles.add(normalizedEvidenceText(title));
+    let subtitle = editorialClip(completeEvidenceUnit(primary.evidence) || primary.evidence, MAX_SLIDE_SUBTITLE_CHARS);
 
     // Na capa, a manchete pode resumir o fato central; o deck deve acrescentar outro trecho da matéria.
     if (role === "Título principal" && tokenSimilarity(title, subtitle) >= 0.56) {
       const alternative = selectDistinctFact(facts, usedIds, role, { avoidText: `${title} ${previousText}` });
       if (alternative) {
         usedIds.add(alternative.id);
-        subtitle = editorialClip(alternative.evidence, MAX_SLIDE_SUBTITLE_CHARS);
+        subtitle = editorialClip(completeEvidenceUnit(alternative.evidence) || alternative.evidence, MAX_SLIDE_SUBTITLE_CHARS);
         slides.push({ number, role, title, subtitle, body: subtitle, evidenceIds: [primary.id, alternative.id] });
         previousText = `${title} ${subtitle}`;
         continue;
@@ -1011,6 +1097,10 @@ function normalizedEvidenceText(value) {
     .trim();
 }
 
+function articleGroundingText(article) {
+  return `${article?.title || ""} ${article?.content || ""} ${article?.publishedAt || ""}`.trim();
+}
+
 function numericTokens(value) {
   return normalizedEvidenceText(value).match(/\b\d+(?:[.,]\d+)?%?\b/g) || [];
 }
@@ -1021,7 +1111,7 @@ function unsupportedNumbers(value, articleText) {
 }
 
 function factHasEvidence(fact, article) {
-  const content = normalizedEvidenceText(`${article?.title || ""} ${article?.content || ""}`);
+  const content = normalizedEvidenceText(articleGroundingText(article));
   const evidence = normalizedEvidenceText(fact?.evidence || "");
   if (!evidence || evidence.length < 16) return false;
   if (content.includes(evidence)) return true;
@@ -1030,7 +1120,7 @@ function factHasEvidence(fact, article) {
 
 function normalizeFacts(value, fallbackFacts, article) {
   const output = [];
-  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  const sourceText = articleGroundingText(article);
   for (const raw of Array.isArray(value) ? value : []) {
     const fact = {
       claim: editorialClip(raw?.claim, 220),
@@ -1047,7 +1137,7 @@ function normalizeFacts(value, fallbackFacts, article) {
 function normalizeFactAnalysis(value, fallback, article) {
   const source = value && typeof value === "object" ? value : {};
   const questions = {};
-  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  const sourceText = articleGroundingText(article);
   for (const key of ["whatHappened", "who", "where", "when", "impact", "repercussion"]) {
     const generated = editorialClip(source.questions?.[key], 360);
     questions[key] = generated && !unsupportedNumbers(generated, sourceText).length
@@ -1055,7 +1145,7 @@ function normalizeFactAnalysis(value, fallback, article) {
       : editorialClip(fallback.questions[key], 360);
   }
   const entities = {};
-  const articleEvidence = normalizedEvidenceText(`${article?.title || ""} ${article?.content || ""}`);
+  const articleEvidence = normalizedEvidenceText(articleGroundingText(article));
   for (const key of ["people", "companies", "places", "dates", "themes", "keywords"]) {
     const generated = normalizeList(source.entities?.[key]);
     const supported = generated.filter((item) => {
@@ -1100,24 +1190,39 @@ function slideHasSourceSupport(slide, facts, article) {
   if (slide?.role === "CTA") return true;
   const text = `${slide?.title || ""} ${slide?.subtitle || ""}`.trim();
   if (!text) return false;
-  const articleText = `${article?.title || ""} ${article?.content || ""}`;
-  if (unsupportedNumbers(text, articleText).length) return false;
   const referenced = (slide?.evidenceIds || [])
     .map((id) => facts.find((fact) => fact.id === id))
     .filter(Boolean);
   if (!referenced.length) return false;
   const evidenceText = referenced.map((fact) => `${fact.claim || ""} ${fact.evidence || ""}`).join(" ");
+  const groundingText = `${articleGroundingText(article)} ${evidenceText}`;
+  if (unsupportedNumbers(text, groundingText).length) return false;
   const subtitle = slide?.subtitle || "";
   const normalizedSubtitle = normalizedEvidenceText(subtitle);
   if (normalizedSubtitle && normalizedEvidenceText(evidenceText).includes(normalizedSubtitle)) return true;
   if (tokenCoverage(subtitle, evidenceText) >= 0.48) return true;
-  return tokenCoverage(subtitle, articleText) >= 0.84;
+  return tokenCoverage(subtitle, articleGroundingText(article)) >= 0.84;
+}
+
+function slideLanguageProblems(slide) {
+  if (slide?.role === "CTA") return [];
+  const problems = [];
+  const title = repairArticleTypography(slide?.title || "").trim();
+  const subtitle = repairArticleTypography(slide?.subtitle || "").trim();
+  if (title && /^[a-záàâãéêíóôõúç]/.test(title)) problems.push("title-starts-as-fragment");
+  if (subtitle && /^[a-záàâãéêíóôõúç]/.test(subtitle)) problems.push("subtitle-starts-as-fragment");
+  if (subtitle && !/[.!?]$/.test(subtitle)) problems.push("subtitle-not-closed");
+  if (/\b(?:de|da|do|das|dos|para|por|com|sem|em|no|na|nos|nas|e|ou|que|como|entre|sobre)[.!?]?$/i.test(subtitle)) problems.push("subtitle-ends-as-fragment");
+  if (/%[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]/.test(`${title} ${subtitle}`) || /[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}/.test(`${title} ${subtitle}`)) problems.push("concatenated-text");
+  if ((subtitle.match(/%/g) || []).length >= 4 && (subtitle.match(/:/g) || []).length >= 2) problems.push("data-dump");
+  if ((subtitle.match(/\(/g) || []).length !== (subtitle.match(/\)/g) || []).length) problems.push("unbalanced-parentheses");
+  return problems;
 }
 
 function validateSlides(slides, fallbackSlides, facts, article) {
   const issues = [];
   const corrected = slides.map((slide) => ({ ...slide, evidenceIds: [...(slide.evidenceIds || [])] }));
-  const sourceText = `${article?.title || ""} ${article?.content || ""}`;
+  const sourceText = `${articleGroundingText(article)} ${facts.map((fact) => `${fact.claim || ""} ${fact.evidence || ""}`).join(" ")}`;
   const replaceWithFallback = (index, code, extra = {}) => {
     issues.push({ code, slide: index + 1, ...extra });
     corrected[index] = { ...fallbackSlides[index], evidenceIds: [...(fallbackSlides[index]?.evidenceIds || [])] };
@@ -1127,6 +1232,11 @@ function validateSlides(slides, fallbackSlides, facts, article) {
     const slide = corrected[index];
     if (!slide.title || !slide.subtitle) {
       replaceWithFallback(index, "empty-slide");
+      continue;
+    }
+    const languageProblems = slideLanguageProblems(slide);
+    if (languageProblems.length) {
+      replaceWithFallback(index, "incoherent-language", { problems: languageProblems });
       continue;
     }
     const unsupported = unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText);
@@ -1176,6 +1286,7 @@ function validateSlides(slides, fallbackSlides, facts, article) {
   const finalProblems = corrected.flatMap((slide, index) => {
     const problems = [];
     if (!slide.title || !slide.subtitle) problems.push({ code: "empty-slide", slide: index + 1 });
+    for (const problem of slideLanguageProblems(slide)) problems.push({ code: "incoherent-language", detail: problem, slide: index + 1 });
     if (unsupportedNumbers(`${slide.title} ${slide.subtitle}`, sourceText).length) problems.push({ code: "unsupported-number", slide: index + 1 });
     if ((slide.evidenceIds || []).some((id) => !facts.some((fact) => fact.id === id))) problems.push({ code: "invalid-evidence", slide: index + 1 });
     if (!slideHasSourceSupport(slide, facts, article)) problems.push({ code: "unsupported-by-source", slide: index + 1 });
@@ -1234,15 +1345,18 @@ function evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle 
     `QUANTIDADE: ${slideCount} slides`,
     `ESTRUTURA OBRIGATÓRIA:\n${plan.map(([number, role]) => `${number}. ${role}`).join("\n")}`,
     styleText ? `PERFIL DE ESCRITA DO USUÁRIO:\n${String(styleText).slice(0, 3_000)}` : null,
-    `EVIDÊNCIAS EXTRAÍDAS LITERALMENTE DA MATÉRIA:\n${evidenceMap}`,
+    `EVIDÊNCIAS EXTRAÍDAS DO CONTEÚDO E DOS METADADOS DA MATÉRIA:\n${evidenceMap}`,
     "Sua função é somente REDIGIR os slides a partir das evidências acima. Não crie, complete, deduza ou acrescente fatos.",
+    "COERÊNCIA OBRIGATÓRIA: cada subtítulo deve ser uma frase completa, gramaticalmente fechada, com sujeito ou ideia identificável e pontuação final. Nunca comece um slide no meio de uma oração.",
+    "Não copie blocos de tabela, sequências de percentuais ou listas coladas. Quando a evidência trouxer números estruturados, transforme apenas os valores escolhidos em uma frase jornalística clara e fiel.",
+    "O conjunto deve formar uma narrativa: capa apresenta o fato; contexto situa; informação principal entrega o dado central; detalhamentos acrescentam ângulos novos; consequência ou conclusão fecha o raciocínio; CTA não adiciona fato.",
     "Cada slide informativo deve referenciar em evidenceIds pelo menos uma evidência usada. Não cite IDs inexistentes.",
     "REGRA DE DIVERSIDADE: o primeiro evidenceId de cada slide informativo deve ser diferente do primeiro evidenceId de todos os outros slides. Cada slide precisa acrescentar uma informação factual nova.",
     "Não repita a manchete no subtítulo do slide 1. O subtítulo deve acrescentar outro dado, contexto, agente, número, impacto, resposta ou próximo passo presente nas evidências.",
     "Não use títulos genéricos como 'Entenda o cenário', 'O que aconteceu', 'Os principais detalhes' ou 'O que a matéria informa'. Prefira títulos específicos derivados do ângulo factual daquele slide.",
     "Não reformule a mesma informação para preencher papéis diferentes. Se uma evidência já foi o ângulo principal de um slide, use outra como ângulo principal no próximo.",
     "Você pode adaptar ritmo, clareza e tom do texto, mas não pode alterar nomes, datas, números, relações causais ou conclusões presentes nas evidências.",
-    `Produza exatamente ${slideCount} slides. Título até ${MAX_SLIDE_TITLE_CHARS} caracteres; subtítulo até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres e no máximo duas frases. Não aumente a quantidade de texto para compensar falta de informação.`,
+    `Produza exatamente ${slideCount} slides. Título até ${MAX_SLIDE_TITLE_CHARS} caracteres; subtítulo até ${MAX_SLIDE_SUBTITLE_CHARS} caracteres, preferencialmente uma frase e no máximo duas. Toda frase deve terminar completa. Não aumente a quantidade de texto para compensar falta de informação.`,
     "No CTA, não acrescente informação factual nova; apenas convide o leitor a acompanhar ou consultar a matéria original.",
   ].filter(Boolean).join("\n\n").slice(0, MAX_PROMPT_CHARS);
 }
@@ -1252,7 +1366,7 @@ async function runAiCarouselFromEvidence(ai, model, topic, article, facts, slide
     messages: [
       {
         role: "system",
-        content: `Você é um redator jornalístico brasileiro. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências. Cada slide informativo deve ter um ângulo factual diferente e um evidenceIds[0] diferente; não repita manchete, dado ou conclusão em slides distintos.`,
+        content: `Você é um redator jornalístico brasileiro. Os fatos já foram extraídos de UMA matéria publicada e são fornecidos como evidências. Você NÃO deve gerar fatos. Apenas redija exatamente ${slideCount} slides usando exclusivamente essas evidências. Cada slide informativo deve ter um ângulo factual diferente e um evidenceIds[0] diferente; não repita manchete, dado ou conclusão em slides distintos. Escreva frases completas e naturais; jamais devolva fragmentos de oração, tabelas coladas ou sequências de números sem contexto.`,
       },
       { role: "user", content: evidenceCarouselPrompt(topic, article, facts, slideCount, writingStyle) },
     ],
@@ -1261,6 +1375,31 @@ async function runAiCarouselFromEvidence(ai, model, topic, article, facts, slide
     temperature: 0.06,
     top_p: 0.72,
   }), AI_ANALYSIS_TIMEOUT_MS, "A redação inteligente excedeu o tempo limite");
+  return safeJsonParse(response?.response ?? response?.result ?? response);
+}
+
+async function repairAiCarouselFromEvidence(ai, model, topic, article, facts, slideCount, writingStyle, slides, problems) {
+  const evidenceMap = facts.map((fact) => `${fact.id}: ${fact.evidence}`).join("\n");
+  const current = slides.map((slide) => `${slide.number}. ${slide.role}\nT: ${slide.title}\nS: ${slide.subtitle}\nE: ${(slide.evidenceIds || []).join(", ")}`).join("\n\n");
+  const issueText = (problems || []).slice(0, 18).map((issue) => `slide ${issue.slide || "?"}: ${issue.code}${issue.detail ? ` (${issue.detail})` : ""}`).join("; ");
+  const styleText = writingStyle?.prompt || writingStyle?.instructions || "";
+  const response = await withTimeout(ai.run(model, {
+    messages: [
+      { role: "system", content: "Você revisa um carrossel jornalístico SEM acrescentar fatos. Corrija apenas clareza, gramática, frases incompletas, concatenações e progressão narrativa. Use exclusivamente as evidências fornecidas. Números, nomes e relações factuais não podem ser alterados nem criados." },
+      { role: "user", content: [
+        `ASSUNTO: ${compact(topic?.title || article.title, 180)}`,
+        `PROBLEMAS DETECTADOS: ${issueText || "coerência e fluidez"}`,
+        styleText ? `ESTILO: ${String(styleText).slice(0, 2600)}` : null,
+        `EVIDÊNCIAS PERMITIDAS:\n${evidenceMap}`,
+        `VERSÃO A CORRIGIR:\n${current}`,
+        `Retorne exatamente ${slideCount} slides. Cada subtítulo deve ser uma frase completa e fechada. Preserve um primeiro evidenceId diferente em cada slide informativo. Não use tabelas coladas, fragmentos de oração ou fatos ausentes das evidências.`
+      ].filter(Boolean).join("\n\n") }
+    ],
+    response_format: { type: "json_schema", json_schema: carouselSchema(slideCount) },
+    max_tokens: Math.min(2_600, 800 + slideCount * 140),
+    temperature: 0.03,
+    top_p: 0.65,
+  }), 8_000, "A revisão de coerência excedeu o tempo limite");
   return safeJsonParse(response?.response ?? response?.result ?? response);
 }
 
@@ -1411,8 +1550,27 @@ export async function buildIntelligentCarousel(topic, {
   }
   const aiDurationMs = Date.now() - aiStartedAt;
   const normalizedFallbackSlides = normalizeSlides({ slides: sourceAnalysis.slides }, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
-  const normalizedSlides = normalizeSlides(slideSource, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
-  const validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
+  let normalizedSlides = normalizeSlides(slideSource, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
+  let validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
+  let coherenceRepairApplied = false;
+  const coherenceIssues = (validated.report.issues || []).filter((issue) => ["incoherent-language", "repeated-slide", "title-repeats-subtitle"].includes(issue.code));
+  if (ai?.run && coherenceIssues.length && analysisMode.startsWith("ai-")) {
+    try {
+      await reportProgress(onProgress, 90, "analysis", "Revisando coerência e completude das frases sem alterar os fatos.");
+      const repaired = await repairAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, requestedSlideCount, writingStyle, normalizedSlides, coherenceIssues);
+      if (repaired?.slides) {
+        normalizedSlides = normalizeSlides(repaired, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
+        const repairedValidation = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
+        if (repairedValidation.report.passed || repairedValidation.report.finalProblems.length < validated.report.finalProblems.length) {
+          validated = repairedValidation;
+          coherenceRepairApplied = true;
+          analysisMode = "ai-redaction-source-evidence-coherence-repair";
+        }
+      }
+    } catch (error) {
+      aiError = aiError || (error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180));
+    }
+  }
   const editorialGate = {
     status: quality.copyAllowed && validated.report.passed ? "ready" : "review-required",
     copyAllowed: Boolean(quality.copyAllowed && validated.report.passed),
@@ -1455,7 +1613,7 @@ export async function buildIntelligentCarousel(topic, {
     voiceTone: writingStyle?.profile?.tone || writingStyle?.tone || "Jornalístico, factual e explicativo",
     postModel: `Instagram · ${requestedSlideCount} slides · título + subtítulo`,
     slideCount: requestedSlideCount,
-    writingProfile: writingStyle ? { active: true, updatedAt: writingStyle.updatedAt || null, sampleCount: Number(writingStyle.sampleCount) || 0, mode: writingStyle.profile?.mode || writingStyle.mode || "custom" } : { active: false },
+    writingProfile: writingStyle ? { active: true, updatedAt: writingStyle.updatedAt || null, sampleCount: Number(writingStyle.sampleCount) || 0, adaptiveMemoryCount: Number(writingStyle.adaptiveMemory?.count) || 0, mode: writingStyle.profile?.mode || writingStyle.mode || "custom" } : { active: false, adaptiveMemoryCount: 0 },
     promptVersion: CAROUSEL_PROMPT_VERSION,
     performance: {
       totalMs: Date.now() - totalStartedAt,
@@ -1463,6 +1621,7 @@ export async function buildIntelligentCarousel(topic, {
       aiMs: aiDurationMs,
       fastPath: Boolean(selectedRecord.cacheHit),
       publisherAttempts: attemptedSources.length,
+      coherenceRepairApplied,
     },
     cycle: {
       status: "completed",

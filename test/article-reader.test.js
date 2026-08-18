@@ -92,10 +92,10 @@ test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async ()
   assert.equal(result.reading.selectedSource.sourceName, "Portal A");
   assert.ok(result.reading.selectedSource.selection.score > 0);
   assert.equal(result.reading.alternativesAvailable, 1);
-  assert.equal(aiInputs.length, 1);
+  assert.ok(aiInputs.length >= 1 && aiInputs.length <= 2);
   assert.match(aiInputs[0].messages[0].content, /NÃO deve gerar fatos|não deve gerar fatos/i);
   assert.match(aiInputs[0].messages[1].content, /PORTAL LIDO: Portal A/);
-  assert.match(aiInputs[0].messages[1].content, /EVIDÊNCIAS EXTRAÍDAS LITERALMENTE DA MATÉRIA/);
+  assert.match(aiInputs[0].messages[1].content, /EVIDÊNCIAS EXTRAÍDAS DO CONTEÚDO E DOS METADADOS DA MATÉRIA/);
   assert.doesNotMatch(aiInputs[0].messages[1].content, /Portal B detalha|Plano prevê investimentos/);
   assert.ok(result.facts.length >= 1);
   assert.ok(result.facts.every((fact) => fact.id && fact.claim && fact.evidence));
@@ -346,7 +346,7 @@ test("gera quantidade flexível de slides preservando 7 como padrão", async () 
   const compact = await buildIntelligentCarousel(topic, { fetcher, slideCount: 3 });
   const standard = await buildIntelligentCarousel(topic, { fetcher });
   assert.equal(compact.slides.length, 3);
-  assert.equal(compact.slides.at(-1).role, "CTA");
+  assert.equal(compact.slides.at(-1).role, "Conclusão");
   assert.equal(standard.slides.length, 7);
   await assert.rejects(
     buildIntelligentCarousel(topic, { fetcher, slideCount: 12 }),
@@ -400,6 +400,46 @@ test("remove repetição de informação entre slides mesmo quando a IA repete a
       assert.notEqual(informative[left].title, informative[right].title);
     }
   }
+});
+
+
+test("corrige texto concatenado e recusa fragmentos de tabela eleitoral", async () => {
+  const article = [
+    "A pesquisa Quaest divulgada nesta sexta-feira mostra Lula com 44% e Flávio Bolsonaro com 40% em uma simulação de segundo turno.",
+    "O levantamento informa margem de erro de dois pontos percentuais para mais ou para menos.",
+    "Em outro cenário, o senador aparece tecnicamente empatado com o presidente dentro da margem de erro.",
+    "A pesquisa ouviu eleitores entre os dias 10 e 12 de agosto e foi registrada conforme as regras eleitorais.",
+    "Na tabela publicada pelo portal constam os seguintes dados: Lula (PT): 44%Flávio Bolsonaro (PL): 40%Indecisos: 4%Branco/Nulo/Não vai votar: 12%.",
+    "Os números apresentados pelo instituto descrevem as intenções de voto no período da coleta."
+  ].join(" ");
+  const topic = {
+    id: "topic-pesquisa-coerente",
+    title: "Quaest divulga novos números da disputa presidencial",
+    editoria: "Política",
+    items: [{ id: "a", kind: "portal", title: "Quaest divulga novos números da disputa presidencial", sourceName: "Portal Política", publishedAt: "2026-08-14T12:00:00Z", url: "https://portal-politica.test/pesquisa" }],
+  };
+  const html = `<!doctype html><html><head><script type="application/ld+json">${JSON.stringify({ "@type": "NewsArticle", headline: topic.title, datePublished: "2026-08-14T12:00:00Z", articleBody: article })}</script></head><body><article><p>${article}</p></article></body></html>`;
+  const ai = {
+    run: async () => ({ response: { slides: [
+      { number: 1, title: "13%Indecisos: 4%Lula X", subtitle: "44%Ronaldo CaiadoLula (PT): 44%", evidenceIds: ["fact-1"] },
+      { number: 2, title: "para a Presidência", subtitle: "divulgada nesta sexta-feira, 14", evidenceIds: ["fact-1"] },
+      { number: 3, title: "O que aconteceu", subtitle: "com intenções de voto que variam", evidenceIds: ["fact-1"] },
+      { number: 4, title: "Os principais detalhes", subtitle: "já nas simulações de segundo turno, o senador", evidenceIds: ["fact-1"] },
+      { number: 5, title: "Continue acompanhando", subtitle: "Acompanhe as próximas atualizações.", evidenceIds: [] },
+    ] } }),
+  };
+  const result = await buildIntelligentCarousel(topic, {
+    ai,
+    slideCount: 5,
+    fetcher: async () => new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }),
+  });
+  assert.equal(result.validation.passed, true);
+  for (const slide of result.slides.filter((item) => item.role !== "CTA")) {
+    assert.doesNotMatch(`${slide.title} ${slide.subtitle}`, /%[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]|[a-záàâãéêíóôõúç]{3,}[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][a-záàâãéêíóôõúç]{2,}/);
+    assert.match(slide.subtitle, /[.!?]$/);
+    assert.doesNotMatch(slide.subtitle, /\b(?:de|da|do|das|dos|para|por|com|sem|em|no|na|nos|nas|e|ou|que|como|entre|sobre)[.!?]?$/i);
+  }
+  assert.ok(result.validation.issues.some((issue) => issue.code === "incoherent-language" || issue.code === "reused-primary-evidence"));
 });
 
 test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () => {

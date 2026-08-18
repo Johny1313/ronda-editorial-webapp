@@ -1,13 +1,24 @@
-## 2.7.7 — carrossel com ângulos factuais distintos
+# 2.8.0 — Mesa de pauta, passagem de turno e curadoria YouTube
 
-- Corrige repetição de manchete, dado ou conclusão em slides diferentes.
-- Cada slide informativo passa a usar uma evidência principal diferente da matéria lida.
-- O slide de capa não pode repetir a manchete no subtítulo; o deck precisa acrescentar outra informação da fonte.
-- A validação detecta repetição semântica entre slides e repetição entre título e subtítulo do mesmo slide.
-- O prompt proíbe títulos genéricos e exige um ângulo factual novo por slide, sem aumentar a quantidade de texto.
-- Frases extensas da matéria podem ser divididas em trechos literais para aumentar a variedade de evidências sem criar fatos.
-- Quando a matéria não possui evidências distintas suficientes para a quantidade escolhida, a geração é bloqueada e informa o máximo recomendado em vez de repetir conteúdo.
-- Cache de carrossel recebe nova versão para não reutilizar roteiros repetitivos gerados anteriormente.
+- Pautas persistentes entre rondas e detecção de mudanças.
+- Filas: Pautar agora, Subindo, Acompanhar e Sem novidade.
+- Workflow, responsável, notas, seguir pauta e passagem de turno.
+- Verificação: fonte única, 2+ fontes e fonte oficial.
+- Curadoria de até 30 canais do YouTube por @handle, URL ou channel ID.
+- Com curadoria ativa, a coleta usa a playlist de uploads dos canais escolhidos.
+
+## 2.7.8 — carrossel coerente + memória editorial aprovada
+
+- Corrige frases truncadas, colagens de percentuais e blocos de tabela sem contexto durante a extração da matéria.
+- Adiciona validação obrigatória de completude gramatical por slide e uma segunda revisão de coerência somente quando necessária.
+- Mantém cada número, nome, data e afirmação ancorados na matéria de portal efetivamente lida.
+- Tabelas/placares extraídos sem contexto semântico são descartados em vez de virar frases incompletas.
+- Todo roteiro passa a ter conclusão editorial; em carrosséis de 3 e 4 slides, a conclusão tem prioridade sobre CTA.
+- Nova memória editorial persistente por usuário: somente carrosséis explicitamente aprovados/ajustados entram como exemplos.
+- A memória aprende padrões de forma (ritmo, extensão, uso de perguntas e dois-pontos), nunca fatos de matérias anteriores.
+- Novo botão **Aprovar e ensinar estilo** no modal do carrossel.
+- Cache do carrossel é invalidado quando a memória editorial do usuário evolui.
+- Nova migration `0008_carousel_editorial_learning.sql`.
 
 ## 2.7.6 — carrossel baseado obrigatoriamente em matéria publicada
 

@@ -1,26 +1,40 @@
-RONDA EDITORIAL v2.7.7 — ESTRUTURA DO UPLOAD
+RONDA EDITORIAL v2.8.0 — ESTRUTURA DO UPLOAD
+============================================
 
-IMPORTANTE: preserve as pastas do ZIP ao publicar no GitHub.
-
-Na raiz devem ficar apenas arquivos de configuração/documentação, por exemplo:
+NA RAIZ:
+.github/
+migrations/
+migrations_youtube/
+public/
+scripts/
+src/
+test/
+.gitignore
+.nvmrc
+CHANGELOG.md
+README.md
+PUBLICAR-COM-GITHUB.txt
+PUBLICAR-V2.8.0.txt
+RECUPERAR-D1-AGORA.sql
 package.json
 package-lock.json
-wrangler.jsonc
 schema.sql
-README.md
-CHANGELOG.md
-RECUPERAR-D1-AGORA.sql
+wrangler.jsonc
 
-Código do Worker deve permanecer em src/.
-Interface deve permanecer em public/.
-Testes devem permanecer em test/.
-Validação deve permanecer em scripts/.
-Migrações devem permanecer em migrations/ e migrations_youtube/.
-Workflow deve permanecer em .github/workflows/.
+NÃO DEVE EXISTIR NA RAIZ:
+index.js
+app.js
+styles.css
+youtube.js
+database.js
+profile.js
+collector.js
+*.test.js
+0001_v2_5_0.sql
+0009_newsroom_workflow.sql
 
-NÃO envie cópias de index.js, youtube.js, app.js, styles.css, collector.js,
-profile.js, arquivos *.test.js ou migrations SQL soltas para a raiz.
+Esses arquivos pertencem às respectivas pastas.
 
-Após o upload, confirme:
-src/index.js -> const VERSION = "2.7.7";
-public/index.html -> /styles.css?v=2.7.7 e /app.js?v=2.7.7
+CONFERÊNCIA:
+src/index.js -> const VERSION = "2.8.0";
+public/index.html -> /styles.css?v=2.8.0 e /app.js?v=2.8.0

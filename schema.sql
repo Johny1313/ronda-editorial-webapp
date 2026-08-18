@@ -176,8 +176,42 @@ CREATE TABLE IF NOT EXISTS writing_profiles (
   updated_at TEXT NOT NULL
 );
 
+
+CREATE TABLE IF NOT EXISTS carousel_learning_examples (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  topic_id TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  slide_count INTEGER NOT NULL,
+  slides_json TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(user_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_carousel_learning_user ON carousel_learning_examples(user_id, created_at DESC);
+
 DELETE FROM user_sessions WHERE expires_at < CURRENT_TIMESTAMP;
 
 INSERT INTO app_state (key, value, updated_at)
-VALUES ('schema_version', '2.7.1', CURRENT_TIMESTAMP)
+VALUES ('schema_version', '2.7.8', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+
+-- v2.8.0 — Mesa de pauta
+CREATE TABLE IF NOT EXISTS newsroom_stories (
+  id TEXT PRIMARY KEY, topic_key TEXT NOT NULL UNIQUE, title TEXT NOT NULL, editoria TEXT NOT NULL,
+  priority TEXT NOT NULL, editorial_queue TEXT NOT NULL DEFAULT 'watch', workflow_status TEXT NOT NULL DEFAULT 'discovered',
+  score INTEGER NOT NULL DEFAULT 0, assignee_user_id TEXT, verification_level TEXT NOT NULL DEFAULT 'single',
+  first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, last_changed_at TEXT NOT NULL,
+  source_count INTEGER NOT NULL DEFAULT 0, item_count INTEGER NOT NULL DEFAULT 0, latest_run_id TEXT,
+  snapshot_json TEXT NOT NULL DEFAULT '{}', change_summary_json TEXT NOT NULL DEFAULT '{}', published_at TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS newsroom_story_events (id TEXT PRIMARY KEY, story_id TEXT NOT NULL, event_type TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS newsroom_story_notes (id TEXT PRIMARY KEY, story_id TEXT NOT NULL, user_id TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS newsroom_story_followers (story_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(story_id,user_id));
+
+-- Em YOUTUBE_DB (migration separada migrations_youtube/0002_curated_news_channels.sql)
+CREATE TABLE IF NOT EXISTS youtube_curated_channels (
+  channel_id TEXT PRIMARY KEY, title TEXT NOT NULL, handle TEXT, uploads_playlist_id TEXT NOT NULL,
+  thumbnail_url TEXT, subscriber_count INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+  added_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_checked_at TEXT, last_video_at TEXT, failure_count INTEGER NOT NULL DEFAULT 0
+);

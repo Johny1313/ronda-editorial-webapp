@@ -5,6 +5,8 @@ import {
   hashPassword,
   normalizeEmail,
   normalizeStyleSample,
+  normalizeCarouselLearningExample,
+  summarizeCarouselLearning,
   validateEmail,
   validateSlideCount,
   verifyPassword,
@@ -53,4 +55,25 @@ test("normaliza exemplos de escrita e gera guia heurístico", async () => {
   const profile = await analyzeWritingStyle([sample]);
   assert.equal(profile.mode, "heuristic");
   assert.match(writingStylePrompt(profile), /TOM:|RITMO:/);
+});
+
+
+test("memória editorial aprende somente forma de carrosséis aprovados", () => {
+  const example = normalizeCarouselLearningExample({
+    topicId: "politica-1",
+    sourceName: "Portal Teste",
+    slideCount: 5,
+    slides: [
+      { role: "Título principal", title: "Pesquisa mostra disputa apertada", subtitle: "O levantamento registra diferença dentro da margem de erro." },
+      { role: "Contexto", title: "Como foi feito o levantamento", subtitle: "A pesquisa ouviu eleitores em diferentes regiões do país." },
+      { role: "Informação principal", title: "O principal resultado", subtitle: "Os percentuais divulgados indicam um cenário competitivo." },
+      { role: "Conclusão", title: "O que os dados permitem concluir", subtitle: "O resultado retrata o momento da coleta e pode mudar até a votação." },
+      { role: "CTA", title: "Continue acompanhando", subtitle: "Acompanhe as próximas atualizações." },
+    ],
+  });
+  const memory = summarizeCarouselLearning([{ ...example, createdAt: new Date().toISOString() }]);
+  assert.equal(memory.count, 1);
+  assert.match(memory.prompt, /MEMÓRIA EDITORIAL APROVADA/);
+  assert.match(memory.prompt, /Não reutilize nomes, números, fatos ou frases/i);
+  assert.doesNotMatch(memory.prompt, /Pesquisa mostra disputa apertada|Portal Teste/);
 });

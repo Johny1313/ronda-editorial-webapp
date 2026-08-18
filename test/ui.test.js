@@ -70,3 +70,15 @@ test("painel preserva a última ronda válida e mostra diagnóstico da tentativa
   assert.match(app, /roundDiagnosticsSummary/);
   assert.match(app, /lastValidRoundLabel/);
 });
+
+
+test("carrossel só alimenta memória editorial após aprovação explícita", async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="approveCarouselLearning"/);
+  assert.match(app, /approveCarouselLearning/);
+  assert.match(app, /\/api\/profile\/carousel-learning/);
+  assert.doesNotMatch(app, /automaticLearning|autoLearnGeneratedCarousel/);
+});

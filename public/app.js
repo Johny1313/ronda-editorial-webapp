@@ -35,10 +35,14 @@ const state = {
   youtubeDecision: "Todos",
   youtubeEditoria: "Todas",
   youtubeLoading: false,
+  youtubeChannels: [],
+  newsroomData: null,
+  newsroomLoading: false,
   profile: null,
   profileLoading: false,
   activeSlideCount: 7,
   pendingCarouselTopicId: null,
+  carouselEdited: false,
 };
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
@@ -52,6 +56,7 @@ const roundView = document.getElementById("roundView");
 const sourcesView = document.getElementById("sourcesView");
 const monitoringView = document.getElementById("monitoringView");
 const youtubeView = document.getElementById("youtubeView");
+const newsroomView = document.getElementById("newsroomView");
 const profileView = document.getElementById("profileView");
 
 function escapeHtml(value) {
@@ -272,11 +277,13 @@ function showView(view) {
   sourcesView.hidden = view !== "sources";
   monitoringView.hidden = view !== "monitoring";
   youtubeView.hidden = view !== "youtube";
+  newsroomView.hidden = view !== "newsroom";
   profileView.hidden = view !== "profile";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
   document.getElementById("navYouTube").classList.toggle("active", view === "youtube");
+  document.getElementById("navNewsroom").classList.toggle("active", view === "newsroom");
   document.getElementById("navProfile").classList.toggle("active", view === "profile");
   if (view === "sources") renderPortalCards();
   if (view === "monitoring") {
@@ -431,6 +438,19 @@ function youtubeEmpty(title, detail) {
   return `<div class="youtube-empty"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
 }
 
+function newsroomQueueLabel(queue){return ({now:"Pautar agora",rising:"Subindo",watch:"Acompanhar",quiet:"Sem novidade"})[queue]||"Acompanhar";}
+function newsroomVerificationLabel(level){return level==="official"?"Fonte oficial":level==="cross"?"2+ fontes":"Fonte única";}
+function newsroomStatusOptions(value){const labels={discovered:"Descoberto",selected:"Selecionado",investigating:"Em apuração",confirmed:"Confirmado",production:"Produção",published:"Publicado",discarded:"Descartado"};return Object.entries(labels).map(([key,label])=>`<option value="${key}"${key===value?" selected":""}>${label}</option>`).join("");}
+function newsroomStoryMarkup(story){const change=story.changeSummary?.text||"Sem mudança editorial relevante";return `<article class="newsroom-story" data-story-id="${escapeHtml(story.id)}"><div class="story-top"><span class="story-editoria">${escapeHtml(story.editoria)}</span><span class="story-verification ${escapeHtml(story.verificationLevel)}">${escapeHtml(newsroomVerificationLabel(story.verificationLevel))}</span></div><h4>${escapeHtml(story.title)}</h4><p class="story-change">${escapeHtml(change)}</p><div class="story-meta"><span>Índice ${Number(story.score)||0}</span><span>${Number(story.sourceCount)||0} fontes</span><span>${story.assigneeUserId?"Com responsável":"Sem responsável"}</span><span>${escapeHtml(relativeTime(story.lastChangedAt))}</span></div><div class="story-actions"><select data-story-status>${newsroomStatusOptions(story.workflowStatus)}</select><button class="secondary" data-story-assume type="button">Assumir</button></div><div class="story-secondary-actions"><button data-story-follow type="button">Seguir</button><button data-story-note type="button">+ Nota</button></div></article>`;}
+function renderNewsroom(){const payload=state.newsroomData||{};const stories=payload.stories||[];const handoff=payload.handoff||{};const counters=handoff.counters||{};document.getElementById("newsroomUrgent").textContent=counters.urgent||stories.filter(s=>s.queue==="now").length;document.getElementById("newsroomChanged").textContent=counters.changed||0;document.getElementById("newsroomInvestigating").textContent=counters.investigating||0;document.getElementById("newsroomUnassigned").textContent=counters.unassigned||0;document.getElementById("newsroomUpdated").textContent=stories[0]?.updatedAt?`Atualizada ${relativeTime(stories[0].updatedAt)}`:"Sem dados";const queues=["now","rising","watch","quiet"];document.getElementById("newsroomBoard").innerHTML=queues.map(queue=>{const rows=stories.filter(story=>story.queue===queue&&!["published","discarded"].includes(story.workflowStatus));return `<section class="newsroom-column"><div class="newsroom-column-head"><h3>${newsroomQueueLabel(queue)}</h3><span>${rows.length}</span></div>${rows.length?rows.slice(0,20).map(newsroomStoryMarkup).join(""):'<div class="empty"><strong>Sem pautas</strong><span>Nenhuma pauta nesta fila.</span></div>'}</section>`;}).join("");document.getElementById("newsroomHandoff").innerHTML=`<div class="handoff-counters"><div><strong>${counters.discovered||0}</strong><span>novas pautas</span></div><div><strong>${counters.changed||0}</strong><span>mudanças</span></div><div><strong>${counters.investigating||0}</strong><span>em apuração</span></div><div><strong>${counters.unassigned||0}</strong><span>sem responsável</span></div></div><div class="handoff-list">${(handoff.events||[]).slice(0,12).map(event=>`<article class="handoff-item"><strong>${escapeHtml(event.title||"Pauta")}</strong><p>${escapeHtml(event.summary)} · ${escapeHtml(relativeTime(event.createdAt))}</p></article>`).join("")||'<div class="empty"><strong>Sem mudanças recentes</strong><span>A próxima ronda atualizará a passagem.</span></div>'}</div>`;}
+async function loadNewsroom({quiet=false}={}){if(state.newsroomLoading)return state.newsroomData;state.newsroomLoading=true;try{state.newsroomData=await api("/api/newsroom?hours=8");renderNewsroom();return state.newsroomData;}catch(error){if(!quiet)document.getElementById("newsroomBoard").innerHTML=`<div class="empty"><strong>Falha ao carregar a Mesa</strong><span>${escapeHtml(error.message)}</span></div>`;return null;}finally{state.newsroomLoading=false;}}
+async function patchNewsroomStory(id,patch){try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});await loadNewsroom();}catch(error){if(error.status===401){showView("profile");document.getElementById("workspaceTop").scrollIntoView({behavior:"smooth"});}else alert(error.message);}}
+async function addNewsroomNote(id){const note=prompt("Nota editorial para esta pauta:");if(!note)return;try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}/notes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({note})});await loadNewsroom();}catch(error){if(error.status===401)showView("profile");else alert(error.message);}}
+async function toggleNewsroomFollow(id){try{await api(`/api/newsroom/stories/${encodeURIComponent(id)}/follow`,{method:"POST"});await loadNewsroom();}catch(error){if(error.status===401)showView("profile");else alert(error.message);}}
+function renderYouTubeCuration(){const channels=state.youtubeChannels||[];document.getElementById("youtubeCurationCount").textContent=`${channels.length}/30 canais`;document.getElementById("youtubeCurationList").innerHTML=channels.length?channels.map(channel=>`<article class="youtube-curated-channel${channel.active?"":" inactive"}" data-channel-id="${escapeHtml(channel.channelId)}"><img src="${escapeHtml(safeUrl(channel.thumbnail))}" alt=""><div><strong>${escapeHtml(channel.title)}</strong><small>${escapeHtml(channel.handle||channel.channelId)} · ${channel.active?"ativo":"pausado"}</small></div><div class="youtube-curated-actions"><button data-channel-toggle type="button">${channel.active?"Pausar":"Ativar"}</button><button class="danger" data-channel-remove type="button">Remover</button></div></article>`).join(""):'<div class="youtube-empty"><strong>Curadoria vazia</strong><span>Sem canais cadastrados, o radar usa News & Politics e a lista jornalística padrão.</span></div>';}
+async function loadYouTubeCuration(){try{const data=await api("/api/youtube/channels");state.youtubeChannels=data?.channels||[];renderYouTubeCuration();}catch{state.youtubeChannels=[];renderYouTubeCuration();}}
+async function submitYouTubeChannel(event){event.preventDefault();const input=document.getElementById("youtubeChannelInput");const message=document.getElementById("youtubeCurationMessage");message.textContent="Validando canal…";try{await api("/api/youtube/channels",{method:"POST",headers:{"Content-Type":"application/json",...operationHeaders()},body:JSON.stringify({input:input.value})});input.value="";message.textContent="Canal adicionado à curadoria.";await loadYouTubeCuration();}catch(error){message.textContent=error.message;if(error.status===401)openModal("settingsModal");}}
+
 function renderYouTubeOperational() {
   const status = state.youtubeStatus || {};
   const copy = youtubeStatusCopy(status);
@@ -440,6 +460,8 @@ function renderYouTubeOperational() {
   module.title = copy.detail;
   const chips = [`<span class="youtube-status-chip ${copy.type}" title="${escapeHtml(copy.detail)}">${escapeHtml(copy.label)}</span>`];
   if (status.lastSuccessAt) chips.push(`<span class="youtube-status-chip ok">Coleta ${escapeHtml(relativeTime(status.lastSuccessAt))}</span>`);
+  if (status.curationActive) chips.push(`<span class="youtube-status-chip ok">Curadoria ativa · ${Number(status.curatedChannelCount)||0} canais</span>`);
+  else chips.push('<span class="youtube-status-chip">Radar News & Politics</span>');
   if (status.cached) chips.push('<span class="youtube-status-chip warn">Exibindo último cache válido</span>');
   if (status.nextRunAt) chips.push(`<span class="youtube-status-chip">Próxima ${escapeHtml(relativeTime(status.nextRunAt))}</span>`);
   const searchQuota = status.quota?.search;
@@ -516,6 +538,7 @@ async function loadYouTubeLatest({ force = false, quiet = false } = {}) {
       state.youtubeData = response.payload || null;
       state.youtubeStatus = response.payload?.status || state.youtubeStatus;
     }
+    if (force || !state.youtubeChannels.length) await loadYouTubeCuration();
     renderYouTube();
     return state.youtubeData;
   } catch (error) {
@@ -1041,9 +1064,10 @@ function updateCarouselProfileStatus() {
   const profile = state.profile?.writingProfile;
   const loggedIn = Boolean(state.profile?.authenticated);
   document.getElementById("carouselProfileStatus").textContent = profile ? profile.tone || "Perfil personalizado" : "Padrão jornalístico";
+  const learned = Number(state.profile?.carouselLearning?.count) || 0;
   document.getElementById("carouselProfileDetail").textContent = profile
-    ? `${Number(profile.sampleCount) || 0} exemplos · atualizado ${profile.updatedAt ? relativeTime(profile.updatedAt) : "agora"}`
-    : loggedIn ? "Adicione exemplos e atualize o estilo na aba Perfil." : "Entre no Perfil para adaptar o estilo.";
+    ? `${Number(profile.sampleCount) || 0} exemplos de escrita · ${learned} carrosséis aprovados · atualizado ${profile.updatedAt ? relativeTime(profile.updatedAt) : "agora"}`
+    : loggedIn ? `${learned} carrosséis aprovados na memória editorial. Adicione exemplos de escrita para refinar também o tom.` : "Entre no Perfil para adaptar o estilo.";
 }
 
 function carouselAsText(topic, carousel) {
@@ -1193,6 +1217,7 @@ function updateEditedSlide(target) {
   holder.querySelector("[data-subtitle-count]").textContent = `${subtitle.length}/190`;
   holder.classList.toggle("over-limit", title.length > 68 || subtitle.length > 190);
   state.carouselText = carouselAsText(topic, state.activeCarousel);
+  state.carouselEdited = true;
 }
 
 function renderIntelligentCarousel(topic, carousel) {
@@ -1205,8 +1230,12 @@ function renderIntelligentCarousel(topic, carousel) {
     ...carousel,
     slides: (carousel.slides || []).map((slide) => ({ ...slide, evidenceIds: [...(slide.evidenceIds || [])] })),
   };
+  state.carouselEdited = false;
   const reading = carousel.reading || {};
-  const profileLabel = carousel.writingProfile?.active ? `Perfil personalizado · ${Number(carousel.writingProfile.sampleCount) || 0} exemplos` : "Padrão jornalístico";
+  const memoryCount = Number(carousel.writingProfile?.adaptiveMemoryCount ?? state.profile?.carouselLearning?.count) || 0;
+  const profileLabel = carousel.writingProfile?.active
+    ? `Perfil personalizado · ${Number(carousel.writingProfile.sampleCount) || 0} textos · ${memoryCount} aprovados`
+    : memoryCount ? `Memória editorial · ${memoryCount} aprovados` : "Padrão jornalístico";
   document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${String(carousel.analysisMode || "").startsWith("ai-") ? "Workers AI · apenas redação" : "Extração direta da matéria"}</strong></span>`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
@@ -1259,6 +1288,11 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("copyCarouselMessage").textContent = messages.join(" ");
   state.carouselText = carouselAsText(topic, state.activeCarousel);
   document.getElementById("copyCarousel").disabled = !gate.copyAllowed || !cycleReleased;
+  const learnButton = document.getElementById("approveCarouselLearning");
+  if (learnButton) {
+    learnButton.disabled = !gate.copyAllowed || !cycleReleased || !state.profile?.authenticated;
+    learnButton.textContent = state.profile?.authenticated ? "Aprovar e ensinar estilo" : "Entre no Perfil para ensinar";
+  }
 }
 
 async function showCarousel(topicId, { force = false, generate = false } = {}) {
@@ -1289,6 +1323,9 @@ async function showCarousel(topicId, { force = false, generate = false } = {}) {
   document.getElementById("copyCarousel").disabled = true;
   state.carouselText = "";
   state.activeCarousel = null;
+  state.carouselEdited = false;
+  const learnButton = document.getElementById("approveCarouselLearning");
+  if (learnButton) learnButton.disabled = true;
   openModal("carouselModal");
   if (force || generate) await generateActiveCarousel({ force });
 }
@@ -1342,6 +1379,40 @@ async function generateActiveCarousel({ force = false } = {}) {
     }
     setCarouselLoading(false, error.message, { retry: true });
     document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração manual</p><h3>Abra as notícias originais</h3></div></div><div class="carousel-source-list">${topicVerificationLinks(topic).map((link) => `<a class="carousel-source-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}</small></span><em>Abrir para apuração ↗</em></a>`).join("")}</div>`;
+  }
+}
+
+async function approveCarouselLearning() {
+  const message = document.getElementById("copyCarouselMessage");
+  const topic = (state.data?.topics || []).find((item) => item.id === state.activeTopicId);
+  const carousel = state.activeCarousel;
+  if (!topic || !carousel?.slides?.length) return;
+  if (!state.profile?.authenticated) {
+    message.textContent = "Entre no Perfil para salvar este texto na memória editorial.";
+    return;
+  }
+  const button = document.getElementById("approveCarouselLearning");
+  if (button) button.disabled = true;
+  message.textContent = "Salvando o padrão deste carrossel na memória editorial…";
+  try {
+    const response = await api("/api/profile/carousel-learning", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        topicId: topic.id,
+        sourceName: carousel.reading?.selectedSource?.sourceName || "Fonte não informada",
+        slideCount: carousel.slides.length,
+        slides: carousel.slides.map((slide) => ({ role: slide.role, title: slide.title, subtitle: slide.subtitle || slide.body || "" })),
+      }),
+    });
+    state.profile.carouselLearning = { count: Number(response.exampleCount) || 0, updatedAt: response.updatedAt || new Date().toISOString() };
+    state.smartCarousels.clear();
+    updateCarouselProfileStatus();
+    message.textContent = `Estilo aprendido com este carrossel. Memória editorial: ${Number(response.exampleCount) || 0} aprovado(s).`;
+    if (button) button.textContent = "Estilo aprendido ✓";
+  } catch (error) {
+    message.textContent = error.message;
+    if (button) button.disabled = false;
   }
 }
 
@@ -1482,6 +1553,7 @@ document.getElementById("topicsGrid").addEventListener("click", (event) => {
   if (button) showCarousel(button.dataset.carouselTopic);
 });
 document.getElementById("copyCarousel").addEventListener("click", copyCarouselText);
+document.getElementById("approveCarouselLearning")?.addEventListener("click", approveCarouselLearning);
 document.getElementById("carouselSlides").addEventListener("input", (event) => {
   if (event.target.matches("[data-slide-title], [data-slide-subtitle]")) updateEditedSlide(event.target);
 });
@@ -1505,6 +1577,8 @@ document.getElementById("monitoringTermFilters").addEventListener("click", (even
   renderDedicatedMonitoring();
 });
 document.getElementById("collectYouTube").addEventListener("click", collectYouTubeNow);
+document.getElementById("youtubeCurationForm").addEventListener("submit", submitYouTubeChannel);
+document.getElementById("youtubeCurationList").addEventListener("click", async (event) => { const card=event.target.closest("[data-channel-id]"); if(!card)return; const id=card.dataset.channelId; const channel=(state.youtubeChannels||[]).find(item=>item.channelId===id); if(event.target.closest("[data-channel-toggle]")){try{await api(`/api/youtube/channels/${encodeURIComponent(id)}`,{method:"PATCH",headers:{"Content-Type":"application/json",...operationHeaders()},body:JSON.stringify({active:!channel?.active})});await loadYouTubeCuration();}catch(error){alert(error.message);}} if(event.target.closest("[data-channel-remove]")){if(!confirm(`Remover ${channel?.title||"este canal"} da curadoria?`))return;try{await api(`/api/youtube/channels/${encodeURIComponent(id)}`,{method:"DELETE",headers:operationHeaders()});await loadYouTubeCuration();}catch(error){alert(error.message);}} });
 document.getElementById("youtubeSearchInput").addEventListener("input", (event) => { state.youtubeQuery = event.target.value; renderYouTube(); });
 document.getElementById("youtubePeriodFilter").addEventListener("click", (event) => {
   if (!event.target.matches("button")) return;
@@ -1549,6 +1623,10 @@ document.getElementById("historyBack").addEventListener("click", () => {
   document.getElementById("historyList").hidden = false;
   document.getElementById("historyBack").hidden = true;
 });
+document.getElementById("refreshNewsroom").addEventListener("click", () => loadNewsroom());
+document.getElementById("newsroomBoard").addEventListener("change", (event) => { const card=event.target.closest("[data-story-id]"); if(card && event.target.matches("[data-story-status]")) patchNewsroomStory(card.dataset.storyId,{workflowStatus:event.target.value}); });
+document.getElementById("newsroomBoard").addEventListener("click", (event) => { const card=event.target.closest("[data-story-id]"); if(!card)return; if(event.target.closest("[data-story-assume]")) patchNewsroomStory(card.dataset.storyId,{assignToSelf:true}); if(event.target.closest("[data-story-note]")) addNewsroomNote(card.dataset.storyId); if(event.target.closest("[data-story-follow]")) toggleNewsroomFollow(card.dataset.storyId); });
+document.getElementById("navNewsroom").addEventListener("click", () => { showView("newsroom"); loadNewsroom(); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navSources").addEventListener("click", () => { showView("sources"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navYouTube").addEventListener("click", () => { showView("youtube"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });

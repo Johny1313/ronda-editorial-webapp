@@ -173,7 +173,7 @@ async function fetchJson(url, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.7.7" },
+      headers: { Accept: "application/json", "User-Agent": "RondaEditorialYouTube/2.7.8" },
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -476,6 +476,84 @@ export function buildYouTubeCollection(videos, { region = DEFAULT_REGION, previo
     comments: collection.videos.reduce((sum, video) => sum + video.comments, 0),
   };
   return collection;
+}
+
+function youtubeChannelLookup(input) {
+  const value = String(input || "").trim();
+  if (!value) return null;
+  if (/^UC[a-zA-Z0-9_-]{20,}$/.test(value)) return { key:"id", value };
+  if (/^@/.test(value)) return { key:"forHandle", value };
+  try {
+    const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+    if (!/(^|\.)youtube\.com$/i.test(url.hostname)) return null;
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === "channel" && parts[1]) return { key:"id", value:parts[1] };
+    const handle = parts.find((part) => part.startsWith("@"));
+    if (handle) return { key:"forHandle", value:handle };
+    if (parts[0]) return { key:"forHandle", value:`@${parts[0]}` };
+  } catch {}
+  return { key:"forHandle", value:value.startsWith("@") ? value : `@${value}` };
+}
+
+export async function resolveYouTubeChannel({ apiKey, input } = {}) {
+  const lookup = youtubeChannelLookup(input);
+  if (!lookup) throw new Error("Informe um @handle, URL ou ID de canal válido.");
+  let payload = await youtubeRequest(apiKey, "channels", { part:"snippet,contentDetails,statistics", [lookup.key]:lookup.value, maxResults:1 }, { retry:false });
+  let item = payload?.items?.[0];
+  if (!item && lookup.key === "forHandle") {
+    const username = String(lookup.value).replace(/^@/, "");
+    payload = await youtubeRequest(apiKey, "channels", { part:"snippet,contentDetails,statistics", forUsername:username, maxResults:1 }, { retry:false }).catch(() => ({items:[]}));
+    item = payload?.items?.[0];
+  }
+  if (!item?.id) throw new Error("Canal não encontrado no YouTube.");
+  const uploadsPlaylistId = item.contentDetails?.relatedPlaylists?.uploads;
+  if (!uploadsPlaylistId) throw new Error("O canal não possui playlist pública de uploads disponível.");
+  return {
+    channelId:item.id,
+    title:item.snippet?.title || "Canal sem nome",
+    handle:item.snippet?.customUrl || null,
+    uploadsPlaylistId,
+    thumbnail:item.snippet?.thumbnails?.default?.url || item.snippet?.thumbnails?.medium?.url || "",
+    subscriberCount:Number(item.statistics?.subscriberCount)||0,
+    quotaEvents:[{ endpoint:"channels.list", bucket:"general", units:1, calls:1 }],
+  };
+}
+
+async function mapPool(items, concurrency, worker) {
+  const output = new Array(items.length); let cursor = 0;
+  async function runner(){ while(true){ const i=cursor++; if(i>=items.length) return; output[i]=await worker(items[i],i); } }
+  await Promise.all(Array.from({length:Math.max(1,Math.min(concurrency,items.length||1))}, runner));
+  return output;
+}
+
+export async function collectYouTubeCuratedChannels({ apiKey, channels = [], region = DEFAULT_REGION, limit = DEFAULT_LIMIT, previous = null, nowMs = Date.now() } = {}) {
+  const active = (Array.isArray(channels) ? channels : []).filter((channel) => channel?.active !== false && channel?.uploadsPlaylistId);
+  if (!active.length) return collectYouTubeTrending({ apiKey, region, limit, previous, nowMs });
+  const quotaEvents = [];
+  const playlistResults = await mapPool(active.slice(0,30), 4, async (channel) => {
+    try {
+      const payload = await youtubeRequest(apiKey, "playlistItems", { part:"snippet,contentDetails", playlistId:channel.uploadsPlaylistId, maxResults:8 });
+      quotaEvents.push({ endpoint:"playlistItems.list", bucket:"general", units:1, calls:1 });
+      return (payload.items || []).map((item) => ({ id:item.contentDetails?.videoId || item.snippet?.resourceId?.videoId, channelId:channel.channelId })).filter((item)=>item.id);
+    } catch { return []; }
+  });
+  const videoIds = [...new Set(playlistResults.flat().map((entry)=>entry.id))].slice(0,50);
+  if (!videoIds.length) {
+    const cached = restrictYouTubeCollectionToNews(previous);
+    if (cached?.videos?.length) return { collection:{...cached,id:crypto.randomUUID(),collectedAt:new Date(nowMs).toISOString(),cached:true,cacheReason:"Canais curados sem novos uploads acessíveis nesta coleta.",curated:true}, quotaEvents };
+    return { collection:buildYouTubeCollection([], { region, previous:null, collectedAt:new Date(nowMs).toISOString() }), quotaEvents };
+  }
+  const payload = await youtubeRequest(apiKey, "videos", { part:"snippet,statistics,contentDetails", id:videoIds.join(","), maxResults:50, hl:"pt-BR" });
+  quotaEvents.push({ endpoint:"videos.list", bucket:"general", units:1, calls:1 });
+  const allowed = new Set(active.map((channel)=>channel.channelId));
+  const cutoff = nowMs - 7*24*3600000;
+  const sample = (payload.items || []).filter((item)=>allowed.has(item.snippet?.channelId) && Date.parse(item.snippet?.publishedAt || 0)>=cutoff).map((item,index)=>normalizeYouTubeVideo(item,index,nowMs));
+  const videos = sample.sort((a,b)=>Date.parse(b.publishedAt)-Date.parse(a.publishedAt)).slice(0,clamp(limit,5,50));
+  const collection = buildYouTubeCollection(videos,{region:String(region||DEFAULT_REGION).toUpperCase(),previous,collectedAt:new Date(nowMs).toISOString()});
+  collection.curated = true;
+  collection.curatedChannelCount = active.length;
+  collection.filterStats = { sampleCount:sample.length, approvedCount:videos.length };
+  return { collection, quotaEvents };
 }
 
 export async function collectYouTubeTrending({ apiKey, region = DEFAULT_REGION, limit = DEFAULT_LIMIT, previous = null, nowMs = Date.now() } = {}) {
