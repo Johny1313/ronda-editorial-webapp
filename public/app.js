@@ -697,6 +697,8 @@ async function loadLatest({ quiet = false, force = false } = {}) {
 function openModal(id) {
   const modal = document.getElementById(id);
   modal.hidden = false;
+  const panel = modal.querySelector(".modal");
+  if (panel) panel.scrollTop = 0;
   const input = modal.querySelector("input");
   if (input) setTimeout(() => input.focus(), 0);
 }
@@ -1317,6 +1319,8 @@ function renderIntelligentCarousel(topic, carousel) {
     learnButton.disabled = !gate.copyAllowed || !cycleReleased || !state.profile?.authenticated;
     learnButton.textContent = state.profile?.authenticated ? "Aprovar e ensinar estilo" : "Entre no Perfil para ensinar";
   }
+  const modalPanel = document.querySelector("#carouselModal .modal");
+  if (modalPanel) modalPanel.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function showCarousel(topicId, { force = false, generate = false } = {}) {

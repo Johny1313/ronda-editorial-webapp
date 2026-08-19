@@ -75,3 +75,7 @@
 .source-health-link{margin-left:auto;padding:5px 9px;border:1px solid #d4e4da;border-radius:7px;background:#fff;color:var(--green);font-size:9px;font-weight:850;cursor:pointer}.source-health-link:hover{background:#eef7f2}.show-all-filter{padding:8px 11px;border:1px solid #cfe0d6;border-radius:9px;background:#fff;color:var(--green);font-size:10px;font-weight:850;cursor:pointer;white-space:nowrap}.show-all-filter:hover{background:#edf7f1}.source-name-label{color:#48564f;font-size:9px;font-weight:750}.source-badge{cursor:default!important}.source-badge:hover{background:inherit!important;color:inherit!important}
 
 .source-health[hidden]{display:none}
+
+
+/* Carrossel — ordem operacional v2.8.2 */
+.carousel-slides{margin:10px 0 18px}.carousel-slides:empty{display:none}.carousel-meta{margin:0 0 14px}.carousel-reading{margin-top:14px}

@@ -1,3 +1,10 @@
+# Ronda Editorial v2.8.2
+
+- Reorganiza o modal do carrossel para priorizar o resultado: header e controles → cards dos slides → informações editoriais → apuração e evidências.
+- Elimina o scroll longo antes do roteiro e reposiciona automaticamente o modal no topo após a geração.
+- Mantém perfil de escrita, quantidade de slides e botão Gerar novamente no cabeçalho operacional.
+- Preserva todo o conteúdo de apuração, rastreabilidade, análise, entidades e fontes abaixo dos cards.
+
 # Ronda Editorial v2.8.1
 
 - Remove os chips individuais de veículos da home da Ronda e substitui por um resumo compacto, não clicável.

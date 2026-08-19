@@ -4,7 +4,7 @@ Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedica
 
 ## Versão 2.8.0
 
-A v2.8.1 fortalece a geração de carrosséis em três etapas: leitura obrigatória de uma matéria publicada, redação ancorada em evidências e validação final de coerência. Frases incompletas, trechos concatenados e tabelas de percentuais sem contexto são rejeitados antes de o roteiro ser liberado.
+A v2.8.2 fortalece a geração de carrosséis em três etapas: leitura obrigatória de uma matéria publicada, redação ancorada em evidências e validação final de coerência. Frases incompletas, trechos concatenados e tabelas de percentuais sem contexto são rejeitados antes de o roteiro ser liberado.
 
 A evolução de estilo passa a ser persistente por perfil. O sistema **não se treina automaticamente com o próprio texto gerado**: isso reforçaria erros. Em vez disso, o usuário pode revisar/editar um roteiro e clicar em **Aprovar e ensinar estilo**. Até 24 carrosséis aprovados alimentam uma memória compacta de padrões de escrita (comprimento, ritmo e estrutura), sem reutilizar fatos, nomes ou números antigos.
 

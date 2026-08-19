@@ -99,6 +99,11 @@ assert.match(html, /id="youtubeCurationForm"/);
 assert.match(html, /id="navProfile"/);
 assert.match(html, /id="profileView"/);
 assert.match(html, /id="carouselSlideCount"/);
+assert.ok(
+  html.indexOf('id="carouselSlides"') < html.indexOf('id="carouselMeta"')
+  && html.indexOf('id="carouselMeta"') < html.indexOf('id="carouselReading"'),
+  "O carrossel deve aparecer antes das informações editoriais e da apuração.",
+);
 assert.match(html, /id="youtubeView"/);
 assert.match(headers, /i\.ytimg\.com/);
 assert.doesNotMatch(html, /<canvas|youtube-chart|youtubeChart/i);

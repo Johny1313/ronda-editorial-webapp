@@ -1,0 +1,7 @@
+Ronda Editorial v2.8.2
+
+1. Preserve a estrutura das pastas ao enviar para o GitHub.
+2. Confirme src/index.js com VERSION 2.8.2.
+3. Confirme public/index.html com app.js?v=2.8.2 e styles.css?v=2.8.2.
+4. Esta versão não adiciona migrations.
+5. O modal do carrossel agora exibe os cards imediatamente após o header/controles.
