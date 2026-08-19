@@ -151,7 +151,7 @@ function itemWithinPeriod(item) {
 
 function sourceMarkup(item, primary = false) {
   const platform = item.platform || (item.kind === "portal" ? "Portal" : "Rede");
-  return `<div class="${primary ? "primary-source" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><button class="source-name-button" data-portal="${escapeHtml(item.collectorName || item.sourceName)}" type="button" title="Mostrar somente esta fonte">${escapeHtml(item.sourceName)}</button><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
+  return `<div class="${primary ? "primary-source" : "source"}"><div><div class="kicker"><span class="kind ${escapeHtml(platform.toLowerCase())}">${escapeHtml(platform)}</span><span class="source-name-label">${escapeHtml(item.sourceName)}</span><span>${escapeHtml(formatDate(item.publishedAt))}</span></div><h3>${escapeHtml(item.title)}</h3><div class="source-footer"><a class="open" href="${escapeHtml(safeUrl(item.url))}" target="_blank" rel="noreferrer">Abrir para apuração ↗</a></div></div></div>`;
 }
 
 function sourceInitials(name) {
@@ -226,33 +226,38 @@ function renderPortalCards() {
 function renderSourceHealth(message = "", warning = false) {
   const holder = document.getElementById("sourceHealth");
   if (message) {
-    holder.innerHTML = `<span class="health-message ${warning ? "warn" : ""}">${escapeHtml(message)}</span>`;
+    holder.innerHTML = `<span class="health-message ${warning ? "warn" : ""}">${escapeHtml(message)}</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver diagnóstico</button>`;
+    bindSourceHealthLink();
     return;
   }
   const attemptSources = Array.isArray(state.attemptDiagnostics?.sources) ? state.attemptDiagnostics.sources : [];
   const sources = attemptSources.length ? attemptSources : state.data?.sources || [];
   if (!sources.length) {
-    holder.innerHTML = '<span class="health-label">Fontes ainda não consultadas</span>';
+    holder.innerHTML = '<span class="health-label">Fontes ainda não consultadas</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button>';
+    bindSourceHealthLink();
     return;
   }
   const portals = sources.filter((source) => sourceRegion(source) !== "Rede");
-  const okCount = portals.filter((source) => source.ok && Number(source.count) > 0).length;
-  const attemptLabel = attemptSources.length
-    ? `Última tentativa ${okCount}/${portals.length} · dados da ronda válida preservados`
-    : `Portais ${okCount}/${portals.length}`;
-  holder.innerHTML = `<span class="health-label">${escapeHtml(attemptLabel)}</span>${["Brasil", "Mundo", "Rede"].map((region) => {
-    const regionalSources = sources.filter((source) => sourceRegion(source) === region);
-    if (!regionalSources.length) return "";
-    return `<span class="health-region">${escapeHtml(region)}</span>${regionalSources.map((source) => {
-      const available = source.ok && Number(source.count) > 0;
-      const portalAttribute = available ? `data-portal="${escapeHtml(source.name)}"` : "disabled";
-      const route = sourceRouteLabel(source);
-      const title = sourceDiagnosticTitle(source);
-      const status = available ? `${source.count}${sourceRouteLabel(source, true) ? ` ${sourceRouteLabel(source, true)}` : ""}` : source.ok ? "sem novas" : sourceFailureLabel(source, true);
-      const stateClass = source.ok ? `ok${source.cached ? " cache" : ""}${source.degraded ? " degraded" : ""}` : `error ${source.errorCode || "failed"}`;
-      return `<button class="health-chip ${stateClass}${state.portal === source.name ? " selected" : ""}" ${portalAttribute} type="button" aria-pressed="${state.portal === source.name}" title="${escapeHtml(title)}"><span class="health-icon">${escapeHtml(sourceInitials(source.name))}</span>${escapeHtml(source.name)} · ${escapeHtml(status)}</button>`;
-    }).join("")}`;
-  }).join("")}`;
+  const operational = portals.filter((source) => source.ok).length;
+  const withNews = portals.filter((source) => source.ok && Number(source.count) > 0).length;
+  const cached = portals.filter((source) => source.ok && source.cached).length;
+  const attention = portals.filter((source) => !source.ok || source.degraded).length;
+  const prefix = attemptSources.length ? "Última tentativa · dados da ronda válida preservados" : "Fontes";
+  const parts = [`${operational}/${portals.length} operacionais`, `${withNews} com conteúdo`];
+  if (cached) parts.push(`${cached} em cache`);
+  if (attention) parts.push(`${attention} com atenção`);
+  holder.innerHTML = `<span class="health-label"><strong>${escapeHtml(prefix)}</strong> · ${parts.map(escapeHtml).join(" · ")}</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button>`;
+  bindSourceHealthLink();
+}
+
+function bindSourceHealthLink() {
+  document.getElementById("openSourcesFromHealth")?.addEventListener("click", () => {
+    state.portal = null;
+    updatePortalFilter();
+    showView("sources");
+    renderPortalCards();
+    document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" });
+  });
 }
 
 function setSourceSegment(value) {
@@ -279,6 +284,7 @@ function showView(view) {
   youtubeView.hidden = view !== "youtube";
   newsroomView.hidden = view !== "newsroom";
   profileView.hidden = view !== "profile";
+  document.getElementById("sourceHealth").hidden = view !== "round";
   document.getElementById("navRound").classList.toggle("active", view === "round");
   document.getElementById("navSources").classList.toggle("active", view === "sources");
   document.getElementById("navMonitoring").classList.toggle("active", view === "monitoring");
@@ -586,6 +592,24 @@ async function collectYouTubeNow() {
   }
 }
 
+function resetRoundFilters() {
+  state.query = "";
+  state.period = 1440;
+  state.source = "Todos";
+  state.region = "Todas";
+  state.editoria = "Todas";
+  state.portal = null;
+  state.expanded.clear();
+  document.getElementById("searchInput").value = "";
+  document.querySelectorAll("#periodFilter button").forEach((button) => button.classList.toggle("active", button.dataset.value === "1440"));
+  setSourceSegment("Todos");
+  setRegionSegment("Todas");
+  document.querySelectorAll("#editoriaFilter [data-editoria]").forEach((button) => button.classList.toggle("active", button.dataset.editoria === "Todas"));
+  updatePortalFilter();
+  renderSourceHealth();
+  render();
+}
+
 function filterByPortal(name) {
   state.portal = name || null;
   const matchingItem = (state.data?.items || []).find((item) => item.collectorName === name || item.sourceName === name);
@@ -632,7 +656,7 @@ function render() {
     const open = state.expanded.has(topic.id);
     const editoria = topic.editoria || "Notícias";
     const carousel = topic.carousel || {};
-    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<button class="source-badge" data-portal="${escapeHtml(source)}" type="button" title="Filtrar por ${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Leitura de 1 matéria selecionada com fallback da mesma fonte</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
+    return `<article class="card ${escapeHtml(topic.tone)}"><div class="accent"></div><div class="card-body"><div class="topline"><div class="topic-labels"><span class="priority"><i></i>${escapeHtml(topic.priority)}</span><span class="editoria-badge">${escapeHtml(editoria)}</span></div><span class="score">Índice ${Number(topic.score) || 0}</span></div><h2>${escapeHtml(topic.title)}</h2><div class="card-sources"><span>Fontes</span>${sources.slice(0, 6).map((source) => `<span class="source-badge">${escapeHtml(source)}</span>`).join("")}${sources.length > 6 ? `<span class="source-badge">+${sources.length - 6}</span>` : ""}</div><div class="published"><span>Última postagem</span><strong>${escapeHtml(formatDate(latest))}</strong><span class="relative">${escapeHtml(relativeTime(latest))}</span></div><div class="momentum"><span class="trend">↗</span><span>${escapeHtml(topic.momentum)}</span><span class="calculated">calculado nesta ronda</span></div><div class="recommendation"><strong>Recomendação editorial:</strong> ${escapeHtml(topic.recommendation || "Confirmar as informações nas fontes originais antes de publicar.")}</div><div class="carousel-teaser"><div><span>Leitura inteligente</span><strong>Leitura de 1 matéria selecionada com fallback da mesma fonte</strong></div><div><span>Formato</span><strong>${escapeHtml(carousel.postModel || "Instagram · 7 slides")}</strong></div><button data-carousel-topic="${escapeHtml(topic.id)}" type="button">Gerar roteiro de carrossel →</button></div>${sourceMarkup(primary, true)}${additional.length ? `<button class="toggle" data-toggle="${escapeHtml(topic.id)}" aria-expanded="${open}" type="button"><span>${open ? "Ocultar outros conteúdos" : `Ver mais ${additional.length} ${additional.length === 1 ? "conteúdo" : "conteúdos"}`}</span><span>${open ? "⌃" : "⌄"}</span></button>` : ""}${open ? `<div class="source-list">${additional.map((item) => sourceMarkup(item)).join("")}</div>` : ""}</div></article>`;
   }).join("");
 
   grid.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -1631,10 +1655,11 @@ document.getElementById("navSources").addEventListener("click", () => { showView
 document.getElementById("navMonitoring").addEventListener("click", () => { showView("monitoring"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navYouTube").addEventListener("click", () => { showView("youtube"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("navProfile").addEventListener("click", () => { showView("profile"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
-document.getElementById("navRound").addEventListener("click", () => { showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
+document.getElementById("navRound").addEventListener("click", () => { if (state.portal) { state.portal = null; setSourceSegment("Todos"); setRegionSegment("Todas"); updatePortalFilter(); renderSourceHealth(); render(); } showView("round"); document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }); });
 document.getElementById("goTop").addEventListener("click", () => document.getElementById("workspaceTop").scrollIntoView({ behavior: "smooth" }));
-document.getElementById("showAllSources").addEventListener("click", () => filterByPortal(null));
-document.getElementById("clearPortalFilter").addEventListener("click", () => filterByPortal(null));
+document.getElementById("showAllSources").addEventListener("click", () => { resetRoundFilters(); showView("round"); document.querySelector(".controls").scrollIntoView({ behavior: "smooth", block: "start" }); });
+document.getElementById("clearPortalFilter").addEventListener("click", () => { state.portal = null; setSourceSegment("Todos"); setRegionSegment("Todas"); updatePortalFilter(); renderSourceHealth(); render(); });
+document.getElementById("clearAllFilters").addEventListener("click", resetRoundFilters);
 document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-portal]");
   if (!button) return;

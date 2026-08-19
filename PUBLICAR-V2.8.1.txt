@@ -1,0 +1,13 @@
+RONDA EDITORIAL v2.8.1 — AJUSTE DE FILTROS E FONTES NA HOME
+
+1. Envie o conteúdo deste pacote preservando as pastas.
+2. Confirme no GitHub:
+   - src/index.js -> const VERSION = "2.8.1";
+   - public/index.html -> /styles.css?v=2.8.1 e /app.js?v=2.8.1
+3. Não há nova migration D1 nesta versão.
+4. O ajuste é apenas de UX/filtros:
+   - veículos individuais saem da home;
+   - seleção por veículo fica na aba Fontes;
+   - botão Mostrar tudo limpa todos os filtros;
+   - Mostrar todas as fontes encerra filtro por veículo;
+   - voltar para Ronda não mantém veículo preso.

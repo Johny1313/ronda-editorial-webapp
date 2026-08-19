@@ -82,3 +82,17 @@ test("carrossel só alimenta memória editorial após aprovação explícita", a
   assert.match(app, /\/api\/profile\/carousel-learning/);
   assert.doesNotMatch(app, /automaticLearning|autoLearnGeneratedCarousel/);
 });
+
+
+test("home não expõe chips de veículos clicáveis e oferece Mostrar tudo", async () => {
+  const [html, app] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="clearAllFilters"[^>]*>Mostrar tudo</);
+  assert.match(app, /function resetRoundFilters\(/);
+  assert.match(app, /source-health-link/);
+  assert.doesNotMatch(app, /class="source-badge" data-portal/);
+  assert.doesNotMatch(app, /class="source-name-button" data-portal/);
+  assert.match(app, /operacionais/);
+});

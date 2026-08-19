@@ -1,3 +1,12 @@
+# Ronda Editorial v2.8.1
+
+- Remove os chips individuais de veículos da home da Ronda e substitui por um resumo compacto, não clicável.
+- Mantém a seleção por veículo exclusivamente na aba Fontes.
+- Adiciona botão **Mostrar tudo** na Ronda para limpar busca, período, tipo, região, editoria e fonte selecionada.
+- O filtro por fonte passa a exibir **Mostrar todas as fontes** com destaque.
+- Ao voltar para a Ronda pelo menu, uma seleção de veículo não permanece presa.
+- Nomes de fontes dentro dos cards deixam de funcionar como filtros acidentais.
+
 # 2.8.0 — Mesa de pauta, passagem de turno e curadoria YouTube
 
 - Pautas persistentes entre rondas e detecção de mudanças.

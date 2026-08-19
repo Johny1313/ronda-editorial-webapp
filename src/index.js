@@ -116,7 +116,7 @@ import {
   restrictYouTubeTermResultToNews,
 } from "./youtube.js";
 
-const VERSION = "2.8.0";
+const VERSION = "2.8.1";
 const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {

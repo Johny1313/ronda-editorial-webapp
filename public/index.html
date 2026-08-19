@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f4">
   <meta name="description" content="Ronda editorial automática para acompanhamento de portais e fontes públicas.">
   <title>Ronda Editorial 24h</title>
-  <link rel="stylesheet" href="/styles.css?v=2.8.0">
+  <link rel="stylesheet" href="/styles.css?v=2.8.1">
 </head>
 <body>
   <main class="app">
@@ -35,7 +35,7 @@
       </header>
 
       <div class="notice"><span>Webapp</span><strong id="automationText">Automação online em verificação.</strong> A ronda e o monitoramento dedicado continuam no Cloudflare mesmo com esta janela fechada; resultados de termos aparecem somente na aba Termos.</div>
-      <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span></div>
+      <div class="source-health" id="sourceHealth"><span class="health-label">Fontes ainda não consultadas</span><button class="source-health-link" id="openSourcesFromHealth" type="button">Ver fontes</button></div>
 
       <section class="sources-view" id="sourcesView" hidden aria-labelledby="sourcesTitle">
         <div class="sources-heading">
@@ -216,6 +216,7 @@
         <div class="segmented" id="regionFilter" aria-label="Região das fontes">
           <button class="active" data-value="Todas" type="button">Todas regiões</button><button data-value="Brasil" type="button">Brasil</button><button data-value="Mundo" type="button">Mundo</button>
         </div>
+        <button class="show-all-filter" id="clearAllFilters" type="button">Mostrar tudo</button>
       </section>
 
       <section class="editoria-controls" aria-label="Filtrar por editoria">
@@ -239,7 +240,7 @@
         </div>
       </section>
 
-      <div class="portal-filter" id="portalFilter" hidden><span>Exibindo somente:</span><strong id="portalFilterName"></strong><button id="clearPortalFilter" type="button">Remover filtro ×</button></div>
+      <div class="portal-filter" id="portalFilter" hidden><span>Exibindo somente:</span><strong id="portalFilterName"></strong><button id="clearPortalFilter" type="button">Mostrar todas as fontes</button></div>
 
       <div class="heading"><div><h2>Assuntos em destaque</h2><p>Ordenados por relevância editorial, recorrência e atualidade</p></div><span class="last-update" id="lastUpdate">Sem coleta</span></div>
       <section class="grid" id="topicsGrid" aria-live="polite"></section>
@@ -288,6 +289,6 @@
     </section>
   </div>
 
-  <script src="/app.js?v=2.8.0" defer></script>
+  <script src="/app.js?v=2.8.1" defer></script>
 </body>
 </html>
