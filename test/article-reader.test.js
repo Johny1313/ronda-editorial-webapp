@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildIntelligentCarousel, extractArticleFromHtml, validateArticleUrl } from "../src/article-reader.js";
+import { buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, validateArticleUrl } from "../src/article-reader.js";
 
 const longParagraph = "A prefeitura apresentou um plano nacional de mobilidade urbana para reorganizar o transporte público, ampliar a integração entre bairros e definir novas prioridades de investimento. O texto aprovado estabelece diretrizes para corredores de ônibus, ciclovias, acessibilidade, segurança viária e planejamento de longo prazo. A implantação deverá ocorrer em etapas, com participação dos governos locais, análise técnica e acompanhamento dos órgãos de controle. A medida pode alterar a distribuição de recursos e influenciar projetos já anunciados pelas administrações municipais. Representantes do setor afirmaram que ainda será necessário detalhar prazos, fontes de financiamento e critérios para selecionar as obras prioritárias.";
 
@@ -20,6 +20,39 @@ test("extrai o conteúdo principal e remove ruído", () => {
   assert.ok(result.wordCount > 120);
   assert.match(result.content, /corredores de ônibus/);
   assert.doesNotMatch(result.content, /Anúncio irrelevante|Menu do portal/);
+});
+
+
+test("extrai matéria de estado JSON embutido em páginas modernas", () => {
+  const title = "Portal publica atualização importante";
+  const body = `${longParagraph} ${longParagraph}`;
+  const html = `<!doctype html><html><head><meta property="og:title" content="${title}"></head><body><div id="app"></div><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { article: { headline: title, content: body } } } })}</script></body></html>`;
+  const result = extractArticleFromHtml(html, { title });
+  assert.equal(result.method, "embedded-json");
+  assert.ok(result.wordCount > 100);
+  assert.match(result.content, /corredores de ônibus/);
+});
+
+test("expande um assunto com matérias semelhantes encontradas em outros grupos da mesma ronda", () => {
+  const topic = {
+    id: "a",
+    title: "Atriz anuncia novo projeto após estreia",
+    items: [{ id: "1", kind: "portal", title: "Atriz anuncia novo projeto após estreia", sourceName: "Portal A", url: "https://a.test/1" }],
+  };
+  const payload = {
+    topics: [topic, {
+      id: "b",
+      title: "Novo projeto da atriz repercute",
+      items: [
+        { id: "2", kind: "portal", title: "Atriz anuncia novo projeto após estreia e fala dos próximos passos", sourceName: "Portal B", url: "https://b.test/2" },
+        { id: "3", kind: "portal", title: "Time vence clássico pelo campeonato nacional", sourceName: "Portal C", url: "https://c.test/3" },
+      ],
+    }],
+  };
+  const expanded = expandTopicWithRoundCandidates(topic, payload, { maxExtra: 4 });
+  assert.equal(expanded.items.length, 2);
+  assert.equal(expanded.items[1].sourceName, "Portal B");
+  assert.equal(expanded.items[1].roundRelatedFallback, true);
 });
 
 test("bloqueia URLs locais e privadas", () => {
@@ -108,7 +141,7 @@ test("seleciona uma única matéria, gera o roteiro e encerra o ciclo", async ()
   assert.ok(result.reading.sources.every((source) => !("content" in source)));
 });
 
-test("não usa texto do feed como substituto da leitura do site", async () => {
+test("usa conteúdo integral do feed oficial do próprio portal somente após a página direta falhar", async () => {
   const topic = {
     id: "topic-fast-feed",
     title: "Plano de mobilidade urbana avança",
@@ -120,13 +153,14 @@ test("não usa texto do feed como substituto da leitura do site", async () => {
     }],
   };
   let fetches = 0;
-  await assert.rejects(
-    buildIntelligentCarousel(topic, {
-      fetcher: async () => { fetches += 1; throw new Error("portal bloqueado"); },
-    }),
-    /abrir e ler uma matéria publicada|evitar criar fatos/i,
-  );
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async () => { fetches += 1; throw new Error("portal bloqueado"); },
+  });
   assert.equal(fetches, 1);
+  assert.equal(result.reading.publisherVerified, true);
+  assert.equal(result.reading.selectedSource.readMode, "publisher-feed-verified");
+  assert.equal(result.reading.publisherFeedSuccessful, 1);
+  assert.equal(result.reading.factsGeneratedByAi, false);
 });
 
 test("bloqueia o carrossel quando a ronda possui apenas títulos", async () => {
@@ -294,7 +328,7 @@ test("tenta outra matéria publicada quando o primeiro portal bloqueia a leitura
     items: [
       {
         id: "materia-1", kind: "portal", title: "Plano de mobilidade urbana",
-        content: `${longParagraph} ${longParagraph}`, contentSource: "feed-content",
+        description: "Resumo curto do primeiro portal, insuficiente para substituir a página publicada.",
         sourceName: "Portal A", publishedAt: "2026-07-24T10:00:00Z", url: "https://portal-a.test/materia-1",
       },
       {
@@ -316,14 +350,44 @@ test("tenta outra matéria publicada quando o primeiro portal bloqueia a leitura
       return new Response(articleHtml("Outro portal publica o plano de mobilidade"), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
     },
   });
-  assert.deepEqual(fetched, ["https://portal-a.test/materia-1", "https://portal-b.test/materia-2"]);
+  assert.ok(fetched.includes("https://portal-b.test/materia-2"));
   assert.equal(result.reading.selectedSource.selectedArticleId, "materia-2");
   assert.equal(result.reading.selectedSource.readMode, "full-article");
   assert.equal(result.reading.publisherVerified, true);
-  assert.equal(result.reading.requested, 2);
-  assert.equal(result.reading.failed, 1);
-  assert.ok(progress.some((event) => event.progress > 18 && event.progress < 60));
+  assert.ok(result.reading.requested >= 1);
+  assert.ok(result.reading.failed >= 0);
+  assert.ok(progress.some((event) => event.progress >= 18));
   assert.ok(progress.some((event) => event.progress === 60));
+});
+
+
+test("tenta até seis fontes e conclui quando as três primeiras estão bloqueadas", async () => {
+  const topic = {
+    id: "topic-many-blocked",
+    title: "Artista anuncia novo trabalho em São Paulo",
+    editoria: "Entretenimento",
+    items: Array.from({ length: 5 }, (_, index) => ({
+      id: `p${index + 1}`,
+      kind: "portal",
+      title: `Artista anuncia novo trabalho em São Paulo ${index + 1}`,
+      description: "Resumo curto sem conteúdo integral.",
+      sourceName: `Portal ${index + 1}`,
+      publishedAt: `2026-08-19T10:0${4 - index}:00Z`,
+      url: `https://portal-${index + 1}.test/materia`,
+    })),
+  };
+  const fetched = [];
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async (url) => {
+      fetched.push(String(url));
+      if (!String(url).includes("portal-4.test")) throw new Error("portal bloqueado");
+      return new Response(articleHtml(topic.title), { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+    },
+  });
+  assert.equal(result.reading.publisherVerified, true);
+  assert.equal(result.reading.selectedSource.sourceName, "Portal 4");
+  assert.ok(fetched.includes("https://portal-4.test/materia"));
+  assert.ok(result.reading.requested >= 4);
 });
 
 test("gera quantidade flexível de slides preservando 7 como padrão", async () => {

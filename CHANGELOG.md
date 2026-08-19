@@ -1,3 +1,13 @@
+# Ronda Editorial v2.8.4
+
+## Leitura de matérias mais resiliente
+- tenta até 6 fontes publicadoras relacionadas ao assunto;
+- procura matérias semelhantes em outros agrupamentos da mesma ronda quando o cluster original só contém portais bloqueados;
+- reconhece conteúdo de matéria embutido em JSON de páginas modernas (ex.: __NEXT_DATA__);
+- aceita como contingência apenas conteúdo integral do feed oficial do próprio portal, com no mínimo 120 palavras, URL direta do publicador e validação de relevância; resumos e descrições continuam proibidos como base factual;
+- mantém a regra de não gerar fatos: a IA só redige a partir das evidências verificadas;
+- diferencia na interface matéria lida diretamente, cache e feed oficial integral.
+
 # Ronda Editorial v2.8.3
 
 ## Conclusão resiliente do carrossel

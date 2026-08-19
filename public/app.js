@@ -1200,7 +1200,7 @@ async function waitForIntelligentJob(jobId, requestSerial, pollAfterMs = 900) {
     if (job.status === "succeeded" && response?.data?.slides?.length) return response.data;
     if (job.status === "failed") {
       const detail = job.error || job.message || "O processamento foi interrompido.";
-      throw new Error(`${detail} O ciclo foi encerrado e o sistema está liberado para tentar uma nova leitura.`);
+      throw new Error(/ciclo (?:foi )?encerrado/i.test(detail) ? detail : `${detail} O ciclo foi encerrado e o sistema está liberado para tentar uma nova leitura.`);
     }
     setCarouselJobProgress(job);
   }
@@ -1269,7 +1269,11 @@ function renderIntelligentCarousel(topic, carousel) {
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
   const selectedSource = reading.selectedSource || (reading.sources || [])[0] || {};
-  const modeLabel = selectedSource.readMode === "full-article-cache" ? "Matéria já extraída · cache" : "Matéria lida no portal";
+  const modeLabel = selectedSource.readMode === "full-article-cache"
+    ? "Matéria já extraída · cache"
+    : selectedSource.readMode === "publisher-feed-verified"
+      ? "Conteúdo integral · feed oficial do portal"
+      : "Matéria lida no portal";
   const selection = selectedSource.selection || {};
   const cycleReleased = Boolean(carousel.cycle?.released && carousel.cycle?.nextCycleAllowed && reading.cycleComplete);
   readingHolder.innerHTML = `<div class="carousel-section-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>O roteiro só existe depois de ler uma matéria publicada</h3></div><span>${reading.publisherVerified ? "Fonte verificada" : "Sem fonte verificada"}</span></div><div class="reading-stats"><span><small>Fonte selecionada</small><strong>${escapeHtml(selectedSource.sourceName || "Não informada")}</strong></span><span><small>Modo de leitura</small><strong>${escapeHtml(modeLabel)}</strong></span><span><small>Palavras analisadas</small><strong>${Number(reading.totalWords) || 0}</strong></span><span><small>Seleção</small><strong>${selection.score ? `${Number(selection.score)} pontos · ${Number(selection.candidatesEvaluated) || 1} avaliadas` : "Melhor fonte disponível"}</strong></span><span class="cycle-release"><small>Ciclo</small><strong>${cycleReleased ? "Encerrado · próximo ciclo liberado" : "Finalização pendente"}</strong></span></div>`;
@@ -1301,9 +1305,10 @@ function renderIntelligentCarousel(topic, carousel) {
   document.getElementById("carouselSources").innerHTML = `<div class="carousel-sources-head"><div><p class="eyebrow">Apuração obrigatória</p><h3>Matéria utilizada e links adicionais</h3></div><span>${verificationLinks.length} ${verificationLinks.length === 1 ? "notícia" : "notícias"}</span></div><div class="carousel-source-list">${verificationLinks.map((link) => {
     const source = readingSources.get(safeUrl(link.url));
     const direct = /^full-article/.test(source?.readMode || "");
-    const level = direct ? "Matéria lida" : source?.contentLevel === "content" ? "Fallback · texto do feed" : source?.contentLevel === "summary" ? "Fallback · resumo do feed" : source ? "Fallback · somente título" : "Link adicional";
-    const status = source ? `${level} · ${Number(source.wordCount) || 0} palavras${source.liveReadError ? ` · ${source.liveReadError}` : ""}` : "Link adicional para apuração";
-    const sourceClass = direct ? "read-ok" : source ? "read-fallback" : "";
+    const publisherFeed = source?.readMode === "publisher-feed-verified";
+    const level = direct ? "Matéria lida" : publisherFeed ? "Feed oficial integral · fonte verificada" : source?.contentLevel === "content" ? "Fallback · texto do feed" : source?.contentLevel === "summary" ? "Fallback · resumo do feed" : source ? "Fallback · somente título" : "Link adicional";
+    const status = source ? `${level} · ${Number(source.wordCount) || 0} palavras${source.liveReadError && !publisherFeed ? ` · ${source.liveReadError}` : ""}` : "Link adicional para apuração";
+    const sourceClass = direct || publisherFeed ? "read-ok" : source ? "read-fallback" : "";
     return `<a class="carousel-source-link ${sourceClass}" href="${escapeHtml(safeUrl(link.url))}" target="_blank" rel="noreferrer"><span><strong>${escapeHtml(link.title)}</strong><small>${escapeHtml(link.sourceName)}${link.publishedAt ? ` · ${escapeHtml(formatDate(link.publishedAt))}` : ""}</small><small class="read-status">${escapeHtml(status)}</small></span><em>Abrir para apuração ↗</em></a>`;
   }).join("")}</div>`;
   document.getElementById("carouselDisclaimer").textContent = carousel.disclaimer || "Revise e confirme as informações antes de publicar.";

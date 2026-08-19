@@ -1,0 +1,7 @@
+Ronda Editorial v2.8.4
+
+1. Preserve as pastas src/, public/, scripts/, test/, migrations/ e migrations_youtube/.
+2. Confirme src/index.js com const VERSION = "2.8.4".
+3. Confirme public/index.html com styles.css?v=2.8.4 e app.js?v=2.8.4.
+4. Não há nova migration D1 nesta versão.
+5. Faça o upload, aguarde npm run build e o deploy do Cloudflare.

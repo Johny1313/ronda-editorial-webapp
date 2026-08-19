@@ -1,5 +1,5 @@
 import { buildCarouselBrief, buildTopics, classifyEditoria } from "./clustering.js";
-import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
+import { ARTICLE_ANALYSIS_MODEL, buildIntelligentCarousel, expandTopicWithRoundCandidates, extractArticleFromHtml, intelligentCarouselCacheKey } from "./article-reader.js";
 import { collectRound, FEEDS, summarizePortalStatuses } from "./collector.js";
 import {
   acquireLock,
@@ -116,7 +116,7 @@ import {
   restrictYouTubeTermResultToNews,
 } from "./youtube.js";
 
-const VERSION = "2.8.3";
+const VERSION = "2.8.4";
 const INTELLIGENT_JOB_STALE_LABEL = "2 minutos";
 const JSON_HEADERS = { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" };
 const SECURITY_HEADERS = {
@@ -631,7 +631,7 @@ async function resolveTopicForIntelligentJob(env, job) {
   if (!payload?.ok || !Array.isArray(payload.topics)) throw new Error("Não há uma ronda válida para processar esta tarefa.");
   const topic = payload.topics.find((item) => item?.id === job.topicId);
   if (!topic) throw new Error("O assunto da tarefa não foi encontrado na ronda armazenada.");
-  return topic;
+  return expandTopicWithRoundCandidates(topic, payload, { maxExtra: 6 });
 }
 
 async function processIntelligentQueueMessage(message, env, body = {}) {

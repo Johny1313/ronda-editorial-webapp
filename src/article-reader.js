@@ -5,17 +5,19 @@ export const ARTICLE_READER_LIMIT = 1;
 const MAX_HTML_BYTES = 2_500_000;
 const MAX_ARTICLE_CHARS = 12_000;
 const MAX_PROMPT_CHARS = 30_000;
-const MIN_ARTICLE_WORDS = 80;
-const ARTICLE_FETCH_TIMEOUT_MS = 3_800;
-const AMP_FETCH_TIMEOUT_MS = 1_800;
-const ARTICLE_TOTAL_TIMEOUT_MS = 6_500;
+const MIN_ARTICLE_WORDS = 60;
+const ARTICLE_FETCH_TIMEOUT_MS = 4_200;
+const AMP_FETCH_TIMEOUT_MS = 2_000;
+const ARTICLE_TOTAL_TIMEOUT_MS = 8_500;
 const ARTICLE_PROGRESS_HEARTBEAT_MS = 1_600;
 const READING_PROGRESS_START = 8;
 const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 10_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v9-resilient-capacity";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v10-multisource-reader";
+const MAX_PUBLISHER_ATTEMPTS = 6;
+const PUBLISHER_READ_CONCURRENCY = 3;
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -193,6 +195,74 @@ function extractJsonLdArticle(html) {
   return null;
 }
 
+
+function normalizeEmbeddedArticleText(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const decoded = decodeEntities(raw);
+  const text = /<\/?[a-z][\s\S]*>/i.test(decoded) ? paragraphText(decoded) || cleanArticleText(decoded) : cleanArticleText(decoded);
+  return text.slice(0, MAX_ARTICLE_CHARS).trim();
+}
+
+function embeddedJsonCandidates(value, path = [], output = [], depth = 0) {
+  if (!value || depth > 12 || output.length >= 280) return output;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 180)) embeddedJsonCandidates(item, path, output, depth + 1);
+    return output;
+  }
+  if (typeof value !== "object") return output;
+  for (const [key, child] of Object.entries(value)) {
+    if (output.length >= 280) break;
+    const nextPath = [...path, key];
+    const pathText = nextPath.join(".").toLocaleLowerCase("pt-BR");
+    if (typeof child === "string") {
+      const keySignal = /^(articlebody|article_body|body|content|text|html|paragraph|description)$/i.test(key);
+      const pathSignal = /(article|story|materia|noticia|news|post|content|body|paragraph|blocks?)/i.test(pathText);
+      if (!keySignal && !pathSignal) continue;
+      const text = normalizeEmbeddedArticleText(child);
+      const count = wordCount(text);
+      if (count < 18) continue;
+      output.push({ text, count, path: pathText, strong: /articlebody|article_body|story\.body|article\.body|post\.content|article\.content/.test(pathText) });
+      continue;
+    }
+    if (child && typeof child === "object") embeddedJsonCandidates(child, nextPath, output, depth + 1);
+  }
+  return output;
+}
+
+function extractEmbeddedJsonArticle(html, fallback = {}) {
+  const raw = String(html || "");
+  const scripts = raw.match(/<script\b[^>]*(?:type=["']application\/(?:json|ld\+json)["']|id=["']__NEXT_DATA__["'])[^>]*>[\s\S]*?<\/script>/gi) || [];
+  let best = null;
+  for (const script of scripts.slice(0, 18)) {
+    const body = script.replace(/^<script\b[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
+    if (!body || body.length > 1_800_000) continue;
+    let parsed = safeJsonParse(body);
+    if (!parsed) parsed = safeJsonParse(decodeEntities(body));
+    if (!parsed) continue;
+    const candidates = embeddedJsonCandidates(parsed);
+    if (!candidates.length) continue;
+    candidates.sort((a, b) => Number(b.strong) - Number(a.strong) || b.count - a.count);
+    let content = "";
+    const seen = new Set();
+    for (const candidate of candidates) {
+      const key = candidate.text.toLocaleLowerCase("pt-BR");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!content || candidate.strong || tokenCoverage(fallback?.title || "", candidate.text) >= 0.18) {
+        content = cleanArticleText(`${content}\n\n${candidate.text}`);
+      }
+      if (wordCount(content) >= 900 || content.length >= MAX_ARTICLE_CHARS) break;
+    }
+    const count = wordCount(content);
+    const relevance = tokenCoverage(fallback?.title || "", content);
+    const score = count + Math.round(relevance * 120) + (candidates.some((item) => item.strong) ? 80 : 0);
+    if (count >= MIN_ARTICLE_WORDS && (!best || score > best.score)) best = { content, count, score };
+  }
+  if (!best) return null;
+  return { content: best.content, wordCount: best.count, method: "embedded-json" };
+}
+
 function removeNoiseBlocks(html) {
   let output = String(html || "")
     .replace(/<!--[\s\S]*?-->/g, " ")
@@ -251,7 +321,7 @@ function candidateBlocks(html) {
   const patterns = [
     /<article\b[^>]*>[\s\S]*?<\/article\s*>/gi,
     /<main\b[^>]*>[\s\S]*?<\/main\s*>/gi,
-    /<(?:div|section)\b[^>]*(?:id|class)=["'][^"']*(?:article-body|article-content|content-article|materia|news-body|post-content|story-body|texto)[^"']*["'][^>]*>[\s\S]*?<\/(?:div|section)\s*>/gi,
+    /<(?:div|section)\b[^>]*(?:id|class|data-testid|data-component)=["'][^"']*(?:article-body|article-content|content-article|materia|news-body|post-content|story-body|story-content|article__content|article-text|texto|content-body)[^"']*["'][^>]*>[\s\S]*?<\/(?:div|section)\s*>/gi,
   ];
   for (const pattern of patterns) {
     const matches = html.match(pattern) || [];
@@ -270,6 +340,11 @@ export function extractArticleFromHtml(html, fallback = {}) {
 
   if (structured?.content && wordCount(structured.content) >= MIN_ARTICLE_WORDS) {
     return { title, description, byline, publishedAt, content: structured.content, wordCount: wordCount(structured.content), method: structured.method };
+  }
+
+  const embedded = extractEmbeddedJsonArticle(raw, { title, description, ...fallback });
+  if (embedded?.content && embedded.wordCount >= MIN_ARTICLE_WORDS) {
+    return { title, description, byline, publishedAt, content: embedded.content, wordCount: embedded.wordCount, method: embedded.method };
   }
 
   const cleanedHtml = removeNoiseBlocks(raw);
@@ -337,7 +412,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.7.8; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.8.4; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -491,8 +566,11 @@ function singlePortalItem(topic, sourceStats = null) {
 }
 
 function publisherArticleVerified(record) {
-  if (!record || !/^full-article(?:-cache)?$/.test(String(record.readMode || ""))) return false;
-  if (record.contentLevel !== "article" || wordCount(record.content) < MIN_ARTICLE_WORDS) return false;
+  if (!record) return false;
+  const mode = String(record.readMode || "");
+  const directArticle = /^full-article(?:-cache)?$/.test(mode) && record.contentLevel === "article" && wordCount(record.content) >= MIN_ARTICLE_WORDS;
+  const publisherFeed = mode === "publisher-feed-verified" && record.contentLevel === "article" && wordCount(record.content) >= 120;
+  if (!directArticle && !publisherFeed) return false;
   const resolvedUrl = record.extractionUrl || record.url || record.originalUrl;
   const hostname = canonicalHostname(resolvedUrl);
   return Boolean(hostname && !isAggregatorHostname(hostname));
@@ -519,6 +597,74 @@ function collectedContent(item) {
   const hasFullFeedContent = parts.some((part) => part.method === "feed-content") && count >= 60;
   const level = hasFullFeedContent ? "content" : count >= 18 ? "summary" : "title";
   return { content, wordCount: count, level, extractionMethod: parts[0]?.method || "title-only" };
+}
+
+
+function verifiedPublisherFeedRecord(item) {
+  const collected = collectedContent(item);
+  const signals = publisherUrlSignals(item);
+  const text = collected.content;
+  const count = collected.wordCount;
+  const sourceMethod = String(item?.contentSource || collected.extractionMethod || "").toLowerCase();
+  const likelyFullFeed = sourceMethod.includes("feed-content") || sourceMethod.includes("content:encoded") || sourceMethod.includes("rss-content");
+  const looksTruncated = /(?:\.\.\.|…|continuar lendo|leia mais|saiba mais|clique aqui)\s*$/i.test(text) || /(?:continuar lendo|leia mais|saiba mais)\b/i.test(text.slice(-220));
+  const relevance = tokenCoverage(item?.title || "", text);
+  if (!signals.directPublisher || !likelyFullFeed || count < 120 || looksTruncated || relevance < 0.12) return null;
+  return {
+    ok: true,
+    url: item?.url || null,
+    extractionUrl: item?.url || null,
+    sourceName: item?.sourceName || item?.collectorName || "Fonte não informada",
+    title: item?.title || "Notícia sem título",
+    publishedAt: item?.publishedAt || null,
+    byline: null,
+    wordCount: count,
+    contentLevel: "article",
+    readMode: "publisher-feed-verified",
+    extractionMethod: "publisher-full-feed",
+    content: text,
+    error: null,
+    selectedArticleId: item?.id || null,
+    originalUrl: item?.url || null,
+    fallbackScope: "same-publisher-original-feed",
+    publisherFeedVerified: true,
+    pageReadBlocked: true,
+  };
+}
+
+export function expandTopicWithRoundCandidates(topic, payload, { maxExtra = 6 } = {}) {
+  if (!topic || typeof topic !== "object") return topic;
+  const original = Array.isArray(topic.items) ? topic.items : [];
+  const seen = new Set(original.map((item) => String(item?.url || item?.id || "")).filter(Boolean));
+  const references = [topic.title, ...original.map((item) => item?.title)].filter(Boolean);
+  const pool = [];
+  if (Array.isArray(payload?.items)) pool.push(...payload.items);
+  for (const candidateTopic of Array.isArray(payload?.topics) ? payload.topics : []) {
+    if (candidateTopic?.id === topic.id) continue;
+    pool.push(...(Array.isArray(candidateTopic?.items) ? candidateTopic.items : []));
+  }
+  const ranked = [];
+  for (const item of pool) {
+    if (!item || item.kind === "social" || !/^https?:\/\//i.test(String(item.url || "")) || !plainText(item.title)) continue;
+    const identity = String(item.url || item.id || "");
+    if (!identity || seen.has(identity)) continue;
+    let similarity = 0;
+    for (const ref of references) similarity = Math.max(similarity, tokenSimilarity(ref, item.title || ""), tokenCoverage(ref, `${item.title || ""} ${item.description || ""}`));
+    if (similarity < 0.48) continue;
+    const published = item?.publishedAt ? Date.parse(item.publishedAt) : NaN;
+    if (Number.isFinite(published) && Date.now() - published > 96 * 3_600_000) continue;
+    ranked.push({ item, similarity });
+  }
+  ranked.sort((a, b) => b.similarity - a.similarity || Date.parse(b.item.publishedAt || 0) - Date.parse(a.item.publishedAt || 0));
+  const extras = [];
+  for (const entry of ranked) {
+    const identity = String(entry.item.url || entry.item.id || "");
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    extras.push({ ...entry.item, roundRelatedFallback: true, roundRelatedScore: Number(entry.similarity.toFixed(2)) });
+    if (extras.length >= Math.max(0, Number(maxExtra) || 0)) break;
+  }
+  return extras.length ? { ...topic, items: [...original, ...extras], relatedRoundCandidatesAdded: extras.length } : topic;
 }
 
 function collectedRecord(item) {
@@ -593,6 +739,15 @@ async function articleRecordWithFallback(item, fetcher, { timeoutMs = ARTICLE_TO
       try { await readCache.set(cacheKey, record); } catch {}
     }
     return record;
+  }
+  const publisherFeed = verifiedPublisherFeedRecord(item);
+  if (publisherFeed) {
+    return {
+      ...publisherFeed,
+      liveAttempted: true,
+      liveReadError: live.error || "Página direta indisponível; conteúdo integral validado no feed oficial do portal",
+      cacheHit: false,
+    };
   }
   return {
     ...fallback,
@@ -1450,7 +1605,7 @@ export async function buildIntelligentCarousel(topic, {
   if (!liveReading) throw new Error("A leitura do site está desativada. O carrossel exige pelo menos uma matéria publicada e lida diretamente de um portal.");
 
   const readingStartedAt = Date.now();
-  const maximumPublisherAttempts = Math.min(3, rankedSelections.length);
+  const maximumPublisherAttempts = Math.min(MAX_PUBLISHER_ATTEMPTS, rankedSelections.length);
   const attemptedSources = [];
   let selection = null;
   let selectedItem = null;
@@ -1459,15 +1614,14 @@ export async function buildIntelligentCarousel(topic, {
   let selectedSlideCount = requestedSlideCount;
   let bestReadableCandidate = null;
 
-  await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Procurando uma matéria publicada e legível entre ${maximumPublisherAttempts} fonte${maximumPublisherAttempts === 1 ? "" : "s"}.`);
+  await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Procurando uma matéria publicada e legível entre até ${maximumPublisherAttempts} fonte${maximumPublisherAttempts === 1 ? "" : "s"}.`);
 
-  for (let index = 0; index < maximumPublisherAttempts; index += 1) {
+  const attemptCandidate = async (index) => {
     const candidateSelection = rankedSelections[index];
     const candidateItem = candidateSelection.item;
     const candidateSourceName = candidateItem.sourceName || candidateItem.collectorName || "Fonte não informada";
-    const progress = 18 + Math.round((index / Math.max(1, maximumPublisherAttempts)) * 32);
+    const progress = 18 + Math.round((index / Math.max(1, maximumPublisherAttempts)) * 30);
     await reportProgress(onProgress, progress, "reading", `Abrindo matéria publicada por ${compact(candidateSourceName, 70)} (${index + 1}/${maximumPublisherAttempts}).`);
-
     let record;
     try {
       record = await withProgressHeartbeat(
@@ -1492,36 +1646,53 @@ export async function buildIntelligentCarousel(topic, {
         error: error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180),
       };
     }
-
     record.selection = {
       score: candidateSelection.score,
       hostname: candidateSelection.hostname,
       candidatesEvaluated: candidateSelection.candidatesEvaluated,
       reasons: candidateSelection.reasons,
       directPublisherUrl: Boolean(candidateSelection.reasons?.directPublisherUrl),
+      roundRelatedFallback: Boolean(candidateItem.roundRelatedFallback),
+      roundRelatedScore: Number(candidateItem.roundRelatedScore) || null,
     };
+    let facts = null;
+    let supportedSlideCount = 0;
     if (publisherArticleVerified(record)) {
-      const candidateFacts = fallbackFactsFromArticle(record, 36);
-      const supportedSlideCount = maximumSupportedSlideCount(record, candidateFacts, requestedSlideCount);
-      record.evidenceCount = candidateFacts.length;
+      facts = fallbackFactsFromArticle(record, 36);
+      supportedSlideCount = maximumSupportedSlideCount(record, facts, requestedSlideCount);
+      record.evidenceCount = facts.length;
       record.supportedSlideCount = supportedSlideCount;
-      const candidateBundle = { selection: candidateSelection, item: candidateItem, record, facts: candidateFacts, supportedSlideCount };
-      if (!bestReadableCandidate || supportedSlideCount > bestReadableCandidate.supportedSlideCount || (supportedSlideCount === bestReadableCandidate.supportedSlideCount && candidateFacts.length > bestReadableCandidate.facts.length)) {
-        bestReadableCandidate = candidateBundle;
-      }
-      attemptedSources.push(publicArticleRecord(record));
-      if (supportedSlideCount >= requestedSlideCount) {
-        selection = candidateSelection;
-        selectedItem = candidateItem;
-        selectedRecord = record;
-        selectedFacts = candidateFacts;
-        selectedSlideCount = requestedSlideCount;
-        break;
-      }
-      continue;
     }
+    return { index, selection: candidateSelection, item: candidateItem, record, facts, supportedSlideCount };
+  };
 
-    attemptedSources.push(publicArticleRecord(record));
+  const considerResult = (candidateBundle) => {
+    attemptedSources.push(publicArticleRecord(candidateBundle.record));
+    if (!publisherArticleVerified(candidateBundle.record)) return false;
+    if (!bestReadableCandidate || candidateBundle.supportedSlideCount > bestReadableCandidate.supportedSlideCount || (candidateBundle.supportedSlideCount === bestReadableCandidate.supportedSlideCount && (candidateBundle.facts?.length || 0) > (bestReadableCandidate.facts?.length || 0))) {
+      bestReadableCandidate = candidateBundle;
+    }
+    if (candidateBundle.supportedSlideCount >= requestedSlideCount) {
+      selection = candidateBundle.selection;
+      selectedItem = candidateBundle.item;
+      selectedRecord = candidateBundle.record;
+      selectedFacts = candidateBundle.facts;
+      selectedSlideCount = requestedSlideCount;
+      return true;
+    }
+    return false;
+  };
+
+  const firstResult = await attemptCandidate(0);
+  considerResult(firstResult);
+
+  for (let startIndex = 1; !selectedRecord && startIndex < maximumPublisherAttempts; startIndex += PUBLISHER_READ_CONCURRENCY) {
+    const indexes = Array.from({ length: Math.min(PUBLISHER_READ_CONCURRENCY, maximumPublisherAttempts - startIndex) }, (_, offset) => startIndex + offset);
+    const results = await Promise.all(indexes.map((index) => attemptCandidate(index)));
+    results.sort((a, b) => a.index - b.index);
+    for (const result of results) {
+      if (considerResult(result)) break;
+    }
   }
 
   if (!selectedRecord && bestReadableCandidate?.supportedSlideCount >= MIN_CAROUSEL_SLIDES) {
@@ -1553,7 +1724,9 @@ export async function buildIntelligentCarousel(topic, {
   const collected = [selectedRecord];
   const readLabel = selectedRecord.readMode === "full-article-cache"
     ? "texto principal previamente extraído do site e recuperado do cache"
-    : "texto principal extraído diretamente do site";
+    : selectedRecord.readMode === "publisher-feed-verified"
+      ? "conteúdo integral fornecido pelo feed oficial do próprio portal após bloqueio da página direta"
+      : "texto principal extraído diretamente do site";
   await reportProgress(onProgress, READING_PROGRESS_END, "reading", `Matéria apurada: ${compact(selectedSourceName, 70)} — ${readLabel}.`);
   const readingDurationMs = Date.now() - readingStartedAt;
 
@@ -1689,7 +1862,7 @@ export async function buildIntelligentCarousel(topic, {
       nextCycleAllowed: true,
     },
     reading: {
-      basis: selectedRecord.readMode === "full-article-cache" ? "single-publisher-article-cache" : "single-publisher-article",
+      basis: selectedRecord.readMode === "full-article-cache" ? "single-publisher-article-cache" : selectedRecord.readMode === "publisher-feed-verified" ? "single-publisher-full-feed" : "single-publisher-article",
       strategy: "publisher-required-with-alternatives",
       cycleMode: "one-read-article-one-script",
       cycleComplete: true,
@@ -1701,7 +1874,8 @@ export async function buildIntelligentCarousel(topic, {
       selectedSource: publicArticleRecord(selectedRecord),
       attemptedSources,
       alternativesAvailable,
-      liveSuccessful: 1,
+      liveSuccessful: /^full-article(?:-cache)?$/.test(String(selectedRecord.readMode || "")) ? 1 : 0,
+      publisherFeedSuccessful: selectedRecord.readMode === "publisher-feed-verified" ? 1 : 0,
       fallbackSources: 0,
       blockedSources: attemptedSources.filter((item) => item.liveReadError || item.error).length,
       publisherRequired: true,
