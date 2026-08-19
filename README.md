@@ -2,9 +2,11 @@
 
 Aplicação para coleta editorial, agrupamento de assuntos, monitoramento dedicado de termos e geração de roteiro de carrossel com leitura de uma matéria por vez.
 
-## Versão 2.8.0
+## Versão 2.8.5
 
-A v2.8.4 fortalece a geração de carrosséis em três etapas: leitura obrigatória de uma matéria publicada, redação ancorada em evidências e validação final de coerência. Frases incompletas, trechos concatenados e tabelas de percentuais sem contexto são rejeitados antes de o roteiro ser liberado.
+A v2.8.5 corrige a regressão que fazia o carrossel falhar em matérias válidas quando o portal bloqueava uma segunda leitura HTTP do Worker. A base factual agora tem três regras fatais: existe uma publicação real de veículo, existe texto suficiente comprovadamente vindo desse veículo e cada afirmação do roteiro possui evidência nesse texto.
+
+A leitura direta da página continua sendo preferida. Quando ela falha, o sistema pode usar conteúdo amplo vindo do **feed próprio do portal** coletado pela rota direta do veículo. Conteúdo de agregadores, snippets curtos, Google News e resumos truncados continuam proibidos como fonte factual.
 
 A evolução de estilo passa a ser persistente por perfil. O sistema **não se treina automaticamente com o próprio texto gerado**: isso reforçaria erros. Em vez disso, o usuário pode revisar/editar um roteiro e clicar em **Aprovar e ensinar estilo**. Até 24 carrosséis aprovados alimentam uma memória compacta de padrões de escrita (comprimento, ritmo e estrutura), sem reutilizar fatos, nomes ou números antigos.
 
@@ -72,25 +74,29 @@ O banco `YOUTUBE_DB` é isolado do `DB`; uma falha ou crescimento do YouTube nã
 
 A aba não possui gráficos. Ela preserva o padrão de cards, chips, filtros, indicadores e links de apuração usado pela Ronda.
 
-A leitura inteligente usa uma fila separada e exige apuração em uma página publicada:
+A leitura inteligente usa uma fila separada e exige origem editorial verificável:
 
 ```text
 assunto selecionado
         ↓
 ronda-editorial-intelligent-jobs
         ↓
-tenta até 3 portais do assunto
+tenta matérias relacionadas do mesmo assunto
         ↓
-abre e extrai o texto principal de 1 matéria publicada
+1) página publicada legível
+   ou
+2) conteúdo amplo do feed próprio do mesmo portal
         ↓
-extrai evidências diretamente do texto
+extrai evidências deterministicamente
         ↓
 Workers AI apenas redige com essas evidências
         ↓
-roteiro de 3 a 15 slides em português
+validação factual + coerência
+        ↓
+roteiro de 3 a 15 slides (reduz automaticamente se faltar evidência distinta)
 ```
 
-Se nenhum portal puder ser aberto e lido, o carrossel não é gerado. Feed, título e resumo nunca substituem a matéria publicada.
+Agregadores, título isolado, snippet curto e texto truncado não substituem a fonte publicada. Se não existir material verificável suficiente, a geração é recusada em vez de inventar fatos.
 
 ## Frequência das fontes
 

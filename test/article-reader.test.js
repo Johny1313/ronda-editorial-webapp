@@ -585,3 +585,100 @@ test("perfil de escrita orienta o prompt sem alterar a fonte factual", async () 
   assert.match(prompts[0], /Conversacional e direto/);
   assert.match(prompts[0], /não use conhecimento externo|fatos/i);
 });
+
+test("conclui com conteúdo suficiente do feed próprio do portal quando a página bloqueia o Worker", async () => {
+  const publisherFeedText = [
+    "A prefeitura confirmou nesta quarta-feira a ampliação do programa de mobilidade urbana e informou que a primeira etapa começará no próximo mês.",
+    "Segundo o comunicado publicado pelo município, o plano inclui novas faixas exclusivas de ônibus e ajustes nas linhas que atendem bairros mais afastados.",
+    "A administração também informou que haverá integração tarifária em parte da rede e que os detalhes operacionais serão apresentados antes do início da mudança.",
+    "O cronograma prevê implantação gradual, acompanhamento técnico e avaliação dos resultados durante os primeiros meses de funcionamento do novo sistema.",
+    "Representantes da prefeitura disseram que os usuários serão avisados com antecedência sobre alterações de itinerário e horários.",
+  ].join(" ");
+  assert.ok(publisherFeedText.split(/\s+/).length >= 90);
+  const topic = {
+    id: "topic-feed-proprio",
+    title: "Prefeitura amplia programa de mobilidade urbana",
+    editoria: "Notícias",
+    items: [{
+      id: "feed-a",
+      kind: "portal",
+      title: "Prefeitura amplia programa de mobilidade urbana",
+      description: publisherFeedText,
+      content: publisherFeedText,
+      contentSource: "feed-content",
+      collectionRoute: "direct",
+      sourceName: "Portal Municipal",
+      collectorName: "Portal Municipal",
+      publishedAt: "2026-08-19T12:00:00Z",
+      url: "https://portal-municipal.test/mobilidade",
+    }],
+  };
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async () => new Response("bloqueado", { status: 403, headers: { "Content-Type": "text/html" } }),
+    slideCount: 7,
+  });
+  assert.equal(result.reading.publisherVerified, true);
+  assert.equal(result.reading.selectedSource.readMode, "publisher-feed-verified");
+  assert.equal(result.reading.selectedSource.publisherFeedRoute, "direct");
+  assert.ok(result.slides.length >= 3);
+  assert.ok(result.slides.length <= 7);
+  assert.equal(result.reading.factsGeneratedByAi, false);
+});
+
+test("não transforma feed agregador em matéria verificada mesmo com texto longo", async () => {
+  const text = `${longParagraph} ${longParagraph}`;
+  const topic = {
+    id: "topic-feed-agregador",
+    title: "Plano de mobilidade urbana avança",
+    editoria: "Política",
+    items: [{
+      id: "agg-a",
+      kind: "portal",
+      title: "Plano de mobilidade urbana avança",
+      content: text,
+      contentSource: "feed-content",
+      collectionRoute: "fallback",
+      aggregatorUrl: true,
+      sourceName: "Portal A",
+      publisherHomepageUrl: "https://portal-a.test/",
+      publishedAt: "2026-08-19T12:00:00Z",
+      url: "https://news.google.com/rss/articles/teste",
+    }],
+  };
+  await assert.rejects(
+    buildIntelligentCarousel(topic, {
+      fetcher: async () => new Response("bloqueado", { status: 403, headers: { "Content-Type": "text/html" } }),
+    }),
+    /não foi possível abrir e ler|não foi possível abrir|evitar criar fatos/i,
+  );
+});
+
+test("falha da IA não impede a conclusão quando a fonte verificada possui evidências suficientes", async () => {
+  const topic = {
+    id: "topic-ai-fallback",
+    title: "Congresso aprova plano de mobilidade urbana",
+    editoria: "Política",
+    items: [{
+      id: "a",
+      kind: "portal",
+      title: "Congresso aprova plano de mobilidade urbana",
+      description: longParagraph,
+      content: `${longParagraph} ${longParagraph}`,
+      contentSource: "feed-content",
+      collectionRoute: "direct",
+      sourceName: "Portal A",
+      collectorName: "Portal A",
+      publishedAt: "2026-08-19T12:00:00Z",
+      url: "https://portal-a.test/materia",
+    }],
+  };
+  const result = await buildIntelligentCarousel(topic, {
+    fetcher: async () => new Response(articleHtml("Congresso aprova plano de mobilidade urbana"), { status: 200, headers: { "Content-Type": "text/html" } }),
+    ai: { run: async () => { throw new Error("AI indisponível"); } },
+  });
+  assert.equal(result.cycle.status, "completed");
+  assert.equal(result.analysisMode, "source-extraction");
+  assert.match(result.aiError || "", /AI indisponível/i);
+  assert.ok(result.slides.length >= 3);
+  assert.equal(result.validation.passed, true);
+});

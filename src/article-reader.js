@@ -15,7 +15,9 @@ const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 10_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v10-multisource-reader";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v11-verified-origin-resilient";
+const MIN_VERIFIED_PUBLISHER_FEED_WORDS = 90;
+const MIN_VERIFIED_PUBLISHER_DESCRIPTION_WORDS = 120;
 const MAX_PUBLISHER_ATTEMPTS = 6;
 const PUBLISHER_READ_CONCURRENCY = 3;
 
@@ -412,7 +414,7 @@ async function fetchArticleHtml(url, fetcher, timeoutMs = ARTICLE_FETCH_TIMEOUT_
       headers: {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.6",
         "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.5",
-        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.8.4; +leitura-editorial)",
+        "User-Agent": "Mozilla/5.0 (compatible; RondaEditorial/2.8.5; +leitura-editorial)",
       },
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -568,8 +570,13 @@ function singlePortalItem(topic, sourceStats = null) {
 function publisherArticleVerified(record) {
   if (!record) return false;
   const mode = String(record.readMode || "");
-  const directArticle = /^full-article(?:-cache)?$/.test(mode) && record.contentLevel === "article" && wordCount(record.content) >= MIN_ARTICLE_WORDS;
-  const publisherFeed = mode === "publisher-feed-verified" && record.contentLevel === "article" && wordCount(record.content) >= 120;
+  const directArticle = /^full-article(?:-cache)?$/.test(mode)
+    && record.contentLevel === "article"
+    && wordCount(record.content) >= MIN_ARTICLE_WORDS;
+  const publisherFeed = mode === "publisher-feed-verified"
+    && record.contentLevel === "article"
+    && record.publisherFeedVerified === true
+    && wordCount(record.content) >= MIN_VERIFIED_PUBLISHER_FEED_WORDS;
   if (!directArticle && !publisherFeed) return false;
   const resolvedUrl = record.extractionUrl || record.url || record.originalUrl;
   const hostname = canonicalHostname(resolvedUrl);
@@ -606,10 +613,15 @@ function verifiedPublisherFeedRecord(item) {
   const text = collected.content;
   const count = collected.wordCount;
   const sourceMethod = String(item?.contentSource || collected.extractionMethod || "").toLowerCase();
-  const likelyFullFeed = sourceMethod.includes("feed-content") || sourceMethod.includes("content:encoded") || sourceMethod.includes("rss-content");
+  const collectionRoute = String(item?.collectionRoute || "").toLowerCase();
+  const fromPublisherOwnedFeed = collectionRoute === "direct" || (!collectionRoute && signals.directPublisher && item?.aggregatorUrl !== true);
+  const fullContentMethod = sourceMethod.includes("feed-content") || sourceMethod.includes("content:encoded") || sourceMethod.includes("rss-content");
+  const descriptiveMethod = sourceMethod.includes("feed-description") || sourceMethod.includes("description");
+  const minimumWords = fullContentMethod ? MIN_VERIFIED_PUBLISHER_FEED_WORDS : MIN_VERIFIED_PUBLISHER_DESCRIPTION_WORDS;
+  const supportedMethod = fullContentMethod || descriptiveMethod;
   const looksTruncated = /(?:\.\.\.|…|continuar lendo|leia mais|saiba mais|clique aqui)\s*$/i.test(text) || /(?:continuar lendo|leia mais|saiba mais)\b/i.test(text.slice(-220));
   const relevance = tokenCoverage(item?.title || "", text);
-  if (!signals.directPublisher || !likelyFullFeed || count < 120 || looksTruncated || relevance < 0.12) return null;
+  if (!fromPublisherOwnedFeed || !signals.directPublisher || !supportedMethod || count < minimumWords || looksTruncated || relevance < 0.10) return null;
   return {
     ok: true,
     url: item?.url || null,
@@ -621,13 +633,15 @@ function verifiedPublisherFeedRecord(item) {
     wordCount: count,
     contentLevel: "article",
     readMode: "publisher-feed-verified",
-    extractionMethod: "publisher-full-feed",
+    extractionMethod: fullContentMethod ? "publisher-direct-feed-content" : "publisher-direct-feed-description",
     content: text,
     error: null,
     selectedArticleId: item?.id || null,
     originalUrl: item?.url || null,
-    fallbackScope: "same-publisher-original-feed",
+    fallbackScope: "same-publisher-owned-feed",
     publisherFeedVerified: true,
+    publisherFeedRoute: collectionRoute || "direct-compatible",
+    publisherFeedMethod: sourceMethod || collected.extractionMethod || null,
     pageReadBlocked: true,
   };
 }
@@ -650,7 +664,7 @@ export function expandTopicWithRoundCandidates(topic, payload, { maxExtra = 6 } 
     if (!identity || seen.has(identity)) continue;
     let similarity = 0;
     for (const ref of references) similarity = Math.max(similarity, tokenSimilarity(ref, item.title || ""), tokenCoverage(ref, `${item.title || ""} ${item.description || ""}`));
-    if (similarity < 0.48) continue;
+    if (similarity < 0.42) continue;
     const published = item?.publishedAt ? Date.parse(item.publishedAt) : NaN;
     if (Number.isFinite(published) && Date.now() - published > 96 * 3_600_000) continue;
     ranked.push({ item, similarity });
@@ -1581,7 +1595,7 @@ export function intelligentCarouselCacheKey(runId, topic, { slideCount = DEFAULT
   const item = selected?.item;
   const count = carouselSlidePlan(slideCount).length;
   const sourceFingerprint = [item?.url, item?.title, item?.publishedAt, item?.content, item?.description].filter(Boolean).join("|");
-  return `smart-v8-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${count}|${styleKey || "default"}|${sourceFingerprint}`)}`;
+  return `smart-v11-${stableHash(`${runId || "latest"}|${topic?.id || "topic"}|${CAROUSEL_PROMPT_VERSION}|${count}|${styleKey || "default"}|${sourceFingerprint}`)}`;
 }
 
 export async function buildIntelligentCarousel(topic, {

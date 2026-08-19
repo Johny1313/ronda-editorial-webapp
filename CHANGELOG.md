@@ -1,12 +1,20 @@
-# Ronda Editorial v2.8.4
+# Ronda Editorial v2.8.5
 
-## Leitura de matérias mais resiliente
-- tenta até 6 fontes publicadoras relacionadas ao assunto;
-- procura matérias semelhantes em outros agrupamentos da mesma ronda quando o cluster original só contém portais bloqueados;
-- reconhece conteúdo de matéria embutido em JSON de páginas modernas (ex.: __NEXT_DATA__);
-- aceita como contingência apenas conteúdo integral do feed oficial do próprio portal, com no mínimo 120 palavras, URL direta do publicador e validação de relevância; resumos e descrições continuam proibidos como base factual;
-- mantém a regra de não gerar fatos: a IA só redige a partir das evidências verificadas;
-- diferencia na interface matéria lida diretamente, cache e feed oficial integral.
+## Carrossel — origem verificada e conclusão resiliente
+- corrige a regressão iniciada quando a geração passou a exigir que o Worker baixasse novamente o HTML da página;
+- mantém como primeira opção a leitura direta da matéria publicada;
+- quando a página bloqueia o Worker, aceita conteúdo suficiente vindo do feed **próprio do portal**, desde que a coleta tenha ocorrido pela rota direta do veículo, a URL seja do publicador, o texto não esteja truncado e haja aderência à manchete;
+- conteúdo de agregadores e Google News continua proibido como base factual do carrossel;
+- descrições do feed próprio só são aceitas quando amplas (>=120 palavras); conteúdo integral do feed próprio pode ser aceito a partir de 90 palavras;
+- amplia com segurança a busca de matérias relacionadas na mesma ronda sem misturar assuntos;
+- se a IA falhar, o roteiro determinístico baseado nas evidências continua e encerra o ciclo;
+- o cache do carrossel foi invalidado para não reaproveitar resultados da lógica anterior.
+
+## Validação
+- 82 testes automatizados aprovados;
+- cenários extras de estresse: 50 gerações válidas concluídas e 10 casos de agregador corretamente bloqueados;
+- `npm run check` aprovado;
+- validação de release aprovada.
 
 # Ronda Editorial v2.8.3
 

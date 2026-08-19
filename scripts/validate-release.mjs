@@ -58,7 +58,7 @@ assert.match(profile, /PBKDF2/);
 assert.match(profile, /MAX_STYLE_SAMPLES = 8/);
 assert.match(profile, /MIN_SLIDE_COUNT = 3/);
 assert.match(profile, /MAX_SLIDE_COUNT = 15/);
-assert.match(articleReader, /source-evidence-v10-multisource-reader/);
+assert.match(articleReader, /source-evidence-v11-verified-origin-resilient/);
 assert.match(articleReader, /expandTopicWithRoundCandidates/);
 assert.match(articleReader, /publisher-feed-verified/);
 assert.match(articleReader, /embedded-json/);
