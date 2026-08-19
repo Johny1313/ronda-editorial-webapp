@@ -348,12 +348,38 @@ test("gera quantidade flexível de slides preservando 7 como padrão", async () 
   assert.equal(compact.slides.length, 3);
   assert.equal(compact.slides.at(-1).role, "Conclusão");
   assert.equal(standard.slides.length, 7);
-  await assert.rejects(
-    buildIntelligentCarousel(topic, { fetcher, slideCount: 12 }),
-    /evidências distintas|sem repetição|Reduza a quantidade de slides/i,
-  );
+  const adapted = await buildIntelligentCarousel(topic, { fetcher, slideCount: 12 });
+  assert.ok(adapted.slides.length >= 3 && adapted.slides.length <= 12);
+  assert.equal(adapted.requestedSlideCount, 12);
+  assert.equal(adapted.slideCount, adapted.slides.length);
+  assert.equal(adapted.slideCountAdjusted, adapted.slides.length < 12);
 });
 
+
+
+test("prefere uma fonte mais rica e reduz slides em vez de abortar quando necessário", async () => {
+  const sparseHtml = `<!doctype html><html><body><article><h1>Notícia curta</h1><p>O governo confirmou a medida nesta quarta-feira após reunião oficial.</p><p>A implantação começa no próximo mês e terá acompanhamento técnico.</p><p>O anúncio foi publicado pela autoridade responsável e segue em vigor.</p></article></body></html>`;
+  const richBody = [
+    "O governo confirmou a nova medida nesta quarta-feira após reunião oficial.",
+    "A implantação começa no próximo mês e terá acompanhamento técnico permanente.",
+    "O plano prevê três etapas de execução ao longo do segundo semestre.",
+    "Autoridades informaram que o orçamento será detalhado em documento complementar.",
+    "Municípios poderão aderir ao programa mediante critérios definidos pelo ministério.",
+    "A primeira avaliação dos resultados está prevista para dezembro.",
+    "O governo afirma que os dados de execução serão divulgados em relatórios públicos.",
+    "A medida entra em vigor imediatamente após a publicação oficial."
+  ].map((p) => `<p>${p}</p>`).join("");
+  const richHtml = `<!doctype html><html><body><article><h1>Plano entra em nova fase</h1>${richBody}</article></body></html>`;
+  const topic = { id: "topic-capacity", title: "Plano entra em nova fase", editoria: "Política", items: [
+    { id: "sparse", kind: "portal", title: "Notícia curta", sourceName: "Portal Curto", publishedAt: "2026-08-19T10:00:00Z", url: "https://curto.test/a" },
+    { id: "rich", kind: "portal", title: "Plano entra em nova fase", sourceName: "Portal Rico", publishedAt: "2026-08-19T10:01:00Z", url: "https://rico.test/b" },
+  ]};
+  const fetcher = async (url) => new Response(String(url).includes("rico.test") ? richHtml : sparseHtml, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  const result = await buildIntelligentCarousel(topic, { fetcher, slideCount: 7 });
+  assert.ok(result.slides.length >= 3);
+  assert.equal(result.reading.publisherVerified, true);
+  assert.ok(Number(result.reading.selectedSource.supportedSlideCount) >= result.slides.length);
+});
 
 
 test("remove repetição de informação entre slides mesmo quando a IA repete a mesma evidência", async () => {

@@ -1,0 +1,14 @@
+Ronda Editorial v2.8.3
+
+Correção principal: carrossel resiliente.
+
+- Continua exigindo leitura de pelo menos uma matéria publicada por um portal.
+- Não inventa fatos e não usa feed como substituto da matéria.
+- Compara até 3 fontes disponíveis e prefere a que sustenta mais informação distinta.
+- Se a matéria não sustentar a quantidade pedida sem repetição, reduz automaticamente os slides em vez de falhar.
+- A interface informa a quantidade solicitada e a quantidade segura gerada.
+- Não há nova migration D1.
+
+Após o upload, confirme:
+src/index.js -> const VERSION = "2.8.3";
+public/index.html -> /styles.css?v=2.8.3 e /app.js?v=2.8.3

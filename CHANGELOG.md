@@ -1,4 +1,12 @@
-# Ronda Editorial v2.8.2
+# Ronda Editorial v2.8.3
+
+## Conclusão resiliente do carrossel
+
+- Seleciona a fonte legível com maior capacidade factual entre as alternativas do assunto.
+- Se a matéria não sustentar a quantidade solicitada sem repetição, reduz automaticamente os slides em vez de abortar.
+- Mantém a exigência de leitura real do portal e nunca completa fatos ausentes.
+- Informa na interface quando a quantidade foi ajustada e por quê.
+- Cache de geração invalidado pela nova versão do prompt/evidências.
 
 - Reorganiza o modal do carrossel para priorizar o resultado: header e controles → cards dos slides → informações editoriais → apuração e evidências.
 - Elimina o scroll longo antes do roteiro e reposiciona automaticamente o modal no topo após a geração.

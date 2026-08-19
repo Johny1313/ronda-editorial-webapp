@@ -96,3 +96,11 @@ test("home não expõe chips de veículos clicáveis e oferece Mostrar tudo", as
   assert.doesNotMatch(app, /class="source-name-button" data-portal/);
   assert.match(app, /operacionais/);
 });
+
+
+test("carrossel aceita redução automática de slides quando a matéria não sustenta a quantidade pedida", async () => {
+  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(app, /actualSlideCount/);
+  assert.match(app, /slideCountAdjusted/);
+  assert.doesNotMatch(app, /não retornou os \${slideCount} slides esperados/);
+});

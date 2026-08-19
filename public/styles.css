@@ -79,3 +79,7 @@
 
 /* Carrossel — ordem operacional v2.8.2 */
 .carousel-slides{margin:10px 0 18px}.carousel-slides:empty{display:none}.carousel-meta{margin:0 0 14px}.carousel-reading{margin-top:14px}
+
+/* Carrossel resiliente v2.8.3 */
+#carouselMeta .slide-adjustment{grid-column:1/-1;background:#fff8e8;border-color:#ead7a0}
+#carouselMeta .slide-adjustment em{display:block;margin-top:4px;font-size:12px;font-style:normal;font-weight:500;color:#7a6537}

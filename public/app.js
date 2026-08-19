@@ -1262,7 +1262,10 @@ function renderIntelligentCarousel(topic, carousel) {
   const profileLabel = carousel.writingProfile?.active
     ? `Perfil personalizado · ${Number(carousel.writingProfile.sampleCount) || 0} textos · ${memoryCount} aprovados`
     : memoryCount ? `Memória editorial · ${memoryCount} aprovados` : "Padrão jornalístico";
-  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${String(carousel.analysisMode || "").startsWith("ai-") ? "Workers AI · apenas redação" : "Extração direta da matéria"}</strong></span>`;
+  const slideAdjustment = carousel.slideCountAdjusted
+    ? `<span class="slide-adjustment"><small>Quantidade ajustada</small><strong>${Number(carousel.requestedSlideCount) || "—"} → ${(carousel.slides || []).length} slides</strong><em>${escapeHtml(carousel.slideCountAdjustmentReason || "Ajuste feito para evitar repetição sem evidência.")}</em></span>`
+    : "";
+  document.getElementById("carouselMeta").innerHTML = `<span><small>Editoria</small><strong>${escapeHtml(topic.editoria || "Notícias")}</strong></span><span><small>Idioma</small><strong>Português</strong></span><span><small>Tom de voz</small><strong>${escapeHtml(carousel.voiceTone || "Jornalístico e factual")}</strong></span><span><small>Formato</small><strong>${escapeHtml(carousel.postModel || `Instagram · ${(carousel.slides || []).length || 7} slides`)}</strong></span><span><small>Escrita</small><strong>${escapeHtml(profileLabel)}</strong></span><span><small>Análise</small><strong>${String(carousel.analysisMode || "").startsWith("ai-") ? "Workers AI · apenas redação" : "Extração direta da matéria"}</strong></span>${slideAdjustment}`;
   const readingHolder = document.getElementById("carouselReading");
   readingHolder.hidden = false;
   const selectedSource = reading.selectedSource || (reading.sources || [])[0] || {};
@@ -1397,7 +1400,15 @@ async function generateActiveCarousel({ force = false } = {}) {
       data = await waitForIntelligentJob(response.job.jobId, requestSerial, response.pollAfterMs);
     }
     if (requestSerial !== state.carouselRequestSerial || !data) return;
-    if (data.slides?.length !== slideCount) throw new Error(`O servidor não retornou os ${slideCount} slides esperados.`);
+    const actualSlideCount = Array.isArray(data.slides) ? data.slides.length : 0;
+    if (actualSlideCount < 3) throw new Error("A matéria não forneceu evidências suficientes para um carrossel seguro.");
+    if (actualSlideCount !== slideCount) {
+      data.requestedSlideCount = Number(data.requestedSlideCount) || slideCount;
+      data.slideCount = actualSlideCount;
+      data.slideCountAdjusted = true;
+      data.slideCountAdjustmentReason = data.slideCountAdjustmentReason || `A matéria sustenta ${actualSlideCount} slides distintos sem repetição.`;
+      state.activeSlideCount = actualSlideCount;
+    }
     state.smartCarousels.set(key, data);
     renderIntelligentCarousel(topic, data);
   } catch (error) {

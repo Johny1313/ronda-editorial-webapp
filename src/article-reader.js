@@ -15,7 +15,7 @@ const READING_PROGRESS_END = 60;
 const AI_ANALYSIS_TIMEOUT_MS = 10_500;
 const MAX_SLIDE_TITLE_CHARS = 68;
 const MAX_SLIDE_SUBTITLE_CHARS = 190;
-const CAROUSEL_PROMPT_VERSION = "source-evidence-v8-coherent-grounded-adaptive";
+const CAROUSEL_PROMPT_VERSION = "source-evidence-v9-resilient-capacity";
 
 const AGGREGATOR_HOSTS = new Set([
   "news.google.com",
@@ -968,7 +968,20 @@ function buildDistinctFallbackSlides(article, facts, slideCount) {
   return slides;
 }
 
-function fallbackAnalysis(topic, articles, socialItems, slideCount = DEFAULT_CAROUSEL_SLIDES) {
+function maximumSupportedSlideCount(article, facts, requestedSlideCount = DEFAULT_CAROUSEL_SLIDES) {
+  const requested = carouselSlidePlan(requestedSlideCount).length;
+  for (let count = requested; count >= MIN_CAROUSEL_SLIDES; count -= 1) {
+    try {
+      buildDistinctFallbackSlides(article, facts, count);
+      return count;
+    } catch (error) {
+      if (error?.code !== "INSUFFICIENT_DISTINCT_EVIDENCE" && !/evidências distintas|sem repetição|evidências suficientes/i.test(String(error?.message || error))) throw error;
+    }
+  }
+  return 0;
+}
+
+function fallbackAnalysis(topic, articles, socialItems, slideCount = DEFAULT_CAROUSEL_SLIDES, preparedFacts = null) {
   const article = articles[0];
   const combined = articles.map((item) => `${item.title}. ${item.content}`).join("\n\n");
   const list = sentences(combined);
@@ -979,7 +992,7 @@ function fallbackAnalysis(topic, articles, socialItems, slideCount = DEFAULT_CAR
   const impact = firstMatchingSentence(list, /impact|consequ|efeito|mudan|risco|benef|preju|custo|afeta|morte|casos/i, details);
   const repercussion = firstMatchingSentence(list, /repercuss|reação|critic|apoio|debate|manifest|resposta|afirm|disse|declar|anunci|medida/i, list.at(-1) || details);
   const entities = heuristicEntities(`${headline}\n${combined}`);
-  const facts = fallbackFactsFromArticle(article, 24);
+  const facts = Array.isArray(preparedFacts) && preparedFacts.length ? preparedFacts : fallbackFactsFromArticle(article, 36);
   const slides = buildDistinctFallbackSlides(article, facts, slideCount);
   return {
     questions: {
@@ -1442,6 +1455,9 @@ export async function buildIntelligentCarousel(topic, {
   let selection = null;
   let selectedItem = null;
   let selectedRecord = null;
+  let selectedFacts = null;
+  let selectedSlideCount = requestedSlideCount;
+  let bestReadableCandidate = null;
 
   await reportProgress(onProgress, READING_PROGRESS_START, "reading", `Procurando uma matéria publicada e legível entre ${maximumPublisherAttempts} fonte${maximumPublisherAttempts === 1 ? "" : "s"}.`);
 
@@ -1484,14 +1500,43 @@ export async function buildIntelligentCarousel(topic, {
       reasons: candidateSelection.reasons,
       directPublisherUrl: Boolean(candidateSelection.reasons?.directPublisherUrl),
     };
-    attemptedSources.push(publicArticleRecord(record));
-
     if (publisherArticleVerified(record)) {
-      selection = candidateSelection;
-      selectedItem = candidateItem;
-      selectedRecord = record;
-      break;
+      const candidateFacts = fallbackFactsFromArticle(record, 36);
+      const supportedSlideCount = maximumSupportedSlideCount(record, candidateFacts, requestedSlideCount);
+      record.evidenceCount = candidateFacts.length;
+      record.supportedSlideCount = supportedSlideCount;
+      const candidateBundle = { selection: candidateSelection, item: candidateItem, record, facts: candidateFacts, supportedSlideCount };
+      if (!bestReadableCandidate || supportedSlideCount > bestReadableCandidate.supportedSlideCount || (supportedSlideCount === bestReadableCandidate.supportedSlideCount && candidateFacts.length > bestReadableCandidate.facts.length)) {
+        bestReadableCandidate = candidateBundle;
+      }
+      attemptedSources.push(publicArticleRecord(record));
+      if (supportedSlideCount >= requestedSlideCount) {
+        selection = candidateSelection;
+        selectedItem = candidateItem;
+        selectedRecord = record;
+        selectedFacts = candidateFacts;
+        selectedSlideCount = requestedSlideCount;
+        break;
+      }
+      continue;
     }
+
+    attemptedSources.push(publicArticleRecord(record));
+  }
+
+  if (!selectedRecord && bestReadableCandidate?.supportedSlideCount >= MIN_CAROUSEL_SLIDES) {
+    selection = bestReadableCandidate.selection;
+    selectedItem = bestReadableCandidate.item;
+    selectedRecord = bestReadableCandidate.record;
+    selectedFacts = bestReadableCandidate.facts;
+    selectedSlideCount = bestReadableCandidate.supportedSlideCount;
+  }
+
+  if ((!selectedRecord || !publisherArticleVerified(selectedRecord)) && bestReadableCandidate?.record && publisherArticleVerified(bestReadableCandidate.record)) {
+    const evidenceCount = Number(bestReadableCandidate.facts?.length) || 0;
+    const error = new Error(`A matéria foi lida, mas trouxe apenas ${evidenceCount} evidência${evidenceCount === 1 ? "" : "s"} editorial${evidenceCount === 1 ? "" : "is"} utilizável${evidenceCount === 1 ? "" : "is"}. São necessários pelo menos 3 blocos seguros para gerar um carrossel sem repetição.`);
+    error.code = "INSUFFICIENT_DISTINCT_EVIDENCE";
+    throw error;
   }
 
   if (!selectedRecord || !publisherArticleVerified(selectedRecord)) {
@@ -1519,7 +1564,9 @@ export async function buildIntelligentCarousel(topic, {
 
   // Fatos, perguntas e entidades são extraídos deterministicamente do texto que veio do portal.
   // A IA, quando disponível, recebe apenas o mapa de evidências e atua somente na redação dos slides.
-  const sourceAnalysis = fallbackAnalysis(topic, collected, [], requestedSlideCount);
+  const effectiveSlideCount = Math.max(MIN_CAROUSEL_SLIDES, Math.min(requestedSlideCount, Number(selectedSlideCount) || requestedSlideCount));
+  selectedFacts = Array.isArray(selectedFacts) && selectedFacts.length ? selectedFacts : fallbackFactsFromArticle(selectedRecord, 36);
+  const sourceAnalysis = fallbackAnalysis(topic, collected, [], effectiveSlideCount, selectedFacts);
   if (!sourceAnalysis.facts.length) {
     throw new Error("A matéria foi lida, mas não foi possível extrair evidências suficientes para montar o carrossel.");
   }
@@ -1536,8 +1583,8 @@ export async function buildIntelligentCarousel(topic, {
   const aiStartedAt = Date.now();
   if (ai?.run) {
     try {
-      await reportProgress(onProgress, 76, "analysis", `Redigindo ${requestedSlideCount} slides somente com as evidências extraídas do site.`);
-      const generated = await runAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, requestedSlideCount, writingStyle);
+      await reportProgress(onProgress, 76, "analysis", `Redigindo ${effectiveSlideCount} slides somente com as evidências extraídas do site.`);
+      const generated = await runAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, effectiveSlideCount, writingStyle);
       if (!generated?.slides) throw new Error("A IA não retornou os slides em JSON válido");
       slideSource = generated;
       analysisMode = "ai-redaction-from-source-evidence";
@@ -1549,17 +1596,17 @@ export async function buildIntelligentCarousel(topic, {
     }
   }
   const aiDurationMs = Date.now() - aiStartedAt;
-  const normalizedFallbackSlides = normalizeSlides({ slides: sourceAnalysis.slides }, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
-  let normalizedSlides = normalizeSlides(slideSource, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
+  const normalizedFallbackSlides = normalizeSlides({ slides: sourceAnalysis.slides }, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
+  let normalizedSlides = normalizeSlides(slideSource, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
   let validated = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
   let coherenceRepairApplied = false;
   const coherenceIssues = (validated.report.issues || []).filter((issue) => ["incoherent-language", "repeated-slide", "title-repeats-subtitle"].includes(issue.code));
   if (ai?.run && coherenceIssues.length && analysisMode.startsWith("ai-")) {
     try {
       await reportProgress(onProgress, 90, "analysis", "Revisando coerência e completude das frases sem alterar os fatos.");
-      const repaired = await repairAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, requestedSlideCount, writingStyle, normalizedSlides, coherenceIssues);
+      const repaired = await repairAiCarouselFromEvidence(ai, model, topic, collected[0], factAnalysis.facts, effectiveSlideCount, writingStyle, normalizedSlides, coherenceIssues);
       if (repaired?.slides) {
-        normalizedSlides = normalizeSlides(repaired, sourceAnalysis, factAnalysis.facts, requestedSlideCount);
+        normalizedSlides = normalizeSlides(repaired, sourceAnalysis, factAnalysis.facts, effectiveSlideCount);
         const repairedValidation = validateSlides(normalizedSlides, normalizedFallbackSlides, factAnalysis.facts, collected[0]);
         if (repairedValidation.report.passed || repairedValidation.report.finalProblems.length < validated.report.finalProblems.length) {
           validated = repairedValidation;
@@ -1602,7 +1649,10 @@ export async function buildIntelligentCarousel(topic, {
   const alternativesNotice = alternativesAvailable
     ? `${alternativesAvailable} ${alternativesAvailable === 1 ? "outra fonte estava disponível" : "outras fontes estavam disponíveis"}, mas o roteiro usa somente a matéria efetivamente lida.`
     : "Não havia outra fonte de portal disponível para leitura.";
-  const disclaimer = `Roteiro baseado exclusivamente no texto da matéria lida em ${selectedRecord.sourceName}. ${alternativesNotice} Nenhum fato é criado pela IA; a IA pode apenas redigir a partir das evidências extraídas. Confirme o contexto no link original antes de publicar.`;
+  const slideAdjustmentNotice = effectiveSlideCount < requestedSlideCount
+    ? ` A quantidade foi ajustada de ${requestedSlideCount} para ${effectiveSlideCount} slides porque esta foi a maior estrutura sustentada por evidências distintas sem repetição.`
+    : "";
+  const disclaimer = `Roteiro baseado exclusivamente no texto da matéria lida em ${selectedRecord.sourceName}. ${alternativesNotice} Nenhum fato é criado pela IA; a IA pode apenas redigir a partir das evidências extraídas.${slideAdjustmentNotice} Confirme o contexto no link original antes de publicar.`;
 
   return {
     language: "pt-BR",
@@ -1611,8 +1661,13 @@ export async function buildIntelligentCarousel(topic, {
     model: analysisMode.startsWith("ai-") ? model : null,
     aiError,
     voiceTone: writingStyle?.profile?.tone || writingStyle?.tone || "Jornalístico, factual e explicativo",
-    postModel: `Instagram · ${requestedSlideCount} slides · título + subtítulo`,
-    slideCount: requestedSlideCount,
+    postModel: `Instagram · ${effectiveSlideCount} slides · título + subtítulo${effectiveSlideCount < requestedSlideCount ? ` · ajustado de ${requestedSlideCount}` : ""}`,
+    slideCount: effectiveSlideCount,
+    requestedSlideCount,
+    slideCountAdjusted: effectiveSlideCount < requestedSlideCount,
+    slideCountAdjustmentReason: effectiveSlideCount < requestedSlideCount
+      ? `A matéria sustenta ${effectiveSlideCount} slides distintos com segurança; ${requestedSlideCount} causariam repetição ou preenchimento sem evidência.`
+      : null,
     writingProfile: writingStyle ? { active: true, updatedAt: writingStyle.updatedAt || null, sampleCount: Number(writingStyle.sampleCount) || 0, adaptiveMemoryCount: Number(writingStyle.adaptiveMemory?.count) || 0, mode: writingStyle.profile?.mode || writingStyle.mode || "custom" } : { active: false, adaptiveMemoryCount: 0 },
     promptVersion: CAROUSEL_PROMPT_VERSION,
     performance: {
@@ -1622,6 +1677,9 @@ export async function buildIntelligentCarousel(topic, {
       fastPath: Boolean(selectedRecord.cacheHit),
       publisherAttempts: attemptedSources.length,
       coherenceRepairApplied,
+      evidenceCount: factAnalysis.facts.length,
+      requestedSlideCount,
+      effectiveSlideCount,
     },
     cycle: {
       status: "completed",
